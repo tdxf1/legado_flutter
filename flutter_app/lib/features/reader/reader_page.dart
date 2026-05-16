@@ -124,6 +124,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       settings: _settings,
       initialChapterIndex: widget.chapterIndex,
     );
+    _pageViewController!.addListener(_onPageChanged);
     _clockTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _nowNotifier.value = DateTime.now();
     });
@@ -145,6 +146,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     _nowNotifier.dispose();
     if (_pageViewController != null) {
       try {
+        _pageViewController!.removeListener(_onPageChanged);
         _pageViewController!.dispose();
       } catch (_) {}
     }
@@ -1482,6 +1484,10 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     }
   }
 
+  void _onPageChanged() {
+    if (mounted) setState(() {});
+  }
+
   void _onPageChapterBoundary(PageDirection dir) {
     if (_cachedChapters == null) return;
     if (dir == PageDirection.next &&
@@ -2541,7 +2547,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       backgroundColor: Color(_settings.effectiveBackgroundColor),
       isScrollControlled: true,
       constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height / 3,
+        maxHeight: MediaQuery.of(context).size.height / 2,
       ),
       builder: (ctx) => _ReaderSettingsSheet(
         settings: _settings,
