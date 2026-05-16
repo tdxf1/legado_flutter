@@ -22,41 +22,23 @@ class SlidePageDelegate extends PageDelegate {
     required double animProgress,
     required int totalPages,
   }) {
-    if (direction == PageDirection.next && nextPage != null) {
-      _drawSlide(canvas, size, currentPage, nextPage, animProgress, true, totalPages);
-    } else if (direction == PageDirection.prev && prevPage != null) {
-      _drawSlide(canvas, size, currentPage, prevPage, animProgress, false, totalPages);
+    final sw = size.width;
+    final progress = animProgress.clamp(0.0, 1.0);
+
+    if (direction == PageDirection.next && (nextPicture != null || nextPage != null)) {
+      // Current page slides left (outgoing)
+      drawPage(canvas, curPicture, currentPage, Offset(-sw * progress, 0));
+      // Next page slides in from right
+      drawPage(canvas, nextPicture, nextPage, Offset(sw * (1 - progress), 0));
+    } else if (direction == PageDirection.prev && (prevPicture != null || prevPage != null)) {
+      // Current page slides right (outgoing)
+      drawPage(canvas, curPicture, currentPage, Offset(sw * progress, 0));
+      // Prev page slides in from left
+      drawPage(canvas, prevPicture, prevPage, Offset(-sw * (1 - progress), 0));
     } else {
       final painter = ContentPagePainter(page: currentPage, settings: settings, totalPages: totalPages);
       painter.paint(canvas, size);
     }
-  }
-
-  void _drawSlide(
-    Canvas canvas,
-    Size size,
-    TextPage? fromPage,
-    TextPage toPage,
-    double progress,
-    bool forward,
-    int totalPages,
-  ) {
-    final offsetX = forward ? -size.width * progress : size.width * progress;
-
-    canvas.save();
-    canvas.translate(offsetX, 0);
-    if (fromPage != null) {
-      final fromPainter = ContentPagePainter(page: fromPage, settings: settings, totalPages: totalPages);
-      fromPainter.paint(canvas, size);
-    }
-    canvas.restore();
-
-    final nextOffsetX = forward ? size.width * (1 - progress) : -size.width * (1 - progress);
-    canvas.save();
-    canvas.translate(nextOffsetX, 0);
-    final toPainter = ContentPagePainter(page: toPage, settings: settings, totalPages: totalPages);
-    toPainter.paint(canvas, size);
-    canvas.restore();
   }
 
   @override

@@ -1,6 +1,9 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import '../../../../core/providers.dart';
 import '../text_page.dart';
+import '../content_page.dart';
 import '../page_view_controller.dart';
 
 typedef ChapterBoundaryCallback = void Function(PageDirection dir);
@@ -15,6 +18,11 @@ abstract class PageDelegate {
   PageDirection _direction = PageDirection.none;
   double _dragOffset = 0;
 
+  // Pre-rendered page snapshots for smooth animation (accessible from subclasses)
+  ui.Picture? curPicture;
+  ui.Picture? nextPicture;
+  ui.Picture? prevPicture;
+
   PageDelegate({
     required this.controller,
     required this.settings,
@@ -24,6 +32,54 @@ abstract class PageDelegate {
 
   PageDirection get direction => _direction;
   double get dragOffset => _dragOffset;
+
+  /// Record page content into Picture for fast replay during animation
+  void onDragStart(Size pageSize, TextPage? cur, TextPage? next, TextPage? prev) {
+    _clearPictures();
+    curPicture = _renderPage(pageSize, cur);
+    nextPicture = _renderPage(pageSize, next);
+    prevPicture = _renderPage(pageSize, prev);
+  }
+
+  /// Release pre-rendered resources
+  void clearPagePictures() {
+    _clearPictures();
+  }
+
+  void _clearPictures() {
+    curPicture?.dispose();
+    nextPicture?.dispose();
+    prevPicture?.dispose();
+    curPicture = null;
+    nextPicture = null;
+    prevPicture = null;
+  }
+
+  ui.Picture? _renderPage(Size pageSize, TextPage? page) {
+    if (page == null) return null;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, pageSize.width, pageSize.height));
+    ContentPagePainter(page: page, settings: settings).paint(canvas, pageSize);
+    return recorder.endRecording();
+  }
+
+  /// Draw a pre-rendered page at a translated position (uses Picture if available)
+  void drawPage(Canvas canvas, ui.Picture? picture, TextPage? fallbackPage, Offset offset) {
+    canvas.save();
+    canvas.translate(offset.dx, offset.dy);
+    if (picture != null) {
+      canvas.drawPicture(picture);
+    } else if (fallbackPage != null) {
+      final clipRect = canvas.getDestinationClipBounds();
+      final size = clipRect.isEmpty ? const Size(400, 600) : Size(clipRect.width, clipRect.height);
+      canvas.translate(-offset.dx, -offset.dy);
+      canvas.restore();
+      canvas.save();
+      canvas.translate(offset.dx, offset.dy);
+      ContentPagePainter(page: fallbackPage, settings: settings).paint(canvas, size);
+    }
+    canvas.restore();
+  }
 
   void onDragUpdate(double delta) {
     if (isRunning) return;
@@ -100,6 +156,7 @@ abstract class PageDelegate {
     _dragOffset = 0;
     isRunning = false;
     animController.value = 0;
+    _clearPictures();
   }
 
   void draw(

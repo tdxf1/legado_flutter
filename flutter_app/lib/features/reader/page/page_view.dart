@@ -29,6 +29,7 @@ class _PageViewWidgetState extends State<PageViewWidget>
     with TickerProviderStateMixin {
   late PageDelegate _delegate;
   AnimationController? _animController;
+  Size _pageSize = Size.zero;
 
   @override
   void initState() {
@@ -108,6 +109,12 @@ class _PageViewWidgetState extends State<PageViewWidget>
     return PageDirection.none;
   }
 
+  void _onHorizontalDragStart(DragStartDetails details) {
+    if (_pageSize.isEmpty) return;
+    final ctrl = widget.controller;
+    _delegate.onDragStart(_pageSize, ctrl.currentPage, ctrl.nextPage, ctrl.prevPage);
+  }
+
   void _onHorizontalDragUpdate(DragUpdateDetails details) {
     _delegate.onDragUpdate(details.primaryDelta ?? 0);
   }
@@ -122,9 +129,11 @@ class _PageViewWidgetState extends State<PageViewWidget>
     return LayoutBuilder(
       builder: (context, constraints) {
         final size = Size(constraints.maxWidth, constraints.maxHeight);
+        _pageSize = size;
         widget.controller.updatePageSize(size);
 
         return GestureDetector(
+          onHorizontalDragStart: _onHorizontalDragStart,
           onHorizontalDragUpdate: _onHorizontalDragUpdate,
           onHorizontalDragEnd: _onHorizontalDragEnd,
           child: AnimatedBuilder(
