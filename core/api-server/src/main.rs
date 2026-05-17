@@ -6,6 +6,7 @@ use axum::{
     response::Response,
     Router,
 };
+use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
@@ -76,7 +77,15 @@ async fn auth_middleware(
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if auth != format!("Bearer {}", state.api_token) {
+    let expected = format!("Bearer {}", state.api_token);
+    // R107: constant-time byte comparison so a remote attacker can't
+    // recover the token by measuring per-byte RTT differences.
+    // `subtle::ConstantTimeEq` for `[u8]` is constant-time across
+    // equal-length inputs; differing-length inputs may still leak
+    // length info via timing, but the token length is derivable from
+    // our format ("Bearer " + UUIDv4 = 43 chars) so length isn't a
+    // secret in practice.
+    if !bool::from(auth.as_bytes().ct_eq(expected.as_bytes())) {
         return Err(StatusCode::UNAUTHORIZED);
     }
     Ok(next.run(req).await)
@@ -148,4 +157,44 @@ async fn main() {
         is_loopback(&host)
     );
     axum::serve(listener, app).await.unwrap();
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use subtle::ConstantTimeEq;
+
+    /// R107 sanity check: ConstantTimeEq returns the right boolean for
+    /// matching / mismatching token strings. Doesn't measure actual
+    /// timing — that's a property of the implementation.
+    #[test]
+    fn token_ct_eq_matches_correct_token() {
+        let expected = "Bearer 12345678-1234-1234-1234-123456789abc".as_bytes();
+        let auth = "Bearer 12345678-1234-1234-1234-123456789abc".as_bytes();
+        assert!(bool::from(auth.ct_eq(expected)));
+    }
+
+    #[test]
+    fn token_ct_eq_rejects_wrong_token() {
+        // Same length (43 bytes) so this exercises the documented
+        // equal-length constant-time path of subtle's ct_eq.
+        let expected = "Bearer 12345678-1234-1234-1234-123456789abc".as_bytes();
+        let auth = "Bearer 87654321-4321-4321-4321-cba987654321".as_bytes();
+        assert_eq!(expected.len(), auth.len());
+        assert!(!bool::from(auth.ct_eq(expected)));
+    }
+
+    #[test]
+    fn token_ct_eq_rejects_empty_auth() {
+        let expected = "Bearer 12345678-1234-1234-1234-123456789abc".as_bytes();
+        let auth = b"";
+        assert!(!bool::from(auth.ct_eq(expected.as_ref())));
+    }
+
+    #[test]
+    fn token_ct_eq_rejects_missing_bearer_prefix() {
+        let expected = "Bearer 12345678-1234-1234-1234-123456789abc".as_bytes();
+        // Token value alone, no "Bearer " prefix.
+        let auth = "12345678-1234-1234-1234-123456789abc".as_bytes();
+        assert!(!bool::from(auth.ct_eq(expected)));
+    }
 }
