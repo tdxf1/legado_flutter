@@ -1,11 +1,10 @@
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import '../text_page.dart';
-import '../content_page.dart';
 import '../page_view_controller.dart';
-import 'page_delegate.dart';
+import 'horizontal_page_delegate.dart';
 
-class CoverPageDelegate extends PageDelegate {
+class CoverPageDelegate extends HorizontalPageDelegate {
   CoverPageDelegate({
     required super.controller,
     required super.settings,
@@ -48,8 +47,7 @@ class CoverPageDelegate extends PageDelegate {
       drawPage(canvas, prevPicture, prevPage, Offset.zero);
       canvas.restore();
     } else {
-      final painter = ContentPagePainter(page: currentPage, settings: settings, totalPages: totalPages);
-      painter.paint(canvas, size);
+      drawStaticCurrent(canvas, size, currentPage, totalPages);
     }
   }
 

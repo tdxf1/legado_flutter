@@ -558,6 +558,20 @@ fn register_quickjs_bridge(ctx: &rquickjs::Ctx<'_>) -> Result<(), String> {
         .map_err(|e| format!("set getCookie: {e}"))?;
     global
         .set(
+            "__legado_set_cookie",
+            Function::new(ctx.clone(), java_set_cookie)
+                .map_err(|e| format!("register setCookie: {e}"))?,
+        )
+        .map_err(|e| format!("set setCookie: {e}"))?;
+    global
+        .set(
+            "__legado_remove_cookie",
+            Function::new(ctx.clone(), java_remove_cookie)
+                .map_err(|e| format!("register removeCookie: {e}"))?,
+        )
+        .map_err(|e| format!("set removeCookie: {e}"))?;
+    global
+        .set(
             "__legado_get_string",
             Function::new(ctx.clone(), java_get_string)
                 .map_err(|e| format!("register getString: {e}"))?,
@@ -870,13 +884,14 @@ fn java_utf8_to_gbk(input: String) -> String {
 
 #[cfg(feature = "js-quickjs")]
 fn java_http_request(method: String, url: String, body: String, headers_json: String) -> String {
-    let cookie_jar = current_js_cookie_jar();
-    std::thread::spawn(move || {
-        let _cookie_guard = JsCookieJarOverride::install(cookie_jar);
-        java_http_request_blocking(method, url, body, headers_json)
-    })
-    .join()
-    .unwrap_or_default()
+    // P2-2: We used to `std::thread::spawn(...).join()` here, which created
+    // an extra OS thread per JS bridge call just to re-install the
+    // thread-local cookie jar override. Both the rquickjs callback and the
+    // surrounding parser are already running on tokio's blocking thread
+    // pool, so it's safe (and much cheaper) to run inline. The cookie jar
+    // override is already installed by the parent guard set up in
+    // `eval_default_with_http_state`, so we don't need to re-install it.
+    java_http_request_blocking(method, url, body, headers_json)
 }
 
 #[cfg(feature = "js-quickjs")]
@@ -1092,6 +1107,63 @@ fn java_get_cookie(tag: String, key: String) -> String {
         };
         if name == key {
             return value.to_string();
+        }
+    }
+    String::new()
+}
+
+#[cfg(feature = "js-quickjs")]
+fn java_set_cookie(url_str: String, cookie_str: String) -> String {
+    use reqwest::cookie::CookieStore;
+    use reqwest::header::HeaderValue;
+
+    let Ok(url) = url_str.parse::<url::Url>() else {
+        return String::new();
+    };
+    let jar = current_js_cookie_jar();
+    // Parse cookie string: "name=value; name2=value2" → set each as Set-Cookie
+    for pair in cookie_str.split(';') {
+        let trimmed = pair.trim();
+        if !trimmed.is_empty() {
+            if let Ok(hv) = HeaderValue::from_str(trimmed) {
+                jar.set_cookies(&mut [hv].iter(), &url);
+            }
+        }
+    }
+    String::new()
+}
+
+#[cfg(feature = "js-quickjs")]
+fn java_remove_cookie(url_str: String) -> String {
+    // P2-1: `reqwest::cookie::Jar` doesn't expose a removal API. We fake it
+    // by reading every cookie applicable to `url_str` (via `cookies()`
+    // which returns the `Cookie:` request header) and re-setting each name
+    // with `Max-Age=0; Path=/`, which makes the jar treat it as expired.
+    use reqwest::cookie::CookieStore;
+    use reqwest::header::HeaderValue;
+
+    let Ok(url) = url_str.parse::<url::Url>() else {
+        return String::new();
+    };
+    let jar = current_js_cookie_jar();
+    let Some(header) = jar.cookies(&url) else {
+        return String::new();
+    };
+    let Ok(cookie_str) = header.to_str() else {
+        return String::new();
+    };
+    for pair in cookie_str.split(';') {
+        let pair = pair.trim();
+        let Some((name, _)) = pair.split_once('=') else {
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let expire = format!("{name}=; Max-Age=0; Path=/");
+        if let Ok(hv) = HeaderValue::from_str(&expire) {
+            jar.set_cookies(&mut [hv].iter(), &url);
         }
     }
     String::new()
@@ -2149,6 +2221,13 @@ var cache = {
     putMemory: function(key, value) { return __legado_cache_put(String(key || ''), value == null ? '' : String(value)); },
     get: function(key) { return __legado_cache_get(String(key || '')); },
     put: function(key, value) { return __legado_cache_put(String(key || ''), value == null ? '' : String(value)); }
+};
+
+var cookie = {
+    getCookie: function(url) { return __legado_get_cookie(String(url || ''), ''); },
+    setCookie: function(url, cookieStr) { return __legado_set_cookie(String(url || ''), String(cookieStr || '')); },
+    removeCookie: function(url) { return __legado_remove_cookie(String(url || '')); },
+    getKey: function(url, key) { return __legado_get_cookie(String(url || ''), String(key || '')); }
 };
 
 var source = {

@@ -51,6 +51,7 @@ class MainActivity : FlutterActivity() {
         const val DOWNLOAD_CHANNEL_NAME = "下载通知"
         const val CHANNEL_NAME = "legado/notifications"
         const val WEBVIEW_CHANNEL_NAME = "legado/webview_executor"
+        const val SIM_PAGE_CHANNEL_NAME = "legado/sim_page"
         const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1001
         const val MAX_BRIDGE_BODY_BYTES = 10 * 1024 * 1024L
         const val MAX_ZIP_DOWNLOAD_BYTES = 50 * 1024 * 1024L
@@ -58,13 +59,123 @@ class MainActivity : FlutterActivity() {
         const val MAX_ZIP_TOTAL_BYTES = 50 * 1024 * 1024L
         const val MAX_ZIP_ENTRIES = 1024
 
-        private fun isAllowedWebViewUrl(url: String): Boolean {
+        /**
+         * Validate that a URL is safe for the in-app WebView/JS bridge to fetch.
+         *
+         * Two-layer policy:
+         *  1. Scheme must be http/https — rules out file:// content://, etc.
+         *  2. Host must not be a loopback / RFC1918 / link-local / cloud
+         *     metadata address. Without this, a malicious book source's
+         *     `webJs` could call `java.ajax('http://127.0.0.1:8787/...')`
+         *     to probe the on-device api-server token or scan the LAN.
+         *
+         * Debug builds bypass step 2 so developers can hit a co-located
+         * `api-server` running on their workstation.
+         */
+        fun isAllowedWebViewUrl(url: String): Boolean {
             return try {
                 val uri = Uri.parse(url)
-                uri.scheme == "https" || uri.scheme == "http"
+                val scheme = uri.scheme ?: return false
+                if (scheme != "http" && scheme != "https") return false
+                val host = uri.host ?: return false
+                if (BuildConfig.DEBUG) return true
+                !isPrivateHost(host)
             } catch (_: Exception) {
                 false
             }
+        }
+
+        /**
+         * SSRF black-list: loopback, RFC1918, link-local, cloud metadata.
+         * Visible for testing.
+         */
+        internal fun isPrivateHost(host: String): Boolean {
+            val h = host.lowercase(Locale.ROOT)
+            // Strip an optional zone-id (e.g. "fe80::1%wlan0").
+            val bare = h.substringBefore('%')
+            // Loopback by name.
+            if (bare == "localhost" || bare == "ip6-localhost") return true
+            // Try to parse as an IP literal. We can't use InetAddress.getByName
+            // because it triggers DNS for hostnames; we only want a literal
+            // check here. Bracketed IPv6 hosts already have brackets stripped
+            // by Uri.host.
+            return parseIpLiteral(bare)?.let { isPrivateIp(it) } ?: false
+        }
+
+        private fun parseIpLiteral(host: String): java.net.InetAddress? {
+            // Quick literal check — IPv4 dotted quads or IPv6 with at least
+            // one colon. Anything else is treated as a hostname (allowed).
+            val looksLikeIpv4 = host.matches(Regex("^\\d{1,3}(\\.\\d{1,3}){3}$"))
+            val looksLikeIpv6 = host.contains(':')
+            if (!looksLikeIpv4 && !looksLikeIpv6) return null
+            return try {
+                java.net.InetAddress.getByName(host)
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        private fun isPrivateIp(addr: java.net.InetAddress): Boolean {
+            if (addr.isAnyLocalAddress) return true
+            if (addr.isLoopbackAddress) return true
+            if (addr.isLinkLocalAddress) return true   // 169.254.x.x, fe80::
+            if (addr.isSiteLocalAddress) return true   // 10/8, 172.16/12, 192.168/16, fec0::
+            // 100.64.0.0/10 (CGNAT) — not flagged by isSiteLocal in JDK.
+            val bytes = addr.address
+            if (bytes.size == 4) {
+                val b0 = bytes[0].toInt() and 0xff
+                val b1 = bytes[1].toInt() and 0xff
+                if (b0 == 100 && b1 in 64..127) return true
+                // Cloud metadata: 169.254.169.254 already covered by link-local.
+            }
+            return false
+        }
+
+        /**
+         * R9 — DNS-rebinding hardening.
+         *
+         * `isAllowedWebViewUrl` rejects URLs whose **host string** is a
+         * private IP literal. That doesn't catch a malicious `attacker.com`
+         * whose DNS resolves to `127.0.0.1` (or any RFC1918 / link-local /
+         * CGNAT). Once we're about to actually fetch the URL we resolve all
+         * A/AAAA records and bail if any of them is private.
+         *
+         * Best-effort only:
+         *  - `getAllByName` may consult OS cache; the *next* request might
+         *    resolve differently. For a single bridge call this is good
+         *    enough — repeated calls would all go through this check.
+         *  - Debug builds skip the check (same policy as the first layer).
+         *
+         * Returns true when the host resolves to *only* public addresses (or
+         * resolution fails, in which case let the URL connection itself raise
+         * the IOException).
+         */
+        fun isResolvedHostPublic(host: String): Boolean {
+            if (BuildConfig.DEBUG) return true
+            return try {
+                val addrs = java.net.InetAddress.getAllByName(host)
+                addrs.none { isPrivateIp(it) }
+            } catch (_: Exception) {
+                // Don't pre-emptively block on resolution errors; the actual
+                // openConnection() will fail loudly if needed.
+                true
+            }
+        }
+
+        /**
+         * Combined gate used immediately before `URL(url).openConnection()`.
+         * Rejects (1) bad scheme / private literal host (caught by
+         * [isAllowedWebViewUrl]) and (2) hostnames that resolve to private
+         * addresses (DNS-rebinding defence).
+         */
+        fun isUrlSafeForFetch(url: String): Boolean {
+            if (!isAllowedWebViewUrl(url)) return false
+            val host = try {
+                Uri.parse(url).host ?: return false
+            } catch (_: Exception) {
+                return false
+            }
+            return isResolvedHostPublic(host)
         }
     }
 
@@ -90,6 +201,24 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        // SimulationPageDelegate platform fallback hook (Phase 4.7).
+        // Currently a no-op stub: when the Dart-side simulation animation drops
+        // frames repeatedly and degrades to L3, it pings here so the native
+        // side can take over. Vendoring legado-with-MD3's Kotlin
+        // SimulationPageDelegate is left as a separate PR.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SIM_PAGE_CHANNEL_NAME).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "start" -> {
+                    android.util.Log.i("SimPage", "native fallback start (stub)")
+                    result.success(null)
+                }
+                "stop" -> {
+                    android.util.Log.i("SimPage", "native fallback stop (stub)")
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
     }
 
     private fun executeWebViewRequest(args: Map<*, *>?, result: MethodChannel.Result) {
@@ -102,6 +231,8 @@ class MainActivity : FlutterActivity() {
             result.error("INVALID_URL", "Only http(s) WebView URLs are allowed", null)
             return
         }
+        // R9: DNS-rebinding check happens off the main thread (it does
+        // synchronous DNS resolution); do it inside the IO-bound work below.
         val webJs = args["webJs"] as? String
         val sourceRegex = args["sourceRegex"] as? String
         val headers = (args["headers"] as? Map<*, *>)
@@ -279,7 +410,7 @@ class MainActivity : FlutterActivity() {
         @JavascriptInterface
         fun http(method: String, url: String, body: String, headersJson: String): String {
             return try {
-                if (!isAllowedWebViewUrl(url)) return ""
+                if (!isUrlSafeForFetch(url)) return ""
                 val conn = URL(url).openConnection() as HttpURLConnection
                 conn.requestMethod = method.uppercase()
                 conn.connectTimeout = 15000
@@ -545,7 +676,7 @@ class MainActivity : FlutterActivity() {
 
         @JavascriptInterface
         fun downloadFile(url: String, path: String): String = try {
-            if (!isAllowedWebViewUrl(url)) throw IllegalArgumentException("invalid url")
+            if (!isUrlSafeForFetch(url)) throw IllegalArgumentException("invalid url")
             val file = resolvePath(path)
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.connectTimeout = 15000
@@ -619,10 +750,16 @@ class MainActivity : FlutterActivity() {
 
         @JavascriptInterface
         fun getZipStringContent(url: String, path: String): String = try {
+            // Validate scheme/host BEFORE opening the connection — otherwise
+            // we'd already do DNS + TCP handshake on attacker-controlled URLs.
+            // The original implementation also gated on conn.contentLengthLong
+            // before connect(), where it is always -1, so that bound never
+            // fired. readLimitedBytes(MAX_ZIP_DOWNLOAD_BYTES) below is the
+            // real size cap.
+            if (!isUrlSafeForFetch(url)) throw IllegalArgumentException("invalid zip url")
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.connectTimeout = 15000
             conn.readTimeout = 30000
-            if (!isAllowedWebViewUrl(url) || conn.contentLengthLong > MAX_ZIP_DOWNLOAD_BYTES) throw IllegalArgumentException("invalid zip url")
             var found: String? = null
             conn.inputStream.use { input ->
                 val zipBytes = readLimitedBytes(input, MAX_ZIP_DOWNLOAD_BYTES)
@@ -643,10 +780,12 @@ class MainActivity : FlutterActivity() {
 
         @JavascriptInterface
         fun getZipByteArrayContent(url: String, path: String): String = try {
+            // See getZipStringContent: validate URL before opening the
+            // connection; rely on readLimitedBytes for the real size cap.
+            if (!isUrlSafeForFetch(url)) throw IllegalArgumentException("invalid zip url")
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.connectTimeout = 15000
             conn.readTimeout = 30000
-            if (!isAllowedWebViewUrl(url) || conn.contentLengthLong > MAX_ZIP_DOWNLOAD_BYTES) throw IllegalArgumentException("invalid zip url")
             var found: String? = null
             conn.inputStream.use { input ->
                 val zipBytes = readLimitedBytes(input, MAX_ZIP_DOWNLOAD_BYTES)
@@ -681,7 +820,7 @@ class MainActivity : FlutterActivity() {
             return try {
                 val bytes = when {
                     input.startsWith("http://") || input.startsWith("https://") -> {
-                        if (!isAllowedWebViewUrl(input)) return "null"
+                        if (!isUrlSafeForFetch(input)) return "null"
                         val conn = URL(input).openConnection() as HttpURLConnection
                         conn.connectTimeout = 15000
                         conn.readTimeout = 30000

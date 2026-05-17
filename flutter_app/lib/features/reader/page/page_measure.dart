@@ -27,8 +27,6 @@ class PageMeasure {
     this.chapterTitle,
   });
 
-  static const double _footerHeight = 36.0;
-
   double get _contentWidth => pageSize.width - settings.horizontalPadding * 2;
 
   double get _contentHeight =>

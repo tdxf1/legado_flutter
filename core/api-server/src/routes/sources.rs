@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ApiError;
 use crate::state::AppState;
-use crate::util::open_db;
+use crate::util::pooled_conn;
 
 #[derive(Debug, Deserialize)]
 pub struct CreateSourceRequest {
@@ -31,7 +31,7 @@ pub struct ImportSourcesResponse {
 }
 
 async fn list_sources(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
-    let mut conn = open_db(&state.db_path)?;
+    let mut conn = pooled_conn(&state)?;
     let dao = core_storage::source_dao::SourceDao::new(&mut conn);
     let sources = dao
         .get_all()
@@ -42,7 +42,7 @@ async fn list_sources(State(state): State<AppState>) -> Result<Json<serde_json::
 async fn list_enabled_sources(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let mut conn = open_db(&state.db_path)?;
+    let mut conn = pooled_conn(&state)?;
     let dao = core_storage::source_dao::SourceDao::new(&mut conn);
     let sources = dao
         .get_enabled()
@@ -60,7 +60,7 @@ async fn create_source(
     if req.url.trim().is_empty() {
         return Err(ApiError::BadRequest("书源 URL 不能为空".into()));
     }
-    let mut conn = open_db(&state.db_path)?;
+    let mut conn = pooled_conn(&state)?;
     let dao = core_storage::source_dao::SourceDao::new(&mut conn);
     let source = dao
         .create(&req.name, &req.url)
@@ -72,7 +72,7 @@ async fn import_sources(
     State(state): State<AppState>,
     Json(req): Json<ImportSourcesRequest>,
 ) -> Result<Json<ImportSourcesResponse>, ApiError> {
-    let mut conn = open_db(&state.db_path)?;
+    let mut conn = pooled_conn(&state)?;
     let mut dao = core_storage::source_dao::SourceDao::new(&mut conn);
     let count = dao
         .import_from_json(&req.json)
@@ -87,7 +87,7 @@ async fn set_source_enabled(
     Path(id): Path<String>,
     Json(req): Json<EnableSourceRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let mut conn = open_db(&state.db_path)?;
+    let mut conn = pooled_conn(&state)?;
     let dao = core_storage::source_dao::SourceDao::new(&mut conn);
     dao.get_by_id(&id)
         .map_err(|e| ApiError::Database(e.to_string()))?
@@ -101,7 +101,7 @@ async fn delete_source(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let mut conn = open_db(&state.db_path)?;
+    let mut conn = pooled_conn(&state)?;
     let dao = core_storage::source_dao::SourceDao::new(&mut conn);
     dao.get_by_id(&id)
         .map_err(|e| ApiError::Database(e.to_string()))?
@@ -112,7 +112,7 @@ async fn delete_source(
 }
 
 async fn export_legado(State(state): State<AppState>) -> Result<String, ApiError> {
-    let mut conn = open_db(&state.db_path)?;
+    let mut conn = pooled_conn(&state)?;
     let dao = core_storage::source_dao::SourceDao::new(&mut conn);
     let json = dao
         .export_legado_json()

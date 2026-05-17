@@ -157,10 +157,9 @@ fn execute_http(
     let (parts, body) = response.into_parts();
     drop(parts);
 
-    let mut reader = body.into_reader();
+    let reader = body.into_reader();
     let mut bytes = Vec::new();
-    reader.take(MAX_RESPONSE_BYTES as u64).read_to_end(&mut bytes)
-        .map_err(|e| format!("read body: {e}"))?;
+    reader.take(MAX_RESPONSE_BYTES as u64).read_to_end(&mut bytes)        .map_err(|e| format!("read body: {e}"))?;
 
     let encoding_name = charset.map(|c| c.to_string())
         .unwrap_or_else(|| guess_charset_from_response(&headers_map, &bytes).to_string());

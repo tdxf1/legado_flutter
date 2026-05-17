@@ -18,7 +18,7 @@ pub struct CreateReplaceRuleRequest {
 }
 
 async fn list_rules(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::open_db(&state.db_path)?;
+    let conn = util::pooled_conn(&state)?;
     let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(&conn);
     let rules = dao
         .get_all()
@@ -29,7 +29,7 @@ async fn list_rules(State(state): State<AppState>) -> Result<Json<serde_json::Va
 async fn list_enabled_rules(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::open_db(&state.db_path)?;
+    let conn = util::pooled_conn(&state)?;
     let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(&conn);
     let rules = dao
         .get_enabled()
@@ -44,7 +44,7 @@ async fn create_rule(
     if req.name.trim().is_empty() {
         return Err(ApiError::BadRequest("规则名称不能为空".into()));
     }
-    let conn = util::open_db(&state.db_path)?;
+    let conn = util::pooled_conn(&state)?;
     let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(&conn);
     let rule = dao
         .create(
@@ -61,7 +61,7 @@ async fn delete_rule(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::open_db(&state.db_path)?;
+    let conn = util::pooled_conn(&state)?;
     let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(&conn);
     dao.get_by_id(&id)
         .map_err(|e| ApiError::Database(e.to_string()))?

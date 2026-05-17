@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Network security policy for Legado Reader.
+
+  Many real-world Legado book sources still serve over plain HTTP. Android 9+
+  blocks cleartext by default; we re-enable it globally for the reader app
+  while keeping HTTPS as the preferred channel.
+
+  Trust anchors:
+   - Release builds trust ONLY system CAs. Trusting user-installed CAs in
+     release would let an attacker who tricks the user into installing a
+     rogue CA MITM all HTTPS traffic (including this app's traffic to book
+     sources / api-server). The earlier configuration here trusted user CAs
+     in base-config; that was a regression introduced by the SSRF hardening
+     batch and is corrected by R2.
+   - Debug builds also trust user CAs so developers can use Charles / mitmproxy
+     against `flutter run --debug` without rebuilding the app.
+
+  If/when we want to enforce HTTPS for specific high-trust domains, add
+  <domain-config> blocks below.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>

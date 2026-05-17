@@ -1,0 +1,245 @@
+/// 统一传输抽象层
+///
+/// 把 Flutter 端访问后端的两条路径（FRB FFI / Dio HTTP）收敛到同一接口：
+///
+/// ```dart
+/// abstract class Transport {
+///   Future<dynamic> invoke(String cmd, [Map<String, dynamic>? args]);
+///   Stream<TransportEvent> stream(String path, [Map<String, String>? query]);
+/// }
+/// ```
+///
+/// 当前实现两个：
+/// - [LocalTransport]：invoke 走 FRB；stream 暂未接入（占位回 empty stream）
+/// - [HttpTransport]：invoke 走 Dio；stream 走 Server-Sent Events
+///
+/// 业务侧 widget 通过 `ref.read(transportProvider)` 拿到当前 Transport 实例
+/// （由 [BackendMode] 切换），无需关心底层细节。
+library;
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+
+class TransportEvent {
+  /// SSE event name (`message` 默认，或自定义如 `result` / `done`）
+  final String event;
+
+  /// SSE data 字段（已是字符串；调用方按需 jsonDecode）
+  final String data;
+
+  /// SSE id 字段（如果有）
+  final String? id;
+
+  const TransportEvent({
+    required this.event,
+    required this.data,
+    this.id,
+  });
+
+  Map<String, dynamic>? get json {
+    try {
+      return jsonDecode(data) as Map<String, dynamic>;
+    } catch (e) {
+      debugPrint('[Transport] non-JSON SSE data: $e');
+      return null;
+    }
+  }
+}
+
+abstract class Transport {
+  /// 单次 RPC 调用。返回值是 invoke 命令的原生输出（字符串 / Map / List 等）。
+  Future<dynamic> invoke(String cmd, [Map<String, dynamic>? args]);
+
+  /// 服务器推送流。SSE 一条消息映射为一个 [TransportEvent]。
+  /// 客户端取消订阅时（`subscription.cancel()`）应自动断开底层连接。
+  Stream<TransportEvent> stream(
+    String path, {
+    Map<String, String>? query,
+  });
+
+  void close();
+}
+
+/// HTTP + SSE 实现（HttpClient 内置，无需额外 pub 依赖）。
+class HttpTransport implements Transport {
+  final String baseUrl;
+  final String? token;
+
+  final HttpClient _client;
+  final List<HttpClientRequest> _activeRequests = [];
+
+  HttpTransport({
+    required this.baseUrl,
+    this.token,
+    HttpClient? client,
+  }) : _client = client ?? HttpClient() {
+    _client.connectionTimeout = const Duration(seconds: 10);
+  }
+
+  @override
+  Future<dynamic> invoke(
+    String cmd,
+    [Map<String, dynamic>? args]) async {
+    // For HTTP mode, [cmd] 是 URI path，例如 'POST /api/search'。
+    // 简化：调用方按"VERB /path"格式传入。
+    final parts = cmd.split(' ');
+    if (parts.length != 2) {
+      throw ArgumentError(
+          'HttpTransport.invoke expects "VERB /path"; got "$cmd"');
+    }
+    final method = parts[0].toUpperCase();
+    final path = parts[1];
+    final uri = Uri.parse(baseUrl + path);
+    final req = await _client.openUrl(method, uri);
+    req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
+    if (token != null) {
+      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+    }
+    if (args != null && method != 'GET') {
+      req.add(utf8.encode(jsonEncode(args)));
+    }
+    final res = await req.close();
+    final bodyBytes = <int>[];
+    await for (final chunk in res) {
+      bodyBytes.addAll(chunk);
+    }
+    final body = utf8.decode(bodyBytes);
+    if (res.statusCode >= 400) {
+      throw HttpException(
+        '$method $path failed: ${res.statusCode} $body',
+      );
+    }
+    if (body.isEmpty) return null;
+    try {
+      return jsonDecode(body);
+    } catch (e) {
+      // Body wasn't valid JSON; surface raw text to caller (server may
+      // intentionally return plain text, e.g. /api/sources/export/legado).
+      debugPrint('[HttpTransport] non-JSON response from $cmd: $e');
+      return body;
+    }
+  }
+
+  @override
+  Stream<TransportEvent> stream(
+    String path, {
+    Map<String, String>? query,
+  }) async* {
+    final qs = (query == null || query.isEmpty)
+        ? ''
+        : '?${query.entries.map((e) => '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}').join('&')}';
+    final uri = Uri.parse(baseUrl + path + qs);
+    final req = await _client.openUrl('GET', uri);
+    req.headers.set(HttpHeaders.acceptHeader, 'text/event-stream');
+    req.headers.set(HttpHeaders.cacheControlHeader, 'no-cache');
+    if (token != null) {
+      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+    }
+    _activeRequests.add(req);
+    HttpClientResponse res;
+    try {
+      res = await req.close();
+    } finally {
+      _activeRequests.remove(req);
+    }
+    if (res.statusCode >= 400) {
+      throw HttpException('GET $path SSE failed: ${res.statusCode}');
+    }
+
+    String currentEvent = 'message';
+    String currentId = '';
+    final dataLines = <String>[];
+    final buffer = StringBuffer();
+
+    await for (final chunk in res.transform(utf8.decoder)) {
+      // R6: SSE allows LF / CR / CRLF as line terminators (per the W3C
+      // spec); some proxies turn LF into CRLF mid-stream. Normalize CRLF
+      // and bare CR to LF so the rest of the parser only deals with one
+      // form. Lone CRs are rare in real traffic but cheap to handle.
+      final normalized = chunk.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+      buffer.write(normalized);
+      while (true) {
+        final raw = buffer.toString();
+        final sep = raw.indexOf('\n\n');
+        if (sep < 0) break;
+        final block = raw.substring(0, sep);
+        buffer.clear();
+        buffer.write(raw.substring(sep + 2));
+
+        // Parse this block: event/id once, data may span multiple lines.
+        // SSE spec: dispatch a single event per blank-line-terminated block,
+        // joining all data: lines with '\n'.
+        currentEvent = 'message';
+        currentId = '';
+        dataLines.clear();
+        for (final line in block.split('\n')) {
+          if (line.isEmpty) continue;
+          if (line.startsWith(':')) continue; // SSE comment
+          final colonIdx = line.indexOf(':');
+          if (colonIdx < 0) continue;
+          final field = line.substring(0, colonIdx).trim();
+          var value = line.substring(colonIdx + 1);
+          if (value.startsWith(' ')) value = value.substring(1);
+          switch (field) {
+            case 'event':
+              currentEvent = value;
+              break;
+            case 'data':
+              dataLines.add(value);
+              break;
+            case 'id':
+              currentId = value;
+              break;
+          }
+        }
+        if (dataLines.isNotEmpty) {
+          yield TransportEvent(
+            event: currentEvent,
+            data: dataLines.join('\n'),
+            id: currentId.isEmpty ? null : currentId,
+          );
+        }
+      }
+    }
+  }
+
+  @override
+  void close() {
+    for (final r in _activeRequests) {
+      try {
+        r.abort();
+      } catch (e) {
+        debugPrint('[HttpTransport] abort failed: $e');
+      }
+    }
+    _activeRequests.clear();
+    _client.close(force: true);
+  }
+}
+
+/// 占位 LocalTransport — 为了让上层在 BackendMode.frb 时也能拿到一个非空实例。
+///
+/// invoke 永远抛 [UnimplementedError]，stream 返回空 stream。业务代码现阶段
+/// 仍直接使用 `rust_api.xxx`，未来逐步迁移到 Transport 抽象后才会真正调用此类。
+class LocalTransport implements Transport {
+  const LocalTransport();
+
+  @override
+  Future<dynamic> invoke(String cmd, [Map<String, dynamic>? args]) {
+    throw UnimplementedError(
+      'LocalTransport.invoke is a placeholder. Call rust_api directly for now.',
+    );
+  }
+
+  @override
+  Stream<TransportEvent> stream(String path, {Map<String, String>? query}) {
+    debugPrint('[LocalTransport] stream($path) — no FRB Stream wired yet');
+    return const Stream.empty();
+  }
+
+  @override
+  void close() {}
+}

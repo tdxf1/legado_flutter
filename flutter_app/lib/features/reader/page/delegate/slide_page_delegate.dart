@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import '../text_page.dart';
-import '../content_page.dart';
 import '../page_view_controller.dart';
-import 'page_delegate.dart';
+import 'horizontal_page_delegate.dart';
 
-class SlidePageDelegate extends PageDelegate {
+class SlidePageDelegate extends HorizontalPageDelegate {
   SlidePageDelegate({
     required super.controller,
     required super.settings,
@@ -36,8 +35,7 @@ class SlidePageDelegate extends PageDelegate {
       // Prev page slides in from left
       drawPage(canvas, prevPicture, prevPage, Offset(-sw * (1 - progress), 0));
     } else {
-      final painter = ContentPagePainter(page: currentPage, settings: settings, totalPages: totalPages);
-      painter.paint(canvas, size);
+      drawStaticCurrent(canvas, size, currentPage, totalPages);
     }
   }
 

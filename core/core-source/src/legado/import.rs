@@ -116,8 +116,29 @@ pub struct LegadoBookSource {
     )]
     pub login_url: Option<String>,
 
+    #[serde(
+        rename = "loginUi",
+        default,
+        deserialize_with = "option_string_from_any"
+    )]
+    pub login_ui: Option<String>,
+
+    #[serde(
+        rename = "loginCheckJs",
+        default,
+        deserialize_with = "option_string_from_any"
+    )]
+    pub login_check_js: Option<String>,
+
     #[serde(rename = "jsLib", default, deserialize_with = "option_string_from_any")]
     pub js_lib: Option<String>,
+
+    #[serde(
+        rename = "coverDecodeJs",
+        default,
+        deserialize_with = "option_string_from_any"
+    )]
+    pub cover_decode_js: Option<String>,
 
     // ── 搜索与发现 ──
     #[serde(
@@ -149,6 +170,24 @@ pub struct LegadoBookSource {
 
     #[serde(rename = "ruleContent", default)]
     pub rule_content: Option<JsonValue>,
+
+    // ── 并发控制 ──
+    #[serde(
+        rename = "concurrentRate",
+        default,
+        deserialize_with = "option_string_from_any"
+    )]
+    pub concurrent_rate: Option<String>,
+
+    #[serde(
+        rename = "variableComment",
+        default,
+        deserialize_with = "option_string_from_any"
+    )]
+    pub variable_comment: Option<String>,
+
+    #[serde(rename = "exploreScreen", default)]
+    pub explore_screen: Option<i32>,
 
     // ── 元数据（可忽略） ──
     #[serde(rename = "lastUpdateTime", default)]
@@ -204,13 +243,19 @@ pub struct ImportedSource {
     pub rule_content: Option<String>,
     pub rule_explore: Option<String>,
     pub login_url: Option<String>,
+    pub login_ui: Option<String>,
+    pub login_check_js: Option<String>,
     pub header: Option<String>,
     pub js_lib: Option<String>,
+    pub cover_decode_js: Option<String>,
     pub search_url: Option<String>,
     pub explore_url: Option<String>,
     pub enabled_cookie_jar: bool,
     pub enabled_explore: bool,
     pub book_url_pattern: Option<String>,
+    pub concurrent_rate: Option<String>,
+    pub variable_comment: Option<String>,
+    pub explore_screen: Option<i32>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -261,8 +306,11 @@ fn legado_to_imported(source: &LegadoBookSource) -> Result<ImportedSource, Strin
             .clone()
             .map(|v| normalize_rule_values(v).to_string()),
         login_url: source.login_url.clone(),
+        login_ui: source.login_ui.clone(),
+        login_check_js: source.login_check_js.clone(),
         header: source.header.clone(),
         js_lib: source.js_lib.clone(),
+        cover_decode_js: source.cover_decode_js.clone(),
         search_url: source.search_url.as_deref().map(clean_legado_url),
         explore_url: source.explore_url.clone(),
         enabled_cookie_jar: source.enabled_cookie_jar,
@@ -272,6 +320,9 @@ fn legado_to_imported(source: &LegadoBookSource) -> Result<ImportedSource, Strin
         } else {
             Some(source.book_url_pattern.clone())
         },
+        concurrent_rate: source.concurrent_rate.clone(),
+        variable_comment: source.variable_comment.clone(),
+        explore_screen: source.explore_screen,
         created_at: now,
         updated_at: now,
     })
@@ -332,16 +383,23 @@ fn normalize_rule_keys(obj: &mut serde_json::Map<String, JsonValue>) {
         ("nextContentUrl", "next_content_url"),
         ("nextTocUrl", "next_toc_url"),
         ("isVip", "is_vip"),
+        ("isPay", "is_pay"),
+        ("isVolume", "is_volume"),
         ("updateTime", "update_time"),
         ("canReName", "can_rename"),
         ("tocUrl", "toc_url"),
         ("bookInfoInit", "book_info_init"),
         ("sourceRegex", "source_regex"),
         ("replaceRegex", "replace_regex"),
+        ("imageStyle", "image_style"),
+        ("imageDecode", "image_decode"),
+        ("payAction", "pay_action"),
         ("webJs", "web_js"),
         ("downloadUrls", "download_urls"),
         ("searchUrl", "search_url"),
         ("checkKeyWord", "check_keyword"),
+        ("formatJs", "format_js"),
+        ("preUpdateJs", "pre_update_js"),
     ];
 
     for (from, to) in key_mappings {

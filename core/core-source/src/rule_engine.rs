@@ -3,7 +3,6 @@
 //! 负责解析和执行书源规则表达式（CSS/XPath/JSONPath/Regex/JavaScript）。
 //! 对应原 Legado 的 AnalyzeRule 模块 (model/analyzeRule/)。
 
-use crate::script_engine::{ScriptContext, ScriptEngine, ScriptResult};
 use crate::types::ExtractType;
 use jsonpath_lib as jsonpath;
 use regex::RegexBuilder;
@@ -444,17 +443,31 @@ impl RuleExpression {
             &self.expression.chars().take(60).collect::<String>()
         );
 
+        // P3-2: Legado JS 规则统一走 QuickJS（兼容 Legado 的 java.* bridge），
+        // 旧 Rhai 路径保留只为兜底，但 Rhai 不支持 JavaScript 语法，遇到真实
+        // 书源的 var/function/=> 几乎必然失败。直接走 DefaultJsRuntime。
+        use crate::legado::js_runtime::{
+            build_runtime_vars, DefaultJsRuntime, JsRuntime,
+        };
+        use crate::legado::value::LegadoValue;
+        use crate::legado::RuleContext;
+
         let script = self
             .expression
             .strip_prefix("js:")
             .or_else(|| self.expression.strip_prefix("@js:"))
             .unwrap_or(&self.expression);
 
-        let engine = ScriptEngine::new();
-        let ctx = ScriptContext::new("", content, "");
-
-        match engine.eval(script, Some(&ctx)) {
-            Ok(result) => Ok(script_result_to_strings(result)),
+        let context = RuleContext::new("", content);
+        let vars = build_runtime_vars(&context, content);
+        let runtime = DefaultJsRuntime::new();
+        match runtime.eval(script, &vars) {
+            Ok(LegadoValue::Null) => Ok(vec![]),
+            Ok(LegadoValue::Array(items)) => Ok(items
+                .into_iter()
+                .map(|v| v.as_string_lossy())
+                .collect()),
+            Ok(other) => Ok(vec![other.as_string_lossy()]),
             Err(e) => Err(RuleError::EvaluationError(e)),
         }
     }
@@ -464,21 +477,6 @@ fn parse_selector_safely(selector: &str) -> Result<Selector, RuleError> {
     catch_unwind(AssertUnwindSafe(|| Selector::parse(selector)))
         .map_err(|_| RuleError::ParseError(format!("CSS 解析 panic: {}", selector)))?
         .map_err(|_| RuleError::ParseError(format!("CSS 解析失败: {}", selector)))
-}
-
-fn script_result_to_strings(result: ScriptResult) -> Vec<String> {
-    match result {
-        ScriptResult::String(s) => vec![s],
-        ScriptResult::Int(i) => vec![i.to_string()],
-        ScriptResult::Float(f) => vec![f.to_string()],
-        ScriptResult::Bool(b) => vec![b.to_string()],
-        ScriptResult::Array(arr) => arr.into_iter().flat_map(script_result_to_strings).collect(),
-        ScriptResult::Map(map) => map
-            .into_values()
-            .flat_map(script_result_to_strings)
-            .collect(),
-        ScriptResult::Null => vec![],
-    }
 }
 
 fn looks_like_xpath_function(s: &str) -> bool {

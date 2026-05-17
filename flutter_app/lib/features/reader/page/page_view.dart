@@ -6,7 +6,10 @@ import 'delegate/page_delegate.dart';
 import 'delegate/no_anim_page_delegate.dart';
 import 'delegate/cover_page_delegate.dart';
 import 'delegate/slide_page_delegate.dart';
-
+import 'delegate/simulation_page_delegate.dart';
+import 'delegate/simulation_degrade_controller.dart';
+import 'delegate/fade_page_delegate.dart';
+import 'simulation_native_fallback.dart';
 class PageViewWidget extends StatefulWidget {
   final PageViewController controller;
   final ReaderSettings settings;
@@ -30,6 +33,8 @@ class _PageViewWidgetState extends State<PageViewWidget>
   late PageDelegate _delegate;
   AnimationController? _animController;
   Size _pageSize = Size.zero;
+  SimulationDegradeController? _simDegrade;
+  bool _useNativeFallback = false;
 
   @override
   void initState() {
@@ -51,6 +56,8 @@ class _PageViewWidgetState extends State<PageViewWidget>
   @override
   void dispose() {
     widget.controller.removeListener(_onControllerChanged);
+    _simDegrade?.detach();
+    _simDegrade = null;
     _animController?.dispose();
     _delegate.dispose();
     super.dispose();
@@ -68,16 +75,20 @@ class _PageViewWidgetState extends State<PageViewWidget>
     );
 
     final ctrl = widget.controller;
+    // PageAnim values follow Legado MD3 native semantics; see
+    // [ReaderPageAnim] in core/providers.dart.
+    if (widget.pageAnim != ReaderPageAnim.simulation) {
+      _simDegrade?.detach();
+      _simDegrade = null;
+      if (_useNativeFallback) {
+        SimulationNativeFallback.instance
+            .stop()
+            .catchError((e) => debugPrint('[SimNative] stop failed: $e'));
+        _useNativeFallback = false;
+      }
+    }
     switch (widget.pageAnim) {
-      case 0:
-        _delegate = NoAnimPageDelegate(
-          controller: ctrl,
-          settings: widget.settings,
-          animController: _animController!,
-          onChapterBoundary: widget.onChapterBoundary,
-        );
-        break;
-      case 2:
+      case ReaderPageAnim.cover:
         _delegate = CoverPageDelegate(
           controller: ctrl,
           settings: widget.settings,
@@ -85,7 +96,7 @@ class _PageViewWidgetState extends State<PageViewWidget>
           onChapterBoundary: widget.onChapterBoundary,
         );
         break;
-      case 3:
+      case ReaderPageAnim.slide:
         _delegate = SlidePageDelegate(
           controller: ctrl,
           settings: widget.settings,
@@ -93,6 +104,41 @@ class _PageViewWidgetState extends State<PageViewWidget>
           onChapterBoundary: widget.onChapterBoundary,
         );
         break;
+      case ReaderPageAnim.simulation:
+        // 复用既有 controller 实例，避免在频繁重建时丢掉降级状态
+        _simDegrade?.detach();
+        _simDegrade ??= SimulationDegradeController();
+        _simDegrade!
+          ..reset()
+          ..attach(
+            onLevelChanged: () {
+              if (mounted) setState(() {});
+            },
+            onFallbackRequested: () {
+              if (!mounted) return;
+              setState(() => _useNativeFallback = true);
+              SimulationNativeFallback.instance
+                  .start()
+                  .catchError((e) => debugPrint('[SimNative] start failed: $e'));
+            },
+          );
+        _delegate = SimulationPageDelegate(
+          controller: ctrl,
+          settings: widget.settings,
+          animController: _animController!,
+          onChapterBoundary: widget.onChapterBoundary,
+          degrade: _simDegrade,
+        );
+        break;
+      case ReaderPageAnim.fade:
+        _delegate = FadePageDelegate(
+          controller: ctrl,
+          settings: widget.settings,
+          animController: _animController!,
+          onChapterBoundary: widget.onChapterBoundary,
+        );
+        break;
+      case ReaderPageAnim.noAnim:
       default:
         _delegate = NoAnimPageDelegate(
           controller: ctrl,
@@ -101,6 +147,11 @@ class _PageViewWidgetState extends State<PageViewWidget>
           onChapterBoundary: widget.onChapterBoundary,
         );
     }
+
+    // Bug 2.5: 把 onTapNext/onTapPrev 注入 controller，让外层（reader_page）
+    // 点击屏幕左/右 1/3 时通过 delegate 跑动画再切页。
+    ctrl.onTapNext = () => _delegate.nextPageByAnim(300);
+    ctrl.onTapPrev = () => _delegate.prevPageByAnim(300);
   }
 
   PageDirection _detectDirection(double velocityX) {
@@ -112,15 +163,18 @@ class _PageViewWidgetState extends State<PageViewWidget>
   void _onHorizontalDragStart(DragStartDetails details) {
     if (_pageSize.isEmpty) return;
     final ctrl = widget.controller;
+    _delegate.recordTouchStart(details.localPosition, _pageSize);
     _delegate.onDragStart(_pageSize, ctrl.currentPage, ctrl.nextPage, ctrl.prevPage);
   }
 
   void _onHorizontalDragUpdate(DragUpdateDetails details) {
+    _delegate.recordTouchUpdate(details.localPosition);
     _delegate.onDragUpdate(details.primaryDelta ?? 0);
   }
 
   void _onHorizontalDragEnd(DragEndDetails details) {
     final dir = _detectDirection(details.primaryVelocity ?? 0);
+    _delegate.fling(details.primaryVelocity ?? 0);
     _delegate.onDragEnd(dir);
   }
 
@@ -199,6 +253,33 @@ class _PageViewPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _PageViewPainter oldDelegate) {
-    return true;
+    // Repaint when an animation is running, when the page content changes,
+    // or when reader settings change. Static pages (noAnim mode at rest)
+    // skip the raster pipeline entirely.
+    //
+    // R8: typesetting fields (fontSize / weight / lineHeight / spacing /
+    // padding / paragraphIndent / fontFamily) must trigger a repaint even
+    // when the page reference happens to be re-used after a re-measure.
+    final oldS = oldDelegate.settings;
+    final newS = settings;
+    return isRunning ||
+        oldDelegate.isRunning != isRunning ||
+        oldDelegate.animProgress != animProgress ||
+        oldDelegate.direction != direction ||
+        !identical(oldDelegate.currentPage, currentPage) ||
+        !identical(oldDelegate.nextPage, nextPage) ||
+        !identical(oldDelegate.prevPage, prevPage) ||
+        oldDelegate.totalPages != totalPages ||
+        oldS.effectiveTextColor != newS.effectiveTextColor ||
+        oldS.effectiveBackgroundColor != newS.effectiveBackgroundColor ||
+        oldS.fontSize != newS.fontSize ||
+        oldS.fontWeightIndex != newS.fontWeightIndex ||
+        oldS.fontFamily != newS.fontFamily ||
+        oldS.letterSpacing != newS.letterSpacing ||
+        oldS.lineHeight != newS.lineHeight ||
+        oldS.paragraphSpacing != newS.paragraphSpacing ||
+        oldS.horizontalPadding != newS.horizontalPadding ||
+        oldS.verticalPadding != newS.verticalPadding ||
+        oldS.paragraphIndent != newS.paragraphIndent;
   }
 }

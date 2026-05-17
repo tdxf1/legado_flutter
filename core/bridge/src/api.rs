@@ -2,6 +2,8 @@
 //!
 //! 复杂类型使用 JSON 字符串传递，避免 FRB 类型解析问题。
 
+use regex::Regex;
+
 // ============================================================
 // 核心初始化
 // ============================================================
@@ -403,33 +405,6 @@ pub async fn search_with_source_from_db_v2(
             serde_json::to_string(&results).map_err(|e| format!("序列化失败: {}", e))
         }
     }
-}
-
-/// 使用预获取的 HTML 搜索（由 Dart 端 dio 提供 HTML，本端仅解析）。
-/// 返回搜索结果 JSON 数组。sync 函数，不含 HTTP 请求。
-pub fn search_parse_html(
-    db_path: String,
-    source_id: String,
-    keyword: String,
-    html: String,
-) -> Result<String, String> {
-    let storage_source = {
-        let mut conn = open_db(&db_path)?;
-        let dao = core_storage::source_dao::SourceDao::new(&mut conn);
-        dao.get_by_id(&source_id)
-            .map_err(|e| format!("查询书源失败: {}", e))?
-            .ok_or_else(|| format!("书源不存在: {}", source_id))?
-    };
-    let source = storage_to_source_book_source(&storage_source)?;
-    let parser = core_source::parser::BookSourceParser::new();
-
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("创建 tokio runtime 失败: {}", e))?;
-    let results = rt.block_on(async { parser.search_html(&source, &keyword, &html).await });
-    drop(rt);
-    serde_json::to_string(&results).map_err(|e| format!("序列化失败: {}", e))
 }
 
 /// 从数据库加载书源并搜索（异步），返回搜索结果 JSON 数组
@@ -852,6 +827,119 @@ pub fn set_replace_rule_enabled(db_path: String, id: String, enabled: bool) -> R
         .map_err(|e| format!("更新替换规则状态失败: {}", e))
 }
 
+/// 对内容应用所有已启用的替换规则。
+///
+/// 这是 P1-7 的修复：之前 Dart 端在每次切章节时通过 FRB 拉一次规则列表，
+/// 然后在主 isolate 里循环 `RegExp(...).replaceAll`，长正文 + 多条规则会
+/// 阻塞 UI。现在统一下沉到 Rust 单次调用：
+///
+///   - 编译失败的规则只 warn 一次（避免每章都 spam 日志）
+///   - 整个循环在 Rust 端跑，不占 Dart 主 isolate
+///   - 调用方只需把 db_path + 原始内容传过来
+///
+/// 同时 Dart 侧的 ReplaceRule 缓存也可以复用：参数加 `cache_generation`，
+/// Rust 端用 OnceLock + RwLock 保存上次拉取的规则；调用方在 ReplaceRule
+/// CRUD 后递增 generation 即可让缓存失效，不必每次走 DAO。
+pub fn apply_replace_rules(
+    db_path: String,
+    content: String,
+    cache_generation: i64,
+) -> Result<String, String> {
+    apply_replace_rules_impl(&db_path, &content, cache_generation)
+}
+
+fn apply_replace_rules_impl(
+    db_path: &str,
+    content: &str,
+    cache_generation: i64,
+) -> Result<String, String> {
+    let rules = load_enabled_replace_rules(db_path, cache_generation)?;
+    // R12: collect all compiled regexes under a *single* short critical
+    // section, then drop the lock before running `replace_all`. Previously
+    // each iteration re-acquired the global REGEX_CACHE mutex and held it
+    // across `replace_all`, serialising every concurrent caller and
+    // throwing away the perf wins of moving regex evaluation off the Dart
+    // main isolate. `regex::Regex` clones are cheap (Arc internally).
+    let compiled: Vec<(Regex, String)> = {
+        let mut cache = REGEX_CACHE
+            .lock()
+            .map_err(|e| format!("regex cache lock poisoned: {e}"))?;
+        rules
+            .iter()
+            .filter(|r| !r.pattern.is_empty())
+            .filter_map(|rule| {
+                cache
+                    .get_or_compile(&rule.id, &rule.pattern)
+                    .map(|re| (re.clone(), rule.replacement.clone()))
+            })
+            .collect()
+    };
+    let mut out = content.to_string();
+    for (re, replacement) in compiled.iter() {
+        out = re.replace_all(&out, replacement.as_str()).into_owned();
+    }
+    Ok(out)
+}
+
+/// Reload the enabled replace-rule list from the DB iff the caller's
+/// `generation` is newer than the cached one. Cached snapshot is shared
+/// across threads.
+fn load_enabled_replace_rules(
+    db_path: &str,
+    generation: i64,
+) -> Result<std::sync::Arc<Vec<core_storage::models::ReplaceRule>>, String> {
+    use std::sync::{Mutex, OnceLock};
+    type Cell = Mutex<Option<(i64, std::sync::Arc<Vec<core_storage::models::ReplaceRule>>)>>;
+    static CACHE: OnceLock<Cell> = OnceLock::new();
+    let cell = CACHE.get_or_init(|| Mutex::new(None));
+    {
+        let guard = cell.lock().map_err(|e| format!("rule cache lock: {e}"))?;
+        if let Some((gen, ref rules)) = *guard {
+            if gen == generation {
+                return Ok(rules.clone());
+            }
+        }
+    }
+    let mut conn = open_db(db_path)?;
+    let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(&mut conn);
+    let fresh = dao
+        .get_enabled()
+        .map_err(|e| format!("加载替换规则失败: {}", e))?;
+    let arc = std::sync::Arc::new(fresh);
+    if let Ok(mut guard) = cell.lock() {
+        *guard = Some((generation, arc.clone()));
+    }
+    Ok(arc)
+}
+
+/// Compiled-regex cache keyed by ReplaceRule.id. Compile failures are
+/// remembered so we don't re-warn on every chapter.
+struct RegexCache {
+    entries: std::collections::HashMap<String, Option<regex::Regex>>,
+}
+
+impl RegexCache {
+    fn new() -> Self {
+        Self {
+            entries: std::collections::HashMap::new(),
+        }
+    }
+
+    fn get_or_compile(&mut self, id: &str, pattern: &str) -> Option<&regex::Regex> {
+        if !self.entries.contains_key(id) {
+            let compiled = regex::Regex::new(pattern);
+            if let Err(ref e) = compiled {
+                tracing::warn!("ReplaceRule {} regex 编译失败: {}", id, e);
+            }
+            self.entries.insert(id.to_string(), compiled.ok());
+        }
+        self.entries.get(id).and_then(|o| o.as_ref())
+    }
+}
+
+static REGEX_CACHE: std::sync::LazyLock<std::sync::Mutex<RegexCache>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(RegexCache::new()));
+
 // ============================================================
 // 内部辅助函数
 // ============================================================
@@ -908,15 +996,22 @@ fn storage_to_source_book_source(
         rule_book_info,
         rule_toc,
         rule_content,
+        rule_review: None,
         login_url: s.login_url.clone(),
+        login_ui: s.login_ui.clone(),
+        login_check_js: s.login_check_js.clone(),
         header: s.header.clone(),
         js_lib: s.js_lib.clone(),
+        cover_decode_js: s.cover_decode_js.clone(),
         explore_url: s.explore_url.clone(),
         rule_explore,
         book_url_pattern: s.book_url_pattern.clone(),
         enabled_explore: s.enabled_explore,
         last_update_time: s.last_update_time,
         book_source_comment: s.book_source_comment.clone(),
+        concurrent_rate: s.concurrent_rate.clone(),
+        variable_comment: s.variable_comment.clone(),
+        explore_screen: s.explore_screen,
         created_at: s.created_at,
         updated_at: s.updated_at,
     })

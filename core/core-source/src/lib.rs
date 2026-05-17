@@ -7,7 +7,6 @@
 pub mod legado;
 pub mod parser;
 pub mod rule_engine;
-pub mod script_engine;
 pub mod types;
 pub mod utils;
 
@@ -16,7 +15,6 @@ pub use parser::{
     BookDetail, BookSourceParser, ChapterContent, ChapterInfo, ExploreEntry, SearchResult,
 };
 pub use rule_engine::{RuleEngine, RuleError, RuleExpression, RuleType};
-pub use script_engine::{ScriptContext, ScriptEngine, ScriptResult};
 pub use types::{BookInfoRule, BookSource, ContentRule, ExtractType, SearchRule, TocRule};
 
 use serde::Serialize;
@@ -368,10 +366,14 @@ pub fn create_sample_book_source() -> BookSource {
         rule_book_info: None,
         rule_toc: None,
         rule_content: None,
+        rule_review: None,
 
         login_url: None,
+        login_ui: None,
+        login_check_js: None,
         header: None,
         js_lib: None,
+        cover_decode_js: None,
 
         explore_url: None,
         rule_explore: None,
@@ -379,6 +381,9 @@ pub fn create_sample_book_source() -> BookSource {
         enabled_explore: true,
         last_update_time: 0,
         book_source_comment: None,
+        concurrent_rate: None,
+        variable_comment: None,
+        explore_screen: None,
         created_at: 0,
         updated_at: 0,
     }
@@ -416,15 +421,22 @@ mod tests {
             rule_book_info: None,
             rule_toc: None,
             rule_content: None,
+        rule_review: None,
             login_url: None,
+            login_ui: None,
+            login_check_js: None,
             header: None,
             js_lib: None,
+        cover_decode_js: None,
             explore_url: None,
             rule_explore: None,
             book_url_pattern: None,
             enabled_explore: true,
             last_update_time: 0,
             book_source_comment: None,
+            concurrent_rate: None,
+        variable_comment: None,
+        explore_screen: None,
             created_at: 0,
             updated_at: 0,
         }

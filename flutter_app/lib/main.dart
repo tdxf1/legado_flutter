@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/download_runner.dart';
 import 'core/notification_service.dart';
 import 'core/providers.dart';
+import 'core/refresh_rate_controller.dart';
 import 'core/router.dart';
 import 'core/theme.dart';
 import 'src/rust/api.dart' as rust_api;
@@ -20,6 +21,12 @@ Future<void> main() async {
   debugPaintTextLayoutBoxes = false;
   debugPaintLayerBordersEnabled = false;
 
+  // Apply preferred display mode as early as possible so animations like
+  // simulation page-flip can leverage the high refresh rate from first frame.
+  // Failure here must not block app startup.
+  final refreshRateMode = await loadRefreshRateModeFromDisk();
+  await RefreshRateController.apply(refreshRateMode);
+
   try {
     await RustLib.init();
     final pong = await rust_api.ping();
@@ -30,9 +37,10 @@ Future<void> main() async {
   } catch (e, st) {
     debugPrint('[FRB smoke] init/ping FAILED: $e');
     debugPrint('[FRB smoke] stack: $st');
-    // Re-throw so the app doesn't silently continue with a broken bridge.
-    // In debug mode this will show the red error screen, in release it will crash.
-    rethrow;
+    // Show a visible error page instead of crashing the process. Common
+    // causes: missing libbridge.so, write-protected db dir, ABI mismatch.
+    runApp(_FrbInitErrorApp(error: e, stack: st));
+    return;
   }
 
   await NotificationService.init();
@@ -43,6 +51,7 @@ Future<void> main() async {
     overrides: [
       themeModeProvider.overrideWith((ref) => themeMode),
       fontSizeProvider.overrideWith((ref) => fontSize),
+      refreshRateModeProvider.overrideWith((ref) => refreshRateMode),
     ],
     child: const LegadoApp(),
   ));
@@ -84,6 +93,60 @@ class LegadoApp extends ConsumerWidget {
       darkTheme: AppTheme.dark,
       themeMode: themeMode,
       routerConfig: router,
+    );
+  }
+}
+
+/// Fallback app shown when FRB initialization fails. Avoids a hard crash on
+/// release builds and gives users (or testers) a copyable error message.
+class _FrbInitErrorApp extends StatelessWidget {
+  final Object error;
+  final StackTrace stack;
+
+  const _FrbInitErrorApp({required this.error, required this.stack});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Legado Reader',
+      home: Scaffold(
+        appBar: AppBar(title: const Text('Legado Reader 启动失败')),
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Rust 桥接初始化失败',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    '常见原因：libbridge.so 缺失或 ABI 不匹配；数据库目录无写入权限；'
+                    '应用版本与原生库不一致。',
+                  ),
+                  const SizedBox(height: 16),
+                  SelectableText('Error: $error'),
+                  const SizedBox(height: 8),
+                  SelectableText(
+                    'Stack:\n$stack',
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

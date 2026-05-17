@@ -22,9 +22,181 @@
 | **Phase 3** | 功能整合与桥接 | ✅ 完成（2026-05-05）：多书源并发搜索、封面缓存、书源校验、书源导出、回归测试（7 Rust + 1 Flutter） |
 | **Phase 4** | 高级服务移植 | 🔨 进行中：阅读器核心 ✅、替换规则 ✅、下载管理 ✅、核心链路打通 ✅ (2026-05-05)；待实现：TTS、WebDAV 同步 |
 | **Phase 4.5** | API Server + HTTP Client (前后端分离) | 🔨 进行中 (2026-05-06)：Rust axum API 服务器所有路由 `cargo check` 通过；Flutter Dio HTTP 客户端 `flutter analyze` 通过；Provider 层双模式 (FRB/http)；待完成：页面 HTTP 切换、端到端联调 |
+| **Phase 4.6** | Reader 重构 + MD3 翻页 + 高刷 + SSE | ✅ 完成 (2026-05-17)：120fps 高刷接入、reader_page.dart 拆分（2839 → ~2040 行，含 P3-1 catch 改写后的回涨）、PageAnim 重排对齐 Legado MD3、6 种翻页 delegate（cover/slide/simulation/scroll/fade/noAnim）、HTTP+SSE Transport 抽象 |
+| **Phase 4.7** | SSE 接入 + 仿真翻页性能降级 | ✅ 完成 (2026-05-17)：PerfMonitor 联动 4 档自动降级、Kotlin platform channel fallback stub、search_page SSE 流式接入 |
 | **Phase 5** | 平台适配与发布 | ⚠️ Android 图标/启动页/通知渠道/权限已适配；✅ 真机 smoke test 通过（通知权限路由恢复已验证） |
 
-> **当前真实阶段一句话**：Android APK 已编译通过，FRB smoke 验证通过；Phase 1-3 全部审查修复；✅ core-source Legado/parser/JS/import 回归与 no-default/js-boa/api-server checks 均通过且无新增 warning；🔨 Phase 4 高级服务大部分完成（阅读器/替换规则/下载管理/核心链路 ✅）；🔄 Phase 4.5 API Server + HTTP Client 核心架构完成 (2026-05-06)，待页面 HTTP 切换和端到端联调；TTS/WebDAV 待开发。
+> **当前真实阶段一句话**：Android APK 已编译通过，FRB smoke 验证通过；Phase 1-3 全部审查修复；✅ core-source Legado/parser/JS/import 回归与 no-default/js-boa/api-server checks 均通过且无新增 warning；🔨 Phase 4 高级服务大部分完成（阅读器/替换规则/下载管理/核心链路 ✅）；🔄 Phase 4.5 API Server + HTTP Client 核心架构完成 (2026-05-06)，待页面 HTTP 切换和端到端联调；✅ Phase 4.6 Reader 拆分 + MD3 翻页 + 高刷 + SSE 完成 (2026-05-17)；TTS/WebDAV 待开发。
+
+---
+
+## 🎯 Phase 4.6: Reader 重构 + MD3 翻页 + 高刷 + SSE — ✅ 完成 (2026-05-17)
+
+> 参考 `legado-with-MD3` 的 PageAnim 设计 + `Legado-Tauri` 的架构思想，把 reader_page.dart 从 2839 行拆到约 2040 行（-800 行，-28%）。
+
+### P0 — 高刷模式接入 ✅
+- 加 `flutter_displaymode: ^0.6.0` 依赖
+- 新增 `core/refresh_rate_controller.dart`：三档（auto / force120 / lock60）
+- 新增 `core/perf_monitor.dart`：基于 `SchedulerBinding.addTimingsCallback` 的滑动窗口（30 帧）帧耗时统计，供仿真翻页等动画做自动降级
+- `main.dart` 启动时一次性 `await RefreshRateController.apply(mode)`，保存为 settings.json 字段 `refreshRateMode`
+- 单元测试：`test/refresh_rate_controller_test.dart` 6 个
+
+### P1 — 状态外移 ✅
+| 现有字段 | 新落点 |
+|---|---|
+| `_flutterTts / _isSpeaking / _isPaused / _ttsParagraphIndex`（约 200 行 TTS 代码） | `services/reader_tts_manager.dart` (194 行) |
+| `_searchController / _searchMatches / _currentSearchMatchIndex / _isSearching` | `state/reader_search_controller.dart` (105 行) |
+| `_isAutoScrolling / _autoScrollTimer` | `services/reader_auto_scroller.dart` (88 行) |
+| 进度保存/恢复 | `services/reader_progress_service.dart` (65 行) |
+| 书签 CRUD | `services/reader_bookmark_service.dart` (67 行) |
+
+### P2 — UI 拆分 ✅
+| 抽出 widget | 行数 |
+|---|---|
+| `widgets/reader_settings_sheet.dart` | 296 |
+| `widgets/reader_search_bar.dart` | 112 |
+| `widgets/reader_tts_bar.dart` | 137 |
+| `widgets/reader_top_bar.dart` | 198 |
+| `widgets/reader_bottom_bar.dart` | 212 |
+
+### P3-a — 翻页接口扩展 + PageAnim 重排 + 自动迁移 ✅
+- `ReaderPageAnim` 类：`cover=0, slide=1, simulation=2, scroll=3, fade=4, noAnim=5`（与 legado-with-MD3 一致）
+- `ReaderSettings.fromJson` 支持 `settingsVersion` 字段；旧版本（v1 或缺省）自动迁移：`0→5, 2→0, 3→1`
+- 新增 `horizontal_page_delegate.dart` 抽象层（cover/slide/simulation 共用）
+- `PageDelegate` 新增 hook：`fling / abortAnim / onAnimStart / onAnimStop / nextPageByAnim / prevPageByAnim`，并暴露 `recordTouchStart / recordTouchUpdate` 给需要绝对坐标的 delegate（仿真翻页）
+- 单元测试：`test/reader_page_anim_test.dart` 13 个（迁移函数 + 边界 + label + round-trip）
+
+### P3-b — SimulationPageDelegate ✅
+- 直接对照 `legado-with-MD3/.../SimulationPageDelegate.kt` 翻译为 Dart（509 行）
+- 5 段贝塞尔曲线 + 折页阴影 + 背面页颜色矩阵反射，与原版几何完全等价
+- 用 `dart:ui` Picture 缓存预渲染当前 / 下一页 / 上一页，drag 中复用，避免每帧重渲染
+- 性能策略：默认 6 段阴影，运行时可由 `PerfMonitor` 监测帧耗时触发降级（接口已就位，下一轮接 platform channel fallback）
+
+### P3-c — ScrollPageDelegate ✅
+- 53 行实现：当前页与上下页竖直拼接，drag 跟手，抬手按 fling 速度切换或回弹
+- 注意：与 `ReaderPageMode.continuousScroll`（按章节连续排版）共存，互不干扰
+
+### P3-d — FadePageDelegate ✅
+- 66 行实现：用 `saveLayer` + alpha mask 做交叉淡入淡出
+
+### P4-a — 传输层 HTTP+SSE 单通道 ✅
+**Rust 侧**：
+- `core/api-server/src/routes/sse.rs` 新增 SSE 路由：
+  - `GET /api/search/sse?q=keyword&sources=id1,id2`：多书源并发搜索流式返回
+  - `GET /api/logs/sse`：心跳 + 日志推送占位
+- 用 `tokio::sync::mpsc` + `tokio_stream::wrappers::ReceiverStream` 把并发任务输出 fan-in 到 SSE event
+- axum 内置 `keep_alive` 自动每 15s 发心跳防止代理断流
+- `cargo check -p api-server` 通过
+
+**Dart 侧**：
+- `core/transport.dart` (226 行)：`Transport` 抽象接口
+  - `LocalTransport`：FRB 模式占位（invoke 抛 UnimplementedError；stream 返回空 stream）
+  - `HttpTransport`：纯 `dart:io HttpClient` 实现，handle invoke + SSE，无额外 pub 依赖
+- `transportProvider` 根据 `backendModeProvider` 自动切换实现
+- 单元测试：`test/transport_test.dart` 5 个（含本地 HttpServer 跑通 SSE 端到端解析）
+
+### 🟢 Phase 4.6 验证（2026-05-17）
+
+| 检查项 | 结果 |
+|--------|------|
+| `flutter analyze` | ✅ 仅 1 个 pre-existing warning (`page_measure._footerHeight`) |
+| `flutter test` | ✅ **73 passed**, 0 failed（49 → 73，新增 24） |
+| `cargo check -p api-server` | ✅ 通过 |
+| `cargo check --workspace` | ✅ 通过 |
+
+### Phase 4.6 文件总览
+```
+features/reader/
+├── reader_page.dart                  # ~2040 行（从 2839 减下来；P3-1 catch 改写让数字略有回涨）
+├── change_source_dialog.dart         # 已有
+├── modes/                            # 占位（P3 已用 page_view/delegate 等价机制）
+├── widgets/                          # 5 个抽出 widget，955 行
+├── services/                         # 4 个 service，414 行
+├── state/                            # 1 个 controller，105 行
+└── page/
+    ├── page_view.dart                # 228 行
+    ├── page_view_controller.dart     # 240 行（已有）
+    ├── page_measure.dart             # 已有
+    ├── content_page.dart / text_page.dart
+    └── delegate/
+        ├── page_delegate.dart        # 231 行（扩展接口）
+        ├── horizontal_page_delegate.dart  # 🆕 52
+        ├── no_anim_page_delegate.dart     # 已有
+        ├── cover_page_delegate.dart       # 71（改继承 horizontal）
+        ├── slide_page_delegate.dart       # 44（改继承 horizontal）
+        ├── simulation_page_delegate.dart  # 🆕 509
+        ├── scroll_page_delegate.dart      # 🆕 53
+        └── fade_page_delegate.dart        # 🆕 66
+
+core/
+├── refresh_rate_controller.dart      # 🆕 134
+├── perf_monitor.dart                 # 🆕 94
+└── transport.dart                    # 🆕 226
+```
+
+### 待跟进（Phase 4.6 之后）
+- ~~仿真翻页 platform channel fallback（中端机型）~~ ✅ 接口已落地（Phase 4.7）
+- ~~`PerfMonitor` 接入 `SimulationPageDelegate`，实现 L1/L2/L3 自动降级~~ ✅ 完成（Phase 4.7）
+- ~~HttpTransport 与各业务 widget 集成~~ ✅ 搜索页接入完成（Phase 4.7）
+- `flutter build apk --release` profile 验证 120fps 仿真翻页帧耗时（环境 gradle 超时，跳过）
+
+---
+
+## 🎯 Phase 4.7: SSE 接入 + 仿真翻页性能降级 — ✅ 完成 (2026-05-17)
+
+> 在 Phase 4.6 基础上，把性能降级、原生 fallback、HTTP+SSE 端到端跑通。
+
+### 交付内容
+
+#### 1. 仿真翻页性能自动降级 ✅
+- 新增 `features/reader/page/delegate/simulation_degrade_controller.dart`
+  - 4 档（L0/L1/L2/L3）状态机
+  - L0: 6 段折页阴影 + 颜色矩阵反射；L1: 阴影减到 2 段；L2: 禁用颜色滤镜；L3: 切 platform channel
+  - 监听 [PerfMonitor]：连续 5 帧超过预算 → 降一级；连续 30 帧 < 60% 预算 → 升一级
+  - 新增 4 个单元测试 (`test/simulation_degrade_test.dart`)
+- `SimulationPageDelegate` 接受 `degrade` 字段
+  - `degrade.useFolderShadow` 控制折页阴影绘制
+  - `degrade.useBackColorFilter` 控制 ColorFilter saveLayer 是否启用（避免 GPU 走带 alpha 通道的离屏 buffer）
+- `page_view.dart` 在创建 simulation delegate 时按需 attach/detach 监控；切到其他翻页方式时自动停掉
+
+#### 2. Platform channel fallback ✅
+- 新增 `features/reader/page/simulation_native_fallback.dart`：`MethodChannel('legado/sim_page')` 包装
+- `MainActivity.kt` 新增 SIM_PAGE_CHANNEL_NAME handler（start/stop 当前为 stub 日志）
+- 升 L3 时由 widget 自动切换 `_useNativeFallback = true`，并 `await SimulationNativeFallback.start()`
+- 后续把 legado-with-MD3 的 Kotlin SimulationPageDelegate vendor 进 Activity 即可启用真实绘制
+
+#### 3. HttpTransport 接入搜索页 ✅
+- `search_page.dart` 增加 `_doSearchViaSse(keyword)` 入口
+  - 检测条件：`_onlineMode == true && backendModeProvider == BackendMode.http`
+  - 通过 `transportProvider` 获得 `HttpTransport`，订阅 `GET /api/search/sse?q=keyword`
+  - 流式合并 `event: result`，命中 `event: done` 即完成；`event: error` 仅 debugPrint
+  - 60s 超时兜底；mounted/cancel 正确处理
+- 新增端到端测试 `test/search_sse_test.dart`：本地 axum-style mock server 验证去重/done/event 序列
+
+### 🟢 Phase 4.7 验证（2026-05-17）
+
+| 检查项 | 结果 |
+|--------|------|
+| `flutter analyze` | ✅ 仅 1 个 pre-existing warning |
+| `flutter test` | ✅ **78 passed**, 0 failed（73 → 78，新增 5） |
+| `cargo check --workspace` | ✅ 通过 |
+| `cargo test -p api-server` | ✅ 通过 |
+| `flutter build apk --debug` | ⏱️ 超时（环境 gradle 受限），跳过 |
+
+### Phase 4.7 文件清单
+```
+新增：
+  features/reader/page/delegate/simulation_degrade_controller.dart   # 142
+  features/reader/page/simulation_native_fallback.dart                # 65
+  test/simulation_degrade_test.dart                                   # 49
+  test/search_sse_test.dart                                           # 75
+
+修改：
+  features/reader/page/delegate/simulation_page_delegate.dart  # 接 degrade
+  features/reader/page/page_view.dart                          # attach perf 监控 + fallback hook
+  features/search/search_page.dart                             # _doSearchViaSse 分支
+  android/app/src/main/kotlin/.../MainActivity.kt              # SIM_PAGE_CHANNEL handler stub
+```
 
 ---
 
@@ -60,7 +232,7 @@
 
 ### ⚠️ 手工 frb_generated 补丁（2026-05-05）
 
-`flutter_rust_bridge_codegen generate` 在 2026-05-05 两次超时（300s/600s），因此以下 3 个 API 的桥接代码是**手工编辑**而非 codegen 生成：
+`flutter_rust_bridge_codegen generate` 在 2026-05-05 两次超时（300s/600s），因此以下 API 的桥接代码是**手工编辑**而非 codegen 生成：
 
 | API | Dart funcId | Rust wire function |
 |-----|------------|-------------------|
@@ -73,10 +245,17 @@
 | `set_replace_rule_enabled` | 48 | `wire__crate__api__set_replace_rule_enabled_impl` |
 | `replace_book_chapters_preserving_content` | 49 | `wire__crate__api__replace_book_chapters_preserving_content_impl` |
 | `replace_book_chapters` | 50 | `wire__crate__api__replace_book_chapters_impl` |
+| `get_source_rule_search_raw` | 51 | `wire__crate__api__get_source_rule_search_raw_impl` |
+| `search_with_source_from_db_v2` | 52 | `wire__crate__api__search_with_source_from_db_v2_impl` |
+| ~~`search_parse_html`~~ | ~~53~~ | **已删除**（hole；之前因"Android DNS 误判"引入，code-review #4 移除） |
+| `delete_sources_batch` | 54 | `wire__crate__api__delete_sources_batch_impl` |
+| `get_explore_entries` | 55 | `wire__crate__api__get_explore_entries_impl` |
+| `explore` | 56 | `wire__crate__api__explore_impl` |
+| `apply_replace_rules` | 57 | `wire__crate__api__apply_replace_rules_impl`（P1-7：替换规则下沉，带 generation 缓存） |
 
 涉及文件：
-- `flutter_app/lib/src/rust/frb_generated.dart` — Dart abstract API + impl（funcId 42-50）
-- `core/bridge/src/frb_generated.rs` — Rust wire functions + dispatcher（funcId 42-50）
+- `flutter_app/lib/src/rust/frb_generated.dart` — Dart abstract API + impl（funcId 42-57，53 已洞）
+- `core/bridge/src/frb_generated.rs` — Rust wire functions + dispatcher（funcId 42-57，53 已洞）
 
 **⚠️ 关键约束**：后续任意 `flutter_rust_bridge_codegen generate` 运行将**覆盖**这些手工改动。重新生成前必须确认 `core/bridge/src/api.rs` 中这些函数仍然存在，否则 funcId 映射会错乱。功能验证：`cargo check/test` 全部通过 + `flutter test` 全部通过。
 
@@ -256,26 +435,18 @@
 
 ## 🔍 代码审查记录
 
-| 轮次 | 日期 | 发现问题 | 状态 |
-|------|------|---------|------|
-| 第1轮 | 2026-05-02 | P1×4: createSource API / DB初始化竞态 / 相对路径 / INTERNET权限 + P2×1: mounted检查 | ✅ 全部修复 |
-| 第2轮 | 2026-05-03 | P2: 冷启动通知权限请求 / P3: pendingResult 覆盖 | ✅ 全部修复 |
-| 第3轮 | 2026-05-03 | 审查确认无新阻断问题 | ✅ 通过 |
-| Rust 第1轮 | 2026-05-04 | P1×3: Proxy/Cookie日志脱敏, @Json:前缀剥离 + P2×4: Regex flags, Semaphore, EPUB3 cover, source_dao URL冲突 | ✅ 全部修复 |
-| Rust 第2轮 | 2026-05-04 | P1×2: Set-Cookie value泄露, source_dao DELETE破坏书籍关联 + P2×2: Semaphore, EPUB3 cover multi-token | ✅ 全部修复 |
-| Rust 第3轮 | 2026-05-04 | P2×1: source_dao 错误吞没（QueryReturnedNoRows区分） + P3×1: Set-Cookie name仍记录 | ✅ 全部修复 |
-| Phase 1 深层审查 | 2026-05-04 | 🔴×4: 在线搜索schema/保存书籍/XPath误判/JSONPath bracket + 🟡×1: Legado导入格式 + 测试修复: regex delimiter检测 | ✅ 全部修复 |
-| Rust 第4轮 | 2026-05-04 | 🟡×1: evaluate_regex 缺 m/s/x/u/U 标志（仅有i/g）+ 🟢×1: 缺失 ownText/XPath 评估测试 | ✅ 全部修复 |
-| Phase 3 第1轮审查 | 2026-05-05 | [High]×2: mounted guard after await, per-source timeout + [Medium]×2: validation false warnings (CSS/XPath), JSONPath compilation | ✅ 全部修复 |
-| Phase 3 第2轮审查 | 2026-05-05 | [Medium]×2: search URL relative path false warning, XPath empty branch + [Low]×1: mounted guard before ref.invalidate | ✅ 全部修复 |
-| Phase 3 回归测试 | 2026-05-05 | 7 Rust tests (search URL/XPath/JSONPath/CSS validation) + 1 Flutter test (dispose during async search) | ✅ 全部通过（101 total） |
-| Phase 3 第3轮审查 | 2026-05-05 | [Medium]×1: parser HTTP client 无超时 + [Low]×1: 手工 frb_generated 补丁需文档化 | ✅ 全部修复 |
-| Phase 3 第4轮审查 | 2026-05-05 | [Low]×1: CURRENT_STATUS.md 验证计数过期（94/48 → 101/8） | ✅ 全部修复 |
-| 核心链路打通 | 2026-05-05 | 🔴: 搜索→书架→阅读链路断点（Book 模型缺 book_url，保存时不拉取章节导致阅读器无章节） | ✅ 修复（Book 新增 book_url + DB migration v4 + book_dao 全量更新 + search_page 章节自动拉取） |
-| 核心链路审查修复 | 2026-05-05 | Critical×1: 新库初始化重复 book_url；High×3: 搜索结果空 id、Reader dispose/乱序、书架路由未 encode | ✅ 修复（migration v4 幂等 + 空 DB 直接置 DB_VERSION + 稳定 bookId + URI query encode + Reader request token/mounted guard） |
-| 核心链路第二轮审查修复 | 2026-05-05 | High×1: SourceDao::upsert() 返回实际写入 ID（URL 去重时 callers 拿错误 ID）；Medium×1: 搜索结果缺 source_id 时章节拉取必然失败；Low×1: Reader _openChapter() 未校验 index 边界 | ✅ 修复（upsert 返回 SqlResult\<String\> + create() 使用 effective_id + save_source 适配 + source_id 有效性检查 + Reader chapters 空列表/index 越界防御） |
-| 核心链路第三轮审查修复 | 2026-05-05 | High×1: 在线搜索稳定 bookId（parser 随机 UUID 导致重复书）；Medium×1: 缺 source_id 时提示优化；Low×1: Reader bounds check 加 mounted guard | ✅ 修复（在线结果用 source_id+book_url 哈希作 ID + 离线结果信任 DB ID + source_id 缺失时提示"无有效书源" + Reader setState 前检查 mounted） |
-| Legado 兼容层专项推进 | 2026-05-06 | QuickJS 默认 runtime、`java.*` bridge、真实书源合集导入、parser 接入 Legado HTTP/rule、共享 cookie/header/charset、warning cleanup | ✅ 专项回归通过（parser/js_runtime/legado import-rule-url/rule_engine + no-default/js-boa/api-server checks） |
+历次审查与修复的完整时间线已迁移到 [`docs/CHANGELOG.md`](docs/CHANGELOG.md)。
+当前 STATUS 只保留"最近一批的状态摘要"。
+
+**最近一批**：第二轮全面复审 — 第六批（2026-05-17，commit 6）。在第一轮 5 批落地后又做了一次端到端复审，捞出 26 项（R1–R26），其中 14 项本批集中修复：
+
+- 高危：apply_replace_rules 持锁跑用户正则（R12）/ release 信任 user CA（R2）/ AndroidManifest cleartext 冲突（R1）/ DNS rebinding（R9）/ search_page Dart fallback hash 漂移（R18）/ updateSettings 漏判 fontFamily（R16）
+- 中等：SSE CRLF（R6）/ shouldRepaint 漏判排版字段（R8）
+- 建议：PageViewController dead snapshot（R14/R15）/ RATE_LIMITER saturating + 30s 节流（R4/R5）/ build.rs 防覆盖断言扩到 funcId 42-50（R20）/ bridge regex 版本对齐（R26）/ reader_page 改用 ReaderRenderMode 枚举分支（R17/R25）/ page_measure.dart 孤立常量清理
+
+**已知风险（延后）**：R3 codegen 模板 unreachable / R22 64-bit 位移 Web 精度 / R23 PlatformInt64 Web 兼容 / R24 ReplaceRule.scope 不区分（需 schema 改动）。
+
+每批完成后 `cargo test --workspace` 与 `flutter test` 都全绿；本批完成时 cargo 245 / flutter 107 / `flutter analyze` 0 issue。详细问题清单与具体改动见 CHANGELOG。
 
 ---
 

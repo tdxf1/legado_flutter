@@ -172,48 +172,6 @@ fn wire__crate__api__search_with_source_from_db_v2_impl(
             },
         )
 }
-fn wire__crate__api__search_parse_html_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER
-        .wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
-            flutter_rust_bridge::for_generated::TaskInfo {
-                debug_name: "search_parse_html",
-                port: Some(port_),
-                mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-            },
-            move || {
-                let message = unsafe {
-                    flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                        ptr_,
-                        rust_vec_len_,
-                        data_len_,
-                    )
-                };
-                let mut deserializer =
-                    flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-                let api_db_path = <String>::sse_decode(&mut deserializer);
-                let api_source_id = <String>::sse_decode(&mut deserializer);
-                let api_keyword = <String>::sse_decode(&mut deserializer);
-                let api_html = <String>::sse_decode(&mut deserializer);
-                deserializer.end();
-                move |context| {
-                    transform_result_sse::<_, String>((move || {
-                        let output_ok = crate::api::search_parse_html(
-                            api_db_path,
-                            api_source_id,
-                            api_keyword,
-                            api_html,
-                        )?;
-                        Ok(output_ok)
-                    })())
-                }
-            },
-        )
-}
 fn wire__crate__api__get_source_rule_search_raw_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1985,6 +1943,156 @@ fn wire__crate__api__set_replace_rule_enabled_impl(
         },
     )
 }
+fn wire__crate__api__delete_sources_batch_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "delete_sources_batch",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_db_path = <String>::sse_decode(&mut deserializer);
+            let api_ids_json = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok =
+                        crate::api::delete_sources_batch(api_db_path, api_ids_json)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__get_explore_entries_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "get_explore_entries",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_db_path = <String>::sse_decode(&mut deserializer);
+            let api_source_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok =
+                        crate::api::get_explore_entries(api_db_path, api_source_id)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__explore_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "explore",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_db_path = <String>::sse_decode(&mut deserializer);
+            let api_source_id = <String>::sse_decode(&mut deserializer);
+            let api_explore_url = <String>::sse_decode(&mut deserializer);
+            let api_page = <i32>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::explore(
+                        api_db_path,
+                        api_source_id,
+                        api_explore_url,
+                        api_page,
+                    )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__apply_replace_rules_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "apply_replace_rules",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_db_path = <String>::sse_decode(&mut deserializer);
+            let api_content = <String>::sse_decode(&mut deserializer);
+            let api_cache_generation = <i64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::apply_replace_rules(
+                        api_db_path,
+                        api_content,
+                        api_cache_generation,
+                    )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 // Section: dart2rust
 
 impl SseDecode for String {
@@ -2135,9 +2243,16 @@ fn pde_ffi_dispatcher_primary_impl(
         52 => {
             wire__crate__api__search_with_source_from_db_v2_impl(port, ptr, rust_vec_len, data_len)
         }
-        53 => {
-            wire__crate__api__search_parse_html_impl(port, ptr, rust_vec_len, data_len)
+        // funcId 53 (search_parse_html) was removed as part of the
+        // "Android DNS" misdiagnosis cleanup; intentionally left as a hole.
+        54 => {
+            wire__crate__api__delete_sources_batch_impl(port, ptr, rust_vec_len, data_len)
         }
+        55 => {
+            wire__crate__api__get_explore_entries_impl(port, ptr, rust_vec_len, data_len)
+        }
+        56 => wire__crate__api__explore_impl(port, ptr, rust_vec_len, data_len),
+        57 => wire__crate__api__apply_replace_rules_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

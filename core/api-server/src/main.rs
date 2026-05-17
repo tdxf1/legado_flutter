@@ -71,20 +71,30 @@ async fn main() {
 
     core_source::legado::js_runtime::set_cache_db_path(Some(db_path.clone()));
 
-    let state = AppState { db_path, api_token };
+    let pool = AppState::build_pool(&db_path).expect("Failed to build SQLite connection pool");
+    let state = AppState {
+        db_path,
+        api_token,
+        pool,
+    };
 
-    let mut app = Router::new()
+    // /health is intentionally exempt from auth so that load balancers and
+    // k8s liveness probes work even when LEGADO_API_TOKEN is set.
+    let health: Router<AppState> = Router::new()
+        .route("/health", axum::routing::get(routes::health::health));
+
+    let mut protected: Router<AppState> = Router::new()
         .nest("/", routes::routes())
         .layer(DefaultBodyLimit::max(5 * 1024 * 1024));
 
     if state.api_token.is_some() {
-        app = app.layer(middleware::from_fn_with_state(
+        protected = protected.layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
         ));
     }
 
-    let app = app.with_state(state);
+    let app = health.merge(protected).with_state(state);
 
     let listener = TcpListener::bind(&bind_addr)
         .await

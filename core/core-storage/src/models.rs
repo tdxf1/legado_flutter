@@ -26,8 +26,14 @@ pub struct BookSource {
 
     // 其他配置
     pub login_url: Option<String>,
+    #[serde(default)]
+    pub login_ui: Option<String>,
+    #[serde(default)]
+    pub login_check_js: Option<String>,
     pub header: Option<String>,
     pub js_lib: Option<String>,
+    #[serde(default)]
+    pub cover_decode_js: Option<String>,
     pub book_url_pattern: Option<String>,
     #[serde(default)]
     pub rule_explore: Option<String>,
@@ -39,6 +45,12 @@ pub struct BookSource {
     pub last_update_time: i64,
     #[serde(default)]
     pub book_source_comment: Option<String>,
+    #[serde(default)]
+    pub concurrent_rate: Option<String>,
+    #[serde(default)]
+    pub variable_comment: Option<String>,
+    #[serde(default)]
+    pub explore_screen: Option<i32>,
 
     pub created_at: i64,
     pub updated_at: i64,

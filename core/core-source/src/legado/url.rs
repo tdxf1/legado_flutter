@@ -436,7 +436,75 @@ pub fn resolve_rule_template(
     }
 
     result.push_str(&input[last..]);
+
+    // Also resolve single-brace JSONPath shorthand: {$.key} or {$[0].key}
+    resolve_single_brace_jsonpath(&result, html)
+}
+
+/// Regex for single-brace JSONPath: `{$...}`. The "not `{{...}}`" gate is
+/// applied manually below since Rust's `regex` crate does not support
+/// look-around. We accept any `\{$...\}` and discard matches whose immediate
+/// neighbours are `{` / `}` (i.e. part of a `{{ ... }}` template).
+static SINGLE_BRACE_JSONPATH_RE: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"\{(\$[\.\[][^}]*)\}").unwrap()
+    });
+
+/// Resolve `{$.key}` single-brace JSONPath shorthand against JSON content.
+fn resolve_single_brace_jsonpath(input: &str, json_content: &str) -> String {
+    if !SINGLE_BRACE_JSONPATH_RE.is_match(input) {
+        return input.to_string();
+    }
+
+    // Try to parse content as JSON
+    let json_val: serde_json::Value = match serde_json::from_str(json_content) {
+        Ok(v) => v,
+        Err(_) => return input.to_string(),
+    };
+
+    let bytes = input.as_bytes();
+    let mut result = String::with_capacity(input.len());
+    let mut last = 0;
+
+    for caps in SINGLE_BRACE_JSONPATH_RE.captures_iter(input) {
+        let Some(full_match) = caps.get(0) else {
+            continue;
+        };
+        let start = full_match.start();
+        let end = full_match.end();
+
+        // Manual lookbehind: skip if the byte immediately before is `{`.
+        if start > 0 && bytes[start - 1] == b'{' {
+            continue;
+        }
+        // Manual lookahead: skip if the byte immediately after is `}`.
+        if end < bytes.len() && bytes[end] == b'}' {
+            continue;
+        }
+
+        result.push_str(&input[last..start]);
+
+        let jsonpath_expr = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
+        let replacement = evaluate_jsonpath_inline(jsonpath_expr, &json_val);
+        result.push_str(&replacement);
+        last = end;
+    }
+
+    result.push_str(&input[last..]);
     result
+}
+
+/// Evaluate a JSONPath expression against a JSON value and return the first scalar result.
+fn evaluate_jsonpath_inline(expr: &str, json_val: &serde_json::Value) -> String {
+    match jsonpath_lib::select(json_val, expr) {
+        Ok(results) => {
+            results.into_iter().next().map(|v| match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            }).unwrap_or_default()
+        }
+        Err(_) => String::new(),
+    }
 }
 
 /// Execute the inner content of a single `{{...}}` template block.

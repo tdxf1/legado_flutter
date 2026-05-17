@@ -84,7 +84,7 @@ class _ReplaceRulePageState extends ConsumerState<ReplaceRulePage> {
       final dbPath = await ref.read(dbPathProvider.future);
       await rust_api.setReplaceRuleEnabled(
           dbPath: dbPath, id: id, enabled: enabled);
-      ref.invalidate(allReplaceRulesProvider);
+      bumpReplaceRuleGeneration(ref);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -167,7 +167,7 @@ class _ReplaceRulePageState extends ConsumerState<ReplaceRulePage> {
                   });
                   await rust_api.saveReplaceRule(
                       dbPath: dbPath, ruleJson: ruleJson);
-                  ref.invalidate(allReplaceRulesProvider);
+                  bumpReplaceRuleGeneration(ref);
                   if (ctx.mounted) Navigator.pop(ctx);
                 } catch (e) {
                   if (ctx.mounted) {
@@ -215,7 +215,7 @@ class _ReplaceRulePageState extends ConsumerState<ReplaceRulePage> {
       await ref.read(dbInitializedProvider.future);
       final dbPath = await ref.read(dbPathProvider.future);
       await rust_api.deleteReplaceRule(dbPath: dbPath, id: id);
-      ref.invalidate(allReplaceRulesProvider);
+      bumpReplaceRuleGeneration(ref);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('规则已删除')),

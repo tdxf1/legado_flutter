@@ -7,7 +7,7 @@ use rusqlite::{Connection, Result as SqlResult};
 use tracing::{debug, info, warn};
 
 /// 数据库版本（用于迁移，通过 PRAGMA user_version 持久化）
-const DB_VERSION: i32 = 8;
+const DB_VERSION: i32 = 9;
 
 /// 初始化数据库
 /// 创建所有必要的表，如果数据库已存在则检查是否需要迁移
@@ -85,14 +85,20 @@ pub fn create_tables(conn: &Connection) -> SqlResult<()> {
             
             -- 其他配置
             login_url TEXT,
+            login_ui TEXT,
+            login_check_js TEXT,
             header TEXT,
             js_lib TEXT,
+            cover_decode_js TEXT,
             book_url_pattern TEXT,
             rule_explore TEXT,
             explore_url TEXT,
             enabled_explore INTEGER DEFAULT 1,
             last_update_time INTEGER DEFAULT 0,
             book_source_comment TEXT,
+            concurrent_rate TEXT,
+            variable_comment TEXT,
+            explore_screen INTEGER,
             
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
@@ -312,6 +318,7 @@ fn migrate_database(conn: &Connection, from_version: i32, to_version: i32) -> Sq
                 6 => migrate_v6(conn)?,
                 7 => migrate_v7(conn)?,
                 8 => migrate_v8(conn)?,
+                9 => migrate_v9(conn)?,
                 _ => {
                     return Err(rusqlite::Error::SqliteFailure(
                         rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
@@ -485,6 +492,35 @@ fn migrate_v8(conn: &Connection) -> SqlResult<()> {
         "ALTER TABLE book_sources ADD COLUMN book_url_pattern TEXT",
         [],
     )?;
+    Ok(())
+}
+
+/// 版本 9 迁移：添加 concurrent_rate, login_ui, login_check_js 列到 book_sources
+fn migrate_v9(conn: &Connection) -> SqlResult<()> {
+    let columns = [
+        ("concurrent_rate", "TEXT"),
+        ("login_ui", "TEXT"),
+        ("login_check_js", "TEXT"),
+        ("cover_decode_js", "TEXT"),
+        ("variable_comment", "TEXT"),
+        ("explore_screen", "INTEGER"),
+    ];
+    for (col, col_type) in &columns {
+        let has_col: bool = conn.query_row(
+            &format!(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('book_sources') WHERE name = '{}'",
+                col
+            ),
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_col {
+            conn.execute(
+                &format!("ALTER TABLE book_sources ADD COLUMN {} {}", col, col_type),
+                [],
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -724,14 +760,20 @@ mod tests {
                 rule_toc: None,
                 rule_content: None,
                 login_url: None,
+                login_ui: None,
+                login_check_js: None,
                 header: None,
                 js_lib: None,
+                cover_decode_js: None,
                 book_url_pattern: None,
                 rule_explore: None,
                 explore_url: None,
                 enabled_explore: true,
                 last_update_time: 0,
                 book_source_comment: None,
+                concurrent_rate: None,
+                variable_comment: None,
+                explore_screen: None,
                 created_at: now,
                 updated_at: now,
             },
@@ -749,14 +791,20 @@ mod tests {
                 rule_toc: None,
                 rule_content: None,
                 login_url: None,
+                login_ui: None,
+                login_check_js: None,
                 header: None,
                 js_lib: None,
+                cover_decode_js: None,
                 book_url_pattern: None,
                 rule_explore: None,
                 explore_url: None,
                 enabled_explore: true,
                 last_update_time: 0,
                 book_source_comment: None,
+                concurrent_rate: None,
+                variable_comment: None,
+                explore_screen: None,
                 created_at: now,
                 updated_at: now,
             },
@@ -897,5 +945,76 @@ mod tests {
 
         dao.delete(&rule.id).unwrap();
         assert!(dao.get_by_id(&rule.id).unwrap().is_none());
+    }
+
+    /// Regression for the upsert ON CONFLICT bug: when re-upserting an
+    /// existing source the DO UPDATE SET list previously omitted login_ui /
+    /// login_check_js / cover_decode_js, so changes to those columns were
+    /// silently dropped. Both upsert paths now share `SOURCE_UPSERT_SQL`.
+    #[test]
+    fn test_source_dao_upsert_updates_all_columns() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir
+            .path()
+            .join("test_source_dao_upsert_all.db")
+            .to_string_lossy()
+            .to_string();
+        let mut conn = init_database(&db_path).unwrap();
+        let now = chrono::Utc::now().timestamp();
+        let mut source = crate::models::BookSource {
+            id: "upsert-all".into(),
+            name: "Initial".into(),
+            url: "https://upsert-all.example".into(),
+            source_type: 0,
+            group_name: None,
+            enabled: true,
+            custom_order: 0,
+            weight: 0,
+            rule_search: None,
+            rule_book_info: None,
+            rule_toc: None,
+            rule_content: None,
+            login_url: Some("https://upsert-all.example/login".into()),
+            login_ui: Some("ui v1".into()),
+            login_check_js: Some("check v1".into()),
+            header: None,
+            js_lib: None,
+            cover_decode_js: Some("cover v1".into()),
+            book_url_pattern: None,
+            rule_explore: None,
+            explore_url: None,
+            enabled_explore: true,
+            last_update_time: 0,
+            book_source_comment: None,
+            concurrent_rate: None,
+            variable_comment: None,
+            explore_screen: None,
+            created_at: now,
+            updated_at: now,
+        };
+        {
+            let dao = crate::source_dao::SourceDao::new(&mut conn);
+            dao.upsert(&source).unwrap();
+        }
+
+        // Re-upsert with new values; before the fix login_ui / login_check_js /
+        // cover_decode_js would still hold the original v1 strings.
+        source.name = "Updated".into();
+        source.login_ui = Some("ui v2".into());
+        source.login_check_js = Some("check v2".into());
+        source.cover_decode_js = Some("cover v2".into());
+        {
+            let dao = crate::source_dao::SourceDao::new(&mut conn);
+            dao.upsert(&source).unwrap();
+        }
+
+        let fetched = {
+            let dao = crate::source_dao::SourceDao::new(&mut conn);
+            dao.get_by_id("upsert-all").unwrap().unwrap()
+        };
+        assert_eq!(fetched.name, "Updated");
+        assert_eq!(fetched.login_ui.as_deref(), Some("ui v2"));
+        assert_eq!(fetched.login_check_js.as_deref(), Some("check v2"));
+        assert_eq!(fetched.cover_decode_js.as_deref(), Some("cover v2"));
     }
 }

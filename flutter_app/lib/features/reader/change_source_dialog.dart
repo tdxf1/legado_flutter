@@ -247,7 +247,9 @@ class _ChangeSourceDialogState extends State<ChangeSourceDialog> {
             bookInfo = decoded;
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[ChangeSource] fetch book info failed: $e');
+      }
 
       if (!mounted) return;
 

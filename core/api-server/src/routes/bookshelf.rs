@@ -32,7 +32,7 @@ pub struct AddBookResponse {
 }
 
 async fn list_books(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::open_db(&state.db_path)?;
+    let conn = util::pooled_conn(&state)?;
     let dao = core_storage::book_dao::BookDao::new(&conn);
     let books = dao
         .get_all()
@@ -56,7 +56,7 @@ async fn add_book(
 
     // Validate source and URL before writing anything
     let storage_source = {
-        let mut conn = util::open_db(&state.db_path)?;
+        let mut conn = util::pooled_conn(&state)?;
         let dao = core_storage::source_dao::SourceDao::new(&mut conn);
         dao.get_by_id(&req.source_id)
             .map_err(|e| ApiError::Database(e.to_string()))?
@@ -80,7 +80,7 @@ async fn add_book(
 
     // Save the book
     {
-        let conn = util::open_db(&state.db_path)?;
+        let conn = util::pooled_conn(&state)?;
         let dao = core_storage::book_dao::BookDao::new(&conn);
         let book = core_storage::models::Book {
             id: book_id.clone(),
@@ -116,7 +116,7 @@ async fn add_book(
     let chapters_url = toc_url.as_deref().unwrap_or(&req.book_url);
     let chapters = parser.get_chapters(&source, chapters_url).await;
 
-    let conn = util::open_db(&state.db_path)?;
+    let conn = util::pooled_conn(&state)?;
     let chapter_dao = core_storage::chapter_dao::ChapterDao::new(&conn);
     let chapter_count = chapters.len();
     let storage_chapters: Vec<_> = chapters
@@ -143,7 +143,7 @@ async fn add_book(
 
     // Update book chapter count
     {
-        let conn = util::open_db(&state.db_path)?;
+        let conn = util::pooled_conn(&state)?;
         let dao = core_storage::book_dao::BookDao::new(&conn);
         let mut book = dao
             .get_by_id(&book_id)
@@ -180,7 +180,7 @@ async fn delete_book(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::open_db(&state.db_path)?;
+    let conn = util::pooled_conn(&state)?;
     let dao = core_storage::book_dao::BookDao::new(&conn);
     dao.get_by_id(&book_id)
         .map_err(|e| ApiError::Database(e.to_string()))?

@@ -31,7 +31,7 @@ async fn explore(
     State(state): State<AppState>,
     Json(req): Json<ExploreRequest>,
 ) -> Result<Json<ExploreResponse>, ApiError> {
-    let mut conn = crate::util::open_db(&state.db_path)?;
+    let mut conn = crate::util::pooled_conn(&state)?;
     let source_dao = core_storage::source_dao::SourceDao::new(&mut conn);
     let source = source_dao
         .get_by_id(&req.source_id)
@@ -61,7 +61,7 @@ async fn list_explore_entries(
     Query(params): Query<ListExploreQuery>,
 ) -> Result<Json<Vec<core_source::parser::ExploreEntry>>, ApiError> {
     let source_id = params.source_id;
-    let mut conn = crate::util::open_db(&state.db_path)?;
+    let mut conn = crate::util::pooled_conn(&state)?;
     let source_dao = core_storage::source_dao::SourceDao::new(&mut conn);
     let source = source_dao
         .get_by_id(&source_id)

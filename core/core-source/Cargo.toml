@@ -12,8 +12,6 @@ scraper = "0.20"
 regex = "1.11"
 # XML 解析
 quick-xml = { version = "0.37", features = ["serialize"] }
-# 脚本引擎
-rhai = { version = "1.20", features = ["sync", "serde"] }
 # HTTP 客户端（用于请求书源）
 # ureq: simple blocking HTTP client, avoids tokio/DNS issues on Android
 # HTTP 客户端
@@ -35,6 +33,7 @@ encoding_rs = "0.8"
 url = "2.5"
 urlencoding = "2.1"
 base64 = "0.22"
+sha2 = "0.10"
 md5 = "0.7"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }

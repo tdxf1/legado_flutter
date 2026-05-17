@@ -49,7 +49,7 @@ async fn list_chapters(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::open_db(&state.db_path)?;
+    let conn = util::pooled_conn(&state)?;
     let dao = core_storage::chapter_dao::ChapterDao::new(&conn);
     let chapters = dao
         .get_by_book(&book_id)
@@ -69,7 +69,7 @@ async fn get_chapter_content(
         .map_err(|_| ApiError::BadRequest("无效的章节索引".into()))?;
 
     let (chapter_url, chapter_title, chapter_id) = {
-        let conn = util::open_db(&state.db_path)?;
+        let conn = util::pooled_conn(&state)?;
         let chapter_dao = core_storage::chapter_dao::ChapterDao::new(&conn);
         let chapters = chapter_dao
             .get_by_book(&book_id)
@@ -97,7 +97,7 @@ async fn get_chapter_content(
     };
 
     let source_id = {
-        let conn = util::open_db(&state.db_path)?;
+        let conn = util::pooled_conn(&state)?;
         let dao = core_storage::book_dao::BookDao::new(&conn);
         let book = dao
             .get_by_id(&book_id)
@@ -112,7 +112,7 @@ async fn get_chapter_content(
     };
 
     let storage_source = {
-        let mut conn = util::open_db(&state.db_path)?;
+        let mut conn = util::pooled_conn(&state)?;
         let dao = core_storage::source_dao::SourceDao::new(&mut conn);
         dao.get_by_id(&source_id)
             .map_err(|e| ApiError::Database(e.to_string()))?
@@ -129,7 +129,7 @@ async fn get_chapter_content(
     };
 
     if platform_request.is_none() {
-        let conn = util::open_db(&state.db_path)?;
+        let conn = util::pooled_conn(&state)?;
         let dao = core_storage::chapter_dao::ChapterDao::new(&conn);
         dao.update_content(&chapter_id, &content)
             .map_err(|e| ApiError::Database(e.to_string()))?;
@@ -150,7 +150,7 @@ async fn save_chapter_content(
     Json(req): Json<SaveChapterContentRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let chapter_id = {
-        let conn = util::open_db(&state.db_path)?;
+        let conn = util::pooled_conn(&state)?;
         let chapter_dao = core_storage::chapter_dao::ChapterDao::new(&conn);
         let chapters = chapter_dao
             .get_by_book(&book_id)
@@ -160,7 +160,7 @@ async fn save_chapter_content(
             .map(|chapter| chapter.id.clone())
             .ok_or_else(|| ApiError::NotFound(format!("章节不存在: index {}", req.chapter_index)))?
     };
-    let conn = util::open_db(&state.db_path)?;
+    let conn = util::pooled_conn(&state)?;
     let dao = core_storage::chapter_dao::ChapterDao::new(&conn);
     dao.update_content(&chapter_id, &req.content)
         .map_err(|e| ApiError::Database(e.to_string()))?;
@@ -171,7 +171,7 @@ async fn get_progress(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::open_db(&state.db_path)?;
+    let conn = util::pooled_conn(&state)?;
     let dao = core_storage::progress_dao::ProgressDao::new(&conn);
     let progress = dao
         .get_by_book(&book_id)
@@ -184,7 +184,7 @@ async fn save_progress(
     Path(book_id): Path<String>,
     Json(req): Json<SaveProgressRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::open_db(&state.db_path)?;
+    let conn = util::pooled_conn(&state)?;
     let book_dao = core_storage::book_dao::BookDao::new(&conn);
     book_dao
         .get_by_id(&book_id)
@@ -200,7 +200,7 @@ async fn get_book(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::open_db(&state.db_path)?;
+    let conn = util::pooled_conn(&state)?;
     let dao = core_storage::book_dao::BookDao::new(&conn);
     let book = dao
         .get_by_id(&book_id)
@@ -214,7 +214,7 @@ async fn refresh_chapters(
     Path(book_id): Path<String>,
 ) -> Result<Json<RefreshChaptersResponse>, ApiError> {
     let (source_id, toc_url) = {
-        let conn = util::open_db(&state.db_path)?;
+        let conn = util::pooled_conn(&state)?;
         let dao = core_storage::book_dao::BookDao::new(&conn);
         let book = dao
             .get_by_id(&book_id)
@@ -236,7 +236,7 @@ async fn refresh_chapters(
     };
 
     let storage_source = {
-        let mut conn = util::open_db(&state.db_path)?;
+        let mut conn = util::pooled_conn(&state)?;
         let dao = core_storage::source_dao::SourceDao::new(&mut conn);
         dao.get_by_id(&source_id)
             .map_err(|e| ApiError::Database(e.to_string()))?
@@ -247,7 +247,7 @@ async fn refresh_chapters(
     let chapters = parser.get_chapters(&source, &toc_url).await;
 
     let now = chrono::Utc::now().timestamp();
-    let conn = util::open_db(&state.db_path)?;
+    let conn = util::pooled_conn(&state)?;
     let chapter_dao = core_storage::chapter_dao::ChapterDao::new(&conn);
     let storage_chapters: Vec<_> = chapters
         .iter()
@@ -276,7 +276,7 @@ async fn refresh_chapters(
     let total_count = chapters.len();
 
     {
-        let conn = util::open_db(&state.db_path)?;
+        let conn = util::pooled_conn(&state)?;
         let dao = core_storage::book_dao::BookDao::new(&conn);
         let mut book = dao
             .get_by_id(&book_id)

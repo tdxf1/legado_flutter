@@ -82,8 +82,9 @@ pub struct LegadoSelectorChain {
     pub segments: Vec<SelectorSegment>,
     /// 提取类型
     pub extract: ExtractSuffix,
-    /// 净化正则（##regex##replacement）
-    pub purification: Option<(String, String)>,
+    /// 净化正则（pattern, replacement, replace_first）
+    /// replace_first=true for OnlyOne (###), false for regular purification
+    pub purification: Option<(String, String, bool)>,
 }
 
 /// 选择器链中的一个段落
@@ -403,7 +404,7 @@ fn parse_index_list(body: &str) -> Option<Vec<isize>> {
 }
 
 /// 分离净化正则段
-fn split_purification(rule: &str) -> (String, Option<(String, String)>) {
+fn split_purification(rule: &str) -> (String, Option<(String, String, bool)>) {
     // OnlyOne 模式：##regex##replacement###
     if rule.ends_with("###") {
         let rest = &rule[..rule.len() - 3];
@@ -416,12 +417,12 @@ fn split_purification(rule: &str) -> (String, Option<(String, String)>) {
                     let replacement = &content[mid + 2..];
                     return (
                         selector.to_string(),
-                        Some((pattern.to_string(), replacement.to_string())),
+                        Some((pattern.to_string(), replacement.to_string(), true)),
                     );
                 }
                 return (
                     selector.to_string(),
-                    Some((content.to_string(), String::new())),
+                    Some((content.to_string(), String::new(), true)),
                 );
             }
         }
@@ -438,12 +439,12 @@ fn split_purification(rule: &str) -> (String, Option<(String, String)>) {
                     let replacement = &content[mid + 2..];
                     return (
                         selector.to_string(),
-                        Some((pattern.to_string(), replacement.to_string())),
+                        Some((pattern.to_string(), replacement.to_string(), false)),
                     );
                 }
                 return (
                     selector.to_string(),
-                    Some((content.to_string(), String::new())),
+                    Some((content.to_string(), String::new(), false)),
                 );
             }
         }
@@ -510,12 +511,29 @@ pub fn execute_selector_chain(
     }
 
     // 应用净化正则
-    if let Some((ref pattern, ref replacement)) = chain.purification {
+    if let Some((ref pattern, ref replacement, replace_first)) = chain.purification {
         if let Ok(re) = regex::Regex::new(pattern) {
-            results = results
-                .into_iter()
-                .map(|s| re.replace_all(&s, replacement.as_str()).to_string())
-                .collect();
+            if replace_first {
+                // OnlyOne: find first match, apply replacement to that match only
+                results = results
+                    .into_iter()
+                    .map(|s| {
+                        if let Some(m) = re.find(&s) {
+                            let matched = m.as_str();
+                            let replaced = re.replace(matched, replacement.as_str());
+                            replaced.to_string()
+                        } else {
+                            String::new()
+                        }
+                    })
+                    .collect();
+            } else {
+                // Regular purification: replace all matches
+                results = results
+                    .into_iter()
+                    .map(|s| re.replace_all(&s, replacement.as_str()).to_string())
+                    .collect();
+            }
         }
     }
 
@@ -606,6 +624,28 @@ fn apply_selector_segment(segment: &SelectorSegment, html: &str) -> Result<Vec<S
         return Ok(children);
     }
 
+    // text.xxx: select elements whose own text contains xxx (case-insensitive)
+    if let Some(text_query) = sel.strip_prefix("text.") {
+        if !text_query.is_empty() {
+            let query_lower = text_query.to_lowercase();
+            let document = Html::parse_document(html);
+            let results: Vec<String> = document
+                .select(&Selector::parse("*").unwrap())
+                .filter(|el| {
+                    // Get own text (direct text nodes only, not from children)
+                    let own_text: String = el
+                        .children()
+                        .filter_map(|child| child.value().as_text().map(|t| t.text.to_string()))
+                        .collect::<Vec<_>>()
+                        .join("");
+                    own_text.to_lowercase().contains(&query_lower)
+                })
+                .map(|el| el.html())
+                .collect();
+            return Ok(results);
+        }
+    }
+
     // CSS 选择器
     let selector = parse_selector_safely(sel)?;
 
@@ -621,13 +661,22 @@ fn extract_from_html(html: &str, extract: &ExtractSuffix) -> Vec<String> {
         ExtractSuffix::Html | ExtractSuffix::All => {
             vec![html.to_string()]
         }
-        ExtractSuffix::None
-        | ExtractSuffix::Text
-        | ExtractSuffix::TextNodes
-        | ExtractSuffix::TextNode => {
+        ExtractSuffix::None | ExtractSuffix::Text => {
             let document = Html::parse_document(html);
             let text: String = document.root_element().text().collect::<Vec<_>>().join("");
             vec![text]
+        }
+        ExtractSuffix::TextNodes | ExtractSuffix::TextNode => {
+            // @textNodes: collect each text node separately, joined by newline
+            // This preserves paragraph structure (important for content formatting)
+            let document = Html::parse_document(html);
+            let root = document.root_element();
+            let text_nodes: Vec<String> = collect_text_nodes_recursive(root)
+                .into_iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            vec![text_nodes.join("\n")]
         }
         ExtractSuffix::OwnText => {
             let document = Html::parse_document(html);
@@ -664,6 +713,47 @@ fn extract_from_html(html: &str, extract: &ExtractSuffix) -> Vec<String> {
             vec![String::new()]
         }
     }
+}
+
+/// Recursively collect text nodes from an element.
+/// Each block-level element boundary (p, div, br, li, etc.) produces a separate text entry.
+fn collect_text_nodes_recursive(element: scraper::ElementRef) -> Vec<String> {
+    let mut results = Vec::new();
+    let mut current = String::new();
+
+    for child in element.children() {
+        if let Some(text) = child.value().as_text() {
+            current.push_str(&text.text);
+        } else if let Some(el) = scraper::ElementRef::wrap(child) {
+            let tag = el.value().name();
+            let is_block = matches!(
+                tag,
+                "p" | "div" | "br" | "li" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+                    | "tr" | "dt" | "dd" | "blockquote" | "section" | "article"
+            );
+            if is_block {
+                // Flush current text before block element
+                let trimmed = current.trim().to_string();
+                if !trimmed.is_empty() {
+                    results.push(trimmed);
+                }
+                current.clear();
+                // Recurse into block element
+                let inner = collect_text_nodes_recursive(el);
+                results.extend(inner);
+            } else {
+                // Inline element: recurse and append to current
+                let inner = collect_text_nodes_recursive(el);
+                current.push_str(&inner.join(""));
+            }
+        }
+    }
+
+    let trimmed = current.trim().to_string();
+    if !trimmed.is_empty() {
+        results.push(trimmed);
+    }
+    results
 }
 
 fn first_element_attr(html: &str, attr: &str) -> Option<String> {
@@ -732,9 +822,10 @@ mod tests {
         let chain = parse_legado_selector("div.content@html##(本章完)");
         assert_eq!(chain.segments.len(), 1);
         assert!(chain.purification.is_some());
-        let (pat, rep) = chain.purification.unwrap();
+        let (pat, rep, replace_first) = chain.purification.unwrap();
         assert_eq!(pat, "(本章完)");
         assert_eq!(rep, "");
+        assert!(!replace_first);
     }
 
     #[test]

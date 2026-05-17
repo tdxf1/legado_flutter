@@ -1,15 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path_provider/path_provider.dart';
 
+import '../../core/cover_cache.dart';
 import '../../core/providers.dart';
+import '../../core/transport.dart';
 import '../../src/rust/api.dart' as rust_api;
-import 'package:dio/dio.dart';
 
 class SearchPage extends ConsumerStatefulWidget {
   const SearchPage({super.key});
@@ -57,35 +56,26 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     final bookUrl = result['book_url'] as String?;
     final sourceId = result['source_id'] as String?;
 
-    // Generate stable book ID. Online search results from the parser carry
-    // random UUIDs that change every search; ignore result['id'] and derive
-    // a stable ID from source_id + book_url + name + author.
-    final isOnlineResult = bookUrl != null && bookUrl.isNotEmpty;
-    final String bookId;
-    if (isOnlineResult) {
-      final stableSource = [sourceId, bookUrl, result['name'], result['author']]
-          .where((o) => o != null && o.toString().isNotEmpty)
-          .join('|');
-      final hashInput = stableSource.isNotEmpty
-          ? stableSource
-          : '${result['name'] ?? 'unknown'}|$now';
-      bookId = base64Url
-          .encode(sha256.convert(utf8.encode(hashInput)).bytes)
-          .replaceAll('=', '');
-    } else {
-      final rawId = result['id'] as String?;
-      if (rawId != null && rawId.trim().isNotEmpty) {
-        bookId = rawId.trim();
-      } else {
-        final fallback = [sourceId, result['name'], result['author']]
-            .where((o) => o != null && o.toString().isNotEmpty)
-            .join('|');
-        final hashInput = fallback.isNotEmpty ? fallback : 'unknown|$now';
-        bookId = base64Url
-            .encode(sha256.convert(utf8.encode(hashInput)).bytes)
-            .replaceAll('=', '');
+    // P1-3 / R18: Rust parser emits a stable id (sha256 of
+    // `source_id|book_url|name|author`, base64url no-padding) for every
+    // SearchResult, including the all-empty fallback. Just trust it.
+    //
+    // We used to keep a Dart-side re-hash here for a "rare empty id" edge
+    // case, but the Dart fallback (`name|millis`) didn't match the Rust
+    // fallback (`unknown|secs`) byte-for-byte, so the two algorithms could
+    // produce different ids for the same result. Removing the Dart branch
+    // eliminates that drift; if a result ever does arrive without an id we
+    // refuse to insert it (snackbar lets the user try again).
+    final rawId = (result['id'] as String?)?.trim();
+    if (rawId == null || rawId.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('搜索结果缺少 id，无法加入书架')),
+        );
       }
+      return;
     }
+    final String bookId = rawId;
     final bookData = <String, dynamic>{
       'id': bookId,
       'source_id': sourceId ?? '',
@@ -120,14 +110,15 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       savedBook = true;
       final coverUrl = result['cover_url'] as String?;
       if (coverUrl != null && coverUrl.isNotEmpty) {
-        unawaited(
-            _downloadAndCacheCover(coverUrl, dbPath).then((localPath) async {
+        unawaited(CoverCache.downloadAndCache(coverUrl).then((localPath) async {
           if (localPath != null) {
             bookData['custom_cover_path'] = localPath;
             try {
               await rust_api.saveBook(
                   dbPath: dbPath, bookJson: jsonEncode(bookData));
-            } catch (_) {}
+            } catch (e) {
+              debugPrint('[Search] update cover path failed: $e');
+            }
           }
         }));
       }
@@ -173,7 +164,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
             'title': ch['title'] ?? '未知章节',
             'url': ch['url'] ?? '',
             'content': null,
-            'is_volume': false,
+            'is_volume': ch['is_volume'] ?? false,
             'is_checked': false,
             'start': 0,
             'end': 0,
@@ -222,30 +213,6 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         .showSnackBar(SnackBar(content: Text(snackMsg)));
   }
 
-  Future<String?> _downloadAndCacheCover(String coverUrl, String dbPath) async {
-    try {
-      final dir = await getApplicationDocumentsDirectory();
-      final coversDir = Directory('${dir.path}/covers');
-      if (!coversDir.existsSync()) {
-        coversDir.createSync(recursive: true);
-      }
-      final hashBytes = md5.convert(utf8.encode(coverUrl)).bytes;
-      final hash =
-          hashBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-      final ext = coverUrl.split('.').last.split('?').first;
-      final safeExt = ext.length <= 5 ? ext : 'jpg';
-      final filePath = '${coversDir.path}/$hash.$safeExt';
-      if (File(filePath).existsSync()) {
-        return filePath;
-      }
-      await Dio().download(coverUrl, filePath);
-      return filePath;
-    } catch (e) {
-      debugPrint('封面下载失败: $e');
-      return null;
-    }
-  }
-
   @override
   void dispose() {
     _searchCtrl.dispose();
@@ -258,6 +225,11 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     if (keyword.isEmpty) return;
     setState(() => _loading = true);
     try {
+      // HTTP mode: 走 axum /api/search/sse 流式聚合，避免阻塞 FRB 单线程
+      if (_onlineMode && ref.read(backendModeProvider) == BackendMode.http) {
+        await _doSearchViaSse(keyword);
+        return;
+      }
       if (_onlineMode) {
         final dbPath = await ref.read(dbPathProvider.future);
         final sourcesJson = await rust_api.getEnabledSources(dbPath: dbPath);
@@ -317,60 +289,110 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     }
   }
 
+  /// HTTP+SSE 流式搜索：当 [BackendMode.http] 时使用。
+  ///
+  /// 通过 [transportProvider] 拿到 [HttpTransport]，订阅
+  /// `GET /api/search/sse?q=keyword`。每条 `event: result` 实时合并到 _results
+  /// 列表，[event: done] 关闭流，[event: error] 仅 debugPrint 不阻断。
+  Future<void> _doSearchViaSse(String keyword) async {
+    final transport = ref.read(transportProvider);
+    final results = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    StreamSubscription<TransportEvent>? sub;
+    final completer = Completer<void>();
+
+    sub = transport
+        .stream('/api/search/sse', query: {'q': keyword})
+        .listen(
+      (event) {
+        switch (event.event) {
+          case 'result':
+            final data = event.json;
+            if (data == null) break;
+            final items = data['items'];
+            if (items is! List) break;
+            for (final item in items) {
+              if (item is! Map) continue;
+              final m = Map<String, dynamic>.from(item);
+              final key = '${m['name']}_${m['author']}';
+              if (seen.add(key)) {
+                results.add(m);
+              }
+            }
+            if (mounted) {
+              _results.value = List.unmodifiable(results);
+            }
+            break;
+          case 'error':
+            debugPrint('[SearchSSE] error event: ${event.data}');
+            break;
+          case 'done':
+            if (!completer.isCompleted) completer.complete();
+            sub?.cancel();
+            break;
+        }
+      },
+      onError: (Object e, StackTrace st) {
+        if (!completer.isCompleted) completer.completeError(e, st);
+      },
+      onDone: () {
+        if (!completer.isCompleted) completer.complete();
+      },
+      cancelOnError: false,
+    );
+
+    try {
+      await completer.future
+          .timeout(const Duration(seconds: 60), onTimeout: () {
+        sub?.cancel();
+      });
+      if (!mounted) return;
+      _results.value = List.unmodifiable(results);
+      _addToHistory(keyword);
+    } catch (e) {
+      if (!mounted) return;
+      _results.value = const [];
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('搜索失败: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
   Future<List<Map<String, dynamic>>> _searchWithSource(
       String dbPath, dynamic source, String keyword) async {
+    // We used to fetch the HTML with Dio in Dart and feed it to the Rust
+    // `searchParseHtml` parser, on the (incorrect) assumption that Android's
+    // DNS stack was unreliable for the Rust HTTP layer. That detour also
+    // missed every URL feature Legado relies on — JS templates, page-number
+    // expressions, URL-option `{"method":"POST","charset":"gbk",...}`,
+    // shared cookie jar, etc.
+    //
+    // The single-call `searchWithSourceFromDb` routes through `LegadoHttpClient`
+    // which handles all of that correctly.
     try {
       final sourceId = source['id'] as String;
-      final sourceName = source['name'] ?? '未知书源';
-
-      // Get source config with search URL
-      final srcJson =
-          await rust_api.getSourceForDownload(dbPath: dbPath, sourceId: sourceId);
-      final src = jsonDecode(srcJson);
-      final searchUrl = src['rule_search']?['search_url'] as String?;
-      if (searchUrl == null || searchUrl.isEmpty) {
-        return <Map<String, dynamic>>[];
-      }
-
-      // Resolve URL template
-      final encodedKeyword = Uri.encodeComponent(keyword);
-      var resolvedUrl = searchUrl
-          .replaceAll('{{key}}', encodedKeyword)
-          .replaceAll('{{keyword}}', encodedKeyword)
-          .replaceAll('{{page}}', '1');
-
-      if (!resolvedUrl.startsWith('http')) {
-        final baseUrl = src['url'] as String? ?? '';
-        resolvedUrl = Uri.parse(baseUrl).resolve(resolvedUrl).toString();
-      }
-
-      // Fetch HTML via Dio
-      final response = await Dio().get(resolvedUrl,
-          options: Options(
-            responseType: ResponseType.plain,
-            headers: {
-              'User-Agent':
-                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            },
-          ));
-      final html = response.data as String? ?? '';
-      if (html.isEmpty) return <Map<String, dynamic>>[];
-
-      // Parse HTML with Rust parser
-      final resultJson = await rust_api.searchParseHtml(
+      final sourceName = source['name'] as String? ?? '未知书源';
+      final json = await rust_api.searchWithSourceFromDb(
         dbPath: dbPath,
         sourceId: sourceId,
         keyword: keyword,
-        html: html,
       );
-      final List<dynamic> sourceResults = jsonDecode(resultJson);
-      return sourceResults.map<Map<String, dynamic>>((r) {
+      final List<dynamic> results = jsonDecode(json);
+      return results.map<Map<String, dynamic>>((r) {
         final m = Map<String, dynamic>.from(r as Map);
-        m['source_name'] = sourceName;
-        m['source_id'] = sourceId;
+        // Rust side already populates source_name/source_id but be defensive:
+        // if the parser returned an [ERR] entry without a source name, patch
+        // it back so the UI can still display the source label.
+        m['source_name'] ??= sourceName;
+        m['source_id'] ??= sourceId;
         return m;
       }).toList();
     } catch (e) {
+      debugPrint('搜索书源 ${source['id']} 失败: $e');
       return <Map<String, dynamic>>[];
     }
   }

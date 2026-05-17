@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
@@ -42,7 +43,8 @@ class NotificationService {
         );
         await androidPlugin.createNotificationChannel(channel);
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[Notification] init failed: $e');
       _initialized = false;
     }
   }
@@ -81,7 +83,9 @@ class NotificationService {
           ),
         ),
       );
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Notification] showDownloadProgress failed: $e');
+    }
   }
 
   static Future<void> showDownloadComplete({
@@ -118,13 +122,17 @@ class NotificationService {
           ),
         ),
       );
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Notification] showDownloadComplete failed: $e');
+    }
   }
 
   static Future<void> cancelNotification(int id) async {
     try {
       await _plugin.cancel(id);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Notification] cancel($id) failed: $e');
+    }
   }
 
   static Future<bool> hasPermission() async {

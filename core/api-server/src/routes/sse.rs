@@ -1,0 +1,164 @@
+//! Server-Sent Events 路由
+//!
+//! 提供两类长连接：
+//! - `GET /api/search/sse?q=keyword&sources=id1,id2`
+//!   多书源并发搜索流式返回。每收到一条结果就 yield 一次 `event: result`。
+//!   全部完成后 yield `event: done`。
+//! - `GET /api/logs/sse`
+//!   订阅一个进程内 broadcast 频道，把 Rust 侧 `tracing` 的日志推送到客户端。
+//!   目前内置一条 `event: heartbeat` 心跳证明连通性，调用方可 hook 进 broadcaster 后扩展。
+//!
+//! 协议要点：
+//! - 一条 SSE 消息形如：`event: result\ndata: {...json...}\n\n`
+//! - 客户端断开会让 `tokio::sync::broadcast::Receiver` drop，自动清理资源
+//! - SSE 自带 `Last-Event-ID` 头部，后续可用于断点续传
+
+use axum::{
+    extract::{Query, State},
+    response::sse::{Event, KeepAlive, Sse},
+    routing::get,
+    Router,
+};
+use futures::stream::{self, Stream};
+use serde::Deserialize;
+use serde_json::json;
+use std::convert::Infallible;
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio::task::JoinSet;
+use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+
+use crate::error::ApiError;
+use crate::state::AppState;
+use crate::util;
+
+#[derive(Debug, Deserialize)]
+struct SearchSseQuery {
+    q: String,
+    /// 逗号分隔的 source_id 列表；缺省则用全部已启用书源
+    sources: Option<String>,
+}
+
+/// 多书源搜索流式：每个书源结果到达时立即 yield；最后 yield 一条 done。
+async fn search_sse(
+    State(state): State<AppState>,
+    Query(query): Query<SearchSseQuery>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    if query.q.trim().is_empty() {
+        return Err(ApiError::BadRequest("搜索关键词不能为空".into()));
+    }
+
+    let source_ids: Vec<String> = if let Some(ref ids) = query.sources {
+        ids.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    } else {
+        let mut conn = util::pooled_conn(&state)?;
+        let dao = core_storage::source_dao::SourceDao::new(&mut conn);
+        dao.get_enabled()
+            .map_err(|e| ApiError::Database(e.to_string()))?
+            .into_iter()
+            .map(|s| s.id)
+            .collect()
+    };
+
+    // 用 mpsc 在 tasks 与 SSE stream 之间传消息。
+    let (tx, rx) = mpsc::channel::<Event>(64);
+    let keyword = query.q.clone();
+    let pool = state.pool.clone();
+
+    tokio::spawn(async move {
+        let mut join_set = JoinSet::new();
+        for sid in source_ids {
+            let pool = pool.clone();
+            let keyword = keyword.clone();
+            join_set.spawn(async move { run_one(&pool, &sid, &keyword).await });
+        }
+        while let Some(joined) = join_set.join_next().await {
+            let event = match joined {
+                Ok(Ok((sid, items))) => Event::default()
+                    .event("result")
+                    .data(
+                        json!({
+                            "source_id": sid,
+                            "items": items,
+                        })
+                        .to_string(),
+                    ),
+                Ok(Err((sid, name, err))) => Event::default()
+                    .event("error")
+                    .data(
+                        json!({
+                            "source_id": sid,
+                            "source_name": name,
+                            "error": err,
+                        })
+                        .to_string(),
+                    ),
+                Err(e) => Event::default()
+                    .event("error")
+                    .data(json!({ "error": format!("task join failed: {e}") }).to_string()),
+            };
+            if tx.send(event).await.is_err() {
+                break;
+            }
+        }
+        let _ = tx
+            .send(Event::default().event("done").data("{}".to_string()))
+            .await;
+    });
+
+    let stream = ReceiverStream::new(rx).map(Ok);
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("ping"),
+    ))
+}
+
+#[allow(clippy::type_complexity)]
+async fn run_one(
+    pool: &crate::state::SqlitePool,
+    source_id: &str,
+    keyword: &str,
+) -> Result<(String, Vec<core_source::parser::SearchResult>), (String, String, String)> {
+    let storage_source = {
+        let mut conn = pool
+            .get()
+            .map_err(|e| (source_id.to_string(), "".to_string(), format!("connection pool: {e}")))?;
+        let dao = core_storage::source_dao::SourceDao::new(&mut conn);
+        dao.get_by_id(source_id)
+            .map_err(|e| (source_id.to_string(), "".to_string(), e.to_string()))?
+            .ok_or_else(|| (source_id.to_string(), "".to_string(), "书源不存在".to_string()))?
+    };
+    let source_name = storage_source.name.clone();
+    let source = util::storage_to_core_source(&storage_source)
+        .map_err(|e| (source_id.to_string(), source_name.clone(), e.to_string()))?;
+    let parser = core_source::parser::BookSourceParser::new();
+    let items = parser.search(&source, keyword).await;
+    Ok((source_id.to_string(), items))
+}
+
+/// 日志流：心跳 + 钩子位（后续可扩展为 tracing layer / broadcast）
+async fn logs_sse() -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let s = stream::unfold(0usize, |seq| async move {
+        // 每 5 秒发送一次心跳，保活并提供基本可观测性
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let event = Event::default()
+            .event("heartbeat")
+            .data(json!({ "seq": seq, "ts": chrono::Utc::now().timestamp() }).to_string());
+        Some((Ok::<_, Infallible>(event), seq + 1))
+    });
+    Sse::new(s).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("ping"),
+    )
+}
+
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/search/sse", get(search_sse))
+        .route("/api/logs/sse", get(logs_sse))
+}

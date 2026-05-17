@@ -48,7 +48,7 @@ async fn search(
         }
         ids
     } else {
-        let mut conn = util::open_db(&state.db_path)?;
+        let mut conn = util::pooled_conn(&state)?;
         let dao = core_storage::source_dao::SourceDao::new(&mut conn);
         dao.get_enabled()
             .map_err(|e| ApiError::Database(e.to_string()))?
@@ -61,7 +61,7 @@ async fn search(
     let mut join_set = JoinSet::new();
     for sid in &source_ids {
         let sid = sid.clone();
-        let db_path = state.db_path.clone();
+        let pool = state.pool.clone();
         let keyword = req.keyword.clone();
         let permit = semaphore
             .clone()
@@ -69,7 +69,7 @@ async fn search(
             .await
             .map_err(|_| ApiError::Internal("信号量获取失败".into()))?;
         join_set.spawn(async move {
-            let result = search_single_source(&db_path, &sid, &keyword).await;
+            let result = search_single_source(&pool, &sid, &keyword).await;
             drop(permit);
             result
         });
@@ -108,13 +108,14 @@ async fn search(
 }
 
 async fn search_single_source(
-    db_path: &str,
+    pool: &crate::state::SqlitePool,
     source_id: &str,
     keyword: &str,
 ) -> Result<Vec<core_source::parser::SearchResult>, (String, String, String)> {
     let storage_source = {
-        let mut conn = util::open_db(db_path)
-            .map_err(|e| (source_id.to_string(), "".into(), e.to_string()))?;
+        let mut conn = pool
+            .get()
+            .map_err(|e| (source_id.to_string(), "".into(), format!("connection pool: {e}")))?;
         let dao = core_storage::source_dao::SourceDao::new(&mut conn);
         dao.get_by_id(source_id)
             .map_err(|e| (source_id.to_string(), "".into(), e.to_string()))?

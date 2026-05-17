@@ -23,6 +23,8 @@ pub struct AllInOneRule {
 pub struct PurificationRule {
     pub pattern: String,
     pub replacement: String,
+    /// true for OnlyOne (###): only replace first match
+    pub replace_first: bool,
 }
 
 /// 解析 AllInOne 规则 (:pattern)
@@ -66,24 +68,33 @@ pub fn execute_all_in_one(rule: &AllInOneRule, html: &str) -> Vec<Vec<String>> {
     results
 }
 
-/// 解析净化规则 (##regex##replacement)
+/// 解析净化规则 (##regex##replacement or ##regex##replacement###)
 pub fn parse_purification(rule_part: &str) -> Option<PurificationRule> {
     if !rule_part.contains("##") {
         return None;
     }
 
+    // Check for OnlyOne (### ending)
+    let (effective, replace_first) = if rule_part.ends_with("###") {
+        (&rule_part[..rule_part.len() - 3], true)
+    } else {
+        (rule_part, false)
+    };
+
     // 格式: ##pattern##replacement
-    if let Some(rest) = rule_part.strip_prefix("##") {
+    if let Some(rest) = effective.strip_prefix("##") {
         if let Some((pattern, replacement)) = rest.split_once("##") {
             return Some(PurificationRule {
                 pattern: pattern.to_string(),
                 replacement: replacement.to_string(),
+                replace_first,
             });
         }
         // 只有 ##pattern，没有第二个 ##
         return Some(PurificationRule {
             pattern: rest.to_string(),
             replacement: String::new(),
+            replace_first,
         });
     }
 
@@ -93,7 +104,20 @@ pub fn parse_purification(rule_part: &str) -> Option<PurificationRule> {
 /// 应用净化规则到文本
 pub fn apply_purification(text: &str, rule: &PurificationRule) -> String {
     match Regex::new(&rule.pattern) {
-        Ok(re) => re.replace_all(text, rule.replacement.as_str()).to_string(),
+        Ok(re) => {
+            if rule.replace_first {
+                // OnlyOne: find first match, replace only that occurrence
+                if let Some(m) = re.find(text) {
+                    let matched = m.as_str();
+                    let replaced = re.replace(matched, rule.replacement.as_str());
+                    replaced.to_string()
+                } else {
+                    String::new()
+                }
+            } else {
+                re.replace_all(text, rule.replacement.as_str()).to_string()
+            }
+        }
         Err(_) => text.to_string(),
     }
 }
@@ -110,6 +134,7 @@ pub fn parse_only_one(rule: &str) -> Option<(String, PurificationRule)> {
                     PurificationRule {
                         pattern: pattern.to_string(),
                         replacement: replacement.to_string(),
+                        replace_first: true,
                     },
                 ));
             }
@@ -142,6 +167,7 @@ mod tests {
         let rule = PurificationRule {
             pattern: r"\(本章完\)".to_string(),
             replacement: String::new(),
+            replace_first: false,
         };
         let result = apply_purification("这是正文(本章完)", &rule);
         assert_eq!(result, "这是正文");

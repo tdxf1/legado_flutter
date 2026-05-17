@@ -37,6 +37,9 @@ dependencies:
   file_picker: ^11.0.2
   flutter_tts: ^4.2.2
 
+  # 高刷模式 - 在支持 120Hz 屏的安卓机型上启用高刷新率，仿真翻页等动画更跟手
+  flutter_displaymode: ^0.6.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import '../src/rust/api.dart' as rust_api;
 import 'notification_service.dart';
 
@@ -80,7 +82,9 @@ class DownloadRunner {
           status: 4,
           errorMessage: '无可下载章节',
         );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[Download] mark empty task failed: $e');
+      }
       _completionController.add(task.taskId);
       return;
     }
@@ -91,7 +95,9 @@ class DownloadRunner {
         taskId: task.taskId,
         status: 1,
       );
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Download] mark running failed: $e');
+    }
 
     await NotificationService.showDownloadProgress(
       id: notificationId,
@@ -114,7 +120,9 @@ class DownloadRunner {
             fileSize: 0,
             errorMessage: '章节链接为空',
           );
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[Download] mark empty url chapter failed: $e');
+        }
         final processed = successCount + failCount + skipCount;
         await NotificationService.showDownloadProgress(
           id: notificationId,
@@ -134,17 +142,25 @@ class DownloadRunner {
           downloadDir: task.downloadDir,
         );
         successCount++;
-      } catch (_) {
+      } catch (e) {
+        debugPrint('[Download] chapter $chapterId failed: $e');
         failCount++;
+        // P3-8: surface the real exception in errorMessage so users (or us)
+        // can tell "网络超时" from "源不支持" without grepping logcat. Trim
+        // long messages because errorMessage is shown in download UI.
+        final msg = e.toString();
+        final shortMsg = msg.length > 200 ? '${msg.substring(0, 200)}…' : msg;
         try {
           await rust_api.updateDownloadChapterStatus(
             dbPath: task.dbPath,
             chapterId: chapterId,
             status: 3,
             fileSize: 0,
-            errorMessage: '下载失败',
+            errorMessage: '下载失败: $shortMsg',
           );
-        } catch (_) {}
+        } catch (innerErr) {
+          debugPrint('[Download] mark chapter failed: $innerErr');
+        }
       }
       final processed = successCount + failCount + skipCount;
       await NotificationService.showDownloadProgress(
@@ -164,7 +180,9 @@ class DownloadRunner {
           errorMessage:
               '部分章节下载失败 (成功: $successCount, 失败: $failCount, 跳过: $skipCount)',
         );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[Download] mark task partial-fail failed: $e');
+      }
     } else {
       try {
         await rust_api.updateDownloadTaskStatus(
@@ -172,7 +190,9 @@ class DownloadRunner {
           taskId: task.taskId,
           status: 3,
         );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[Download] mark task complete failed: $e');
+      }
     }
 
     await NotificationService.showDownloadComplete(
@@ -204,6 +224,8 @@ class DownloadRunner {
           );
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Download] resetInterruptedTasks failed: $e');
+    }
   }
 }

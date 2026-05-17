@@ -184,7 +184,8 @@ $script
     if (text.length >= 2 && text.startsWith('"') && text.endsWith('"')) {
       try {
         return jsonDecode(text) as String;
-      } catch (_) {
+      } catch (e) {
+        debugPrint('[WebViewExec] decode JS string failed: $e');
         return text.substring(1, text.length - 1);
       }
     }

@@ -66,19 +66,55 @@ Future<String> getSourceRuleSearchRaw(
     RustLib.instance.api.crateApiGetSourceRuleSearchRaw(
         dbPath: dbPath, sourceId: sourceId);
 
-/// 使用预获取的 HTML 搜索（Dart 端 Dio 取 HTML，Rust 端仅解析），返回搜索结果 JSON 数组
-Future<String> searchParseHtml(
-        {required String dbPath,
-        required String sourceId,
-        required String keyword,
-        required String html}) =>
-    RustLib.instance.api.crateApiSearchParseHtml(
-        dbPath: dbPath, sourceId: sourceId, keyword: keyword, html: html);
+// search_parse_html removed: that path was added under the false assumption
+// of "Android DNS limitations". The on-device LegadoHttpClient handles cookies,
+// charset, URL options, and JS templates that the Dart-side hand-rolled
+// resolver did not. See git log for commit 3c25702 / the code-review report.
 
 // TODO: Regenerate bridge code to restore deleteSourcesBatch
 // /// 批量删除书源 (ids_json 为 JSON 字符串数组)
 // Future<void> deleteSourcesBatch({required String dbPath, required String idsJson}) =>
 //     RustLib.instance.api.crateApiDeleteSourcesBatch(dbPath: dbPath, idsJson: idsJson);
+
+/// 批量删除书源 (ids_json 为 JSON 字符串数组)
+/// Manually wired (codegen timeout, see CURRENT_STATUS.md FRB patch chapter)
+Future<void> deleteSourcesBatch(
+        {required String dbPath, required String idsJson}) =>
+    RustLib.instance.api
+        .crateApiDeleteSourcesBatch(dbPath: dbPath, idsJson: idsJson);
+
+/// 获取书源的发现入口列表（返回 JSON 数组）
+Future<String> getExploreEntries(
+        {required String dbPath, required String sourceId}) =>
+    RustLib.instance.api
+        .crateApiGetExploreEntries(dbPath: dbPath, sourceId: sourceId);
+
+/// 执行发现页请求，获取书籍列表（返回 JSON 数组）
+Future<String> explore(
+        {required String dbPath,
+        required String sourceId,
+        required String exploreUrl,
+        required int page}) =>
+    RustLib.instance.api.crateApiExplore(
+        dbPath: dbPath,
+        sourceId: sourceId,
+        exploreUrl: exploreUrl,
+        page: page);
+
+/// 对内容应用所有已启用的替换规则。
+///
+/// 一次 FRB 调用替代之前 Dart 侧"拉规则 + 主 isolate 循环 RegExp"两步：
+/// - 加载已启用规则用 [cacheGeneration] 参与的进程内缓存（Rust 侧 OnceLock）
+/// - 编译失败的规则只 warn 一次
+/// - 调用方在 ReplaceRule CRUD 后递增 [cacheGeneration] 即可让缓存失效
+Future<String> applyReplaceRules(
+        {required String dbPath,
+        required String content,
+        required PlatformInt64 cacheGeneration}) =>
+    RustLib.instance.api.crateApiApplyReplaceRules(
+        dbPath: dbPath,
+        content: content,
+        cacheGeneration: cacheGeneration);
 
 /// 启用 / 禁用书源
 Future<void> setSourceEnabled(

@@ -21,7 +21,13 @@ impl<'a> ChapterDao<'a> {
         Self { conn }
     }
 
-    /// 插入或更新章节
+    /// 插入或更新章节。
+    ///
+    /// `content = COALESCE(excluded.content, content)` 是 by-design：
+    /// 调用方频繁通过 [`replace_by_book_preserving_content`] 刷新目录，
+    /// 这种场景下传入的 chapter 没有 content（None），我们必须保留旧的
+    /// content。如果调用方真的想清空正文（强制重新拉），应显式传 Some("")
+    /// 而不是 None，或者走 [`update_content`] / [`replace_by_book`]。
     pub fn upsert(&self, chapter: &Chapter) -> SqlResult<()> {
         debug!("插入/更新章节: {} - {}", chapter.title, chapter.url);
 
@@ -35,6 +41,8 @@ impl<'a> ChapterDao<'a> {
                 index_num = excluded.index_num,
                 title = excluded.title,
                 url = excluded.url,
+                -- Preserve cached content when callers refresh the TOC with
+                -- a contentless chapter (None). See doc comment above.
                 content = COALESCE(excluded.content, content),
                 is_volume = excluded.is_volume,
                 is_checked = excluded.is_checked,

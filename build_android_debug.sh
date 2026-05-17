@@ -27,7 +27,10 @@ cp core/target/aarch64-linux-android/release/libbridge.so \
 
 echo "[3/3] Building Flutter debug APK and installing..."
 cd flutter_app
-flutter build apk --debug
+# 显式只打 arm64-v8a：与 build.gradle.kts 的 abiFilters 对齐，
+# 同时让 Flutter engine + Dart AOT/JIT 也只走 android-arm64 流水线，
+# 大幅缩短构建时间，APK 体积少一半左右。
+flutter build apk --debug --target-platform android-arm64
 adb install -r build/app/outputs/flutter-apk/app-debug.apk || adb install build/app/outputs/flutter-apk/app-debug.apk
 
 echo ""

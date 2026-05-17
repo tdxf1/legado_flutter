@@ -33,14 +33,25 @@ pub struct BookSource {
     pub rule_toc: Option<TocRule>,
     #[serde(default)]
     pub rule_content: Option<ContentRule>,
+    #[serde(default, alias = "ruleReview")]
+    pub rule_review: Option<ReviewRule>,
 
     /// 其他配置
     #[serde(default)]
     pub login_url: Option<String>,
+    /// Login form UI definition (JSON array of {name, type, action})
+    #[serde(default, alias = "loginUi")]
+    pub login_ui: Option<String>,
+    /// JS to check if login is still valid (runs after each request)
+    #[serde(default, alias = "loginCheckJs")]
+    pub login_check_js: Option<String>,
     #[serde(default)]
     pub header: Option<String>,
     #[serde(default)]
     pub js_lib: Option<String>,
+    /// JS to decrypt cover image bytes (receives `result` as bytes, `src` as URL)
+    #[serde(default, alias = "coverDecodeJs")]
+    pub cover_decode_js: Option<String>,
     #[serde(default)]
     pub explore_url: Option<String>,
     #[serde(default)]
@@ -53,6 +64,15 @@ pub struct BookSource {
     pub last_update_time: i64,
     #[serde(default)]
     pub book_source_comment: Option<String>,
+    /// 并发率: "1000" (interval ms) or "5/1000" (count/window_ms)
+    #[serde(default, alias = "concurrentRate")]
+    pub concurrent_rate: Option<String>,
+    /// Variable comment shown in source edit UI
+    #[serde(default, alias = "variableComment")]
+    pub variable_comment: Option<String>,
+    /// Explore screen layout hint (0=default, 1=grid, 2=list, etc.)
+    #[serde(default, alias = "exploreScreen")]
+    pub explore_screen: Option<i32>,
 
     #[serde(default = "now_timestamp")]
     pub created_at: i64,
@@ -127,8 +147,16 @@ pub struct TocRule {
     pub next_toc_url: Option<String>,
     #[serde(default, alias = "isVip")]
     pub is_vip: Option<String>,
+    #[serde(default, alias = "isPay")]
+    pub is_pay: Option<String>,
+    #[serde(default, alias = "isVolume")]
+    pub is_volume: Option<String>,
     #[serde(default, alias = "updateTime")]
     pub update_time: Option<String>,
+    #[serde(default, alias = "formatJs")]
+    pub format_js: Option<String>,
+    #[serde(default, alias = "preUpdateJs")]
+    pub pre_update_js: Option<String>,
 }
 
 /// 内容规则
@@ -142,6 +170,34 @@ pub struct ContentRule {
     pub web_js: Option<String>,
     #[serde(default, alias = "sourceRegex")]
     pub source_regex: Option<String>,
+    #[serde(default, alias = "replaceRegex")]
+    pub replace_regex: Option<String>,
+    #[serde(default, alias = "imageStyle")]
+    pub image_style: Option<String>,
+    #[serde(default, alias = "imageDecode")]
+    pub image_decode: Option<String>,
+    #[serde(default, alias = "payAction")]
+    pub pay_action: Option<String>,
+    /// Rule to extract download URLs (for audio/file sources)
+    #[serde(default, alias = "downloadUrls")]
+    pub download_urls: Option<String>,
+}
+
+/// 评论/书评规则
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ReviewRule {
+    #[serde(default, alias = "reviewUrl")]
+    pub review_url: Option<String>,
+    #[serde(default, alias = "avatarRule")]
+    pub avatar_rule: Option<String>,
+    #[serde(default, alias = "contentRule")]
+    pub content_rule: Option<String>,
+    #[serde(default, alias = "authorRule")]
+    pub author_rule: Option<String>,
+    #[serde(default, alias = "timeRule")]
+    pub time_rule: Option<String>,
+    #[serde(default, alias = "ratingRule")]
+    pub rating_rule: Option<String>,
 }
 
 /// 搜索结果

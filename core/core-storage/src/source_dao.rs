@@ -10,13 +10,52 @@ use serde::Deserialize;
 use tracing::{debug, info};
 use uuid::Uuid;
 
+/// 单条 SQL，同时被 [`SourceDao::upsert`] 和 [`SourceDao::batch_insert`] 使用，
+/// 避免两份 ON CONFLICT 列表漂移（之前 upsert 缺 login_ui / login_check_js /
+/// cover_decode_js，导致单条更新时这三列永远不会同步）。
+const SOURCE_UPSERT_SQL: &str = "INSERT INTO book_sources (
+        id, name, url, source_type, group_name, enabled, custom_order, weight,
+        rule_search, rule_book_info, rule_toc, rule_content,
+        login_url, login_ui, login_check_js, header, js_lib, cover_decode_js, book_url_pattern,
+        rule_explore, explore_url, enabled_explore, last_update_time, book_source_comment,
+        concurrent_rate, variable_comment, explore_screen, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        url = excluded.url,
+        source_type = excluded.source_type,
+        group_name = excluded.group_name,
+        enabled = excluded.enabled,
+        custom_order = excluded.custom_order,
+        weight = excluded.weight,
+        rule_search = excluded.rule_search,
+        rule_book_info = excluded.rule_book_info,
+        rule_toc = excluded.rule_toc,
+        rule_content = excluded.rule_content,
+        login_url = excluded.login_url,
+        login_ui = excluded.login_ui,
+        login_check_js = excluded.login_check_js,
+        header = excluded.header,
+        js_lib = excluded.js_lib,
+        cover_decode_js = excluded.cover_decode_js,
+        book_url_pattern = excluded.book_url_pattern,
+        rule_explore = excluded.rule_explore,
+        explore_url = excluded.explore_url,
+        enabled_explore = excluded.enabled_explore,
+        last_update_time = excluded.last_update_time,
+        book_source_comment = excluded.book_source_comment,
+        concurrent_rate = excluded.concurrent_rate,
+        variable_comment = excluded.variable_comment,
+        explore_screen = excluded.explore_screen,
+        updated_at = excluded.updated_at";
+
 /// 书源 DAO
 pub struct SourceDao<'a> {
     conn: &'a mut Connection,
 }
 
 impl<'a> SourceDao<'a> {
-    /// еИЫеїЇжЦ∞зЪД SourceDao
+    /// 创建新的 SourceDao
     pub fn new(conn: &'a mut Connection) -> Self {
         Self { conn }
     }
@@ -38,35 +77,7 @@ impl<'a> SourceDao<'a> {
         };
 
         self.conn.execute(
-            "INSERT INTO book_sources (
-                id, name, url, source_type, group_name, enabled, custom_order, weight,
-                rule_search, rule_book_info, rule_toc, rule_content,
-                login_url, header, js_lib, book_url_pattern,
-                rule_explore, explore_url, enabled_explore, last_update_time, book_source_comment,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                name = excluded.name,
-                url = excluded.url,
-                source_type = excluded.source_type,
-                group_name = excluded.group_name,
-                enabled = excluded.enabled,
-                custom_order = excluded.custom_order,
-                weight = excluded.weight,
-                rule_search = excluded.rule_search,
-                rule_book_info = excluded.rule_book_info,
-                rule_toc = excluded.rule_toc,
-                rule_content = excluded.rule_content,
-                login_url = excluded.login_url,
-                header = excluded.header,
-                js_lib = excluded.js_lib,
-                book_url_pattern = excluded.book_url_pattern,
-                rule_explore = excluded.rule_explore,
-                explore_url = excluded.explore_url,
-                enabled_explore = excluded.enabled_explore,
-                last_update_time = excluded.last_update_time,
-                book_source_comment = excluded.book_source_comment,
-                updated_at = excluded.updated_at",
+            SOURCE_UPSERT_SQL,
             params![
                 effective_id,
                 source.name,
@@ -81,14 +92,20 @@ impl<'a> SourceDao<'a> {
                 source.rule_toc,
                 source.rule_content,
                 source.login_url,
+                source.login_ui,
+                source.login_check_js,
                 source.header,
                 source.js_lib,
+                source.cover_decode_js,
                 source.book_url_pattern,
                 source.rule_explore,
                 source.explore_url,
                 source.enabled_explore as i32,
                 source.last_update_time,
                 source.book_source_comment,
+                source.concurrent_rate,
+                source.variable_comment,
+                source.explore_screen,
                 source.created_at,
                 source.updated_at,
             ],
@@ -102,9 +119,9 @@ impl<'a> SourceDao<'a> {
         let mut stmt = self.conn.prepare(
              "SELECT id, name, url, source_type, group_name, enabled, custom_order, weight,
                      rule_search, rule_book_info, rule_toc, rule_content,
-                     login_url, header, js_lib, book_url_pattern,
+                     login_url, login_ui, login_check_js, header, js_lib, cover_decode_js, book_url_pattern,
                      rule_explore, explore_url, enabled_explore, last_update_time, book_source_comment,
-                     created_at, updated_at
+                     concurrent_rate, variable_comment, explore_screen, created_at, updated_at
               FROM book_sources WHERE id = ?"
         )?;
 
@@ -122,9 +139,9 @@ impl<'a> SourceDao<'a> {
         let mut stmt = self.conn.prepare(
              "SELECT id, name, url, source_type, group_name, enabled, custom_order, weight,
                      rule_search, rule_book_info, rule_toc, rule_content,
-                     login_url, header, js_lib, book_url_pattern,
+                     login_url, login_ui, login_check_js, header, js_lib, cover_decode_js, book_url_pattern,
                      rule_explore, explore_url, enabled_explore, last_update_time, book_source_comment,
-                     created_at, updated_at
+                     concurrent_rate, variable_comment, explore_screen, created_at, updated_at
               FROM book_sources WHERE enabled = 1 ORDER BY custom_order ASC, weight DESC"
         )?;
 
@@ -137,9 +154,9 @@ impl<'a> SourceDao<'a> {
         let mut stmt = self.conn.prepare(
              "SELECT id, name, url, source_type, group_name, enabled, custom_order, weight,
                      rule_search, rule_book_info, rule_toc, rule_content,
-                     login_url, header, js_lib, book_url_pattern,
+                     login_url, login_ui, login_check_js, header, js_lib, cover_decode_js, book_url_pattern,
                      rule_explore, explore_url, enabled_explore, last_update_time, book_source_comment,
-                     created_at, updated_at
+                     concurrent_rate, variable_comment, explore_screen, created_at, updated_at
               FROM book_sources ORDER BY custom_order ASC, weight DESC"
         )?;
 
@@ -152,9 +169,9 @@ impl<'a> SourceDao<'a> {
         let mut stmt = self.conn.prepare(
              "SELECT id, name, url, source_type, group_name, enabled, custom_order, weight,
                      rule_search, rule_book_info, rule_toc, rule_content,
-                     login_url, header, js_lib, book_url_pattern,
+                     login_url, login_ui, login_check_js, header, js_lib, cover_decode_js, book_url_pattern,
                      rule_explore, explore_url, enabled_explore, last_update_time, book_source_comment,
-                     created_at, updated_at
+                     concurrent_rate, variable_comment, explore_screen, created_at, updated_at
               FROM book_sources WHERE url = ?"
         )?;
 
@@ -223,35 +240,7 @@ impl<'a> SourceDao<'a> {
             };
 
             tx.execute(
-                "INSERT INTO book_sources (
-                    id, name, url, source_type, group_name, enabled, custom_order, weight,
-                    rule_search, rule_book_info, rule_toc, rule_content,
-                    login_url, header, js_lib, book_url_pattern,
-                    rule_explore, explore_url, enabled_explore, last_update_time, book_source_comment,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    name = excluded.name,
-                    url = excluded.url,
-                    source_type = excluded.source_type,
-                    group_name = excluded.group_name,
-                    enabled = excluded.enabled,
-                    custom_order = excluded.custom_order,
-                    weight = excluded.weight,
-                    rule_search = excluded.rule_search,
-                    rule_book_info = excluded.rule_book_info,
-                    rule_toc = excluded.rule_toc,
-                    rule_content = excluded.rule_content,
-                    login_url = excluded.login_url,
-                    header = excluded.header,
-                    js_lib = excluded.js_lib,
-                    book_url_pattern = excluded.book_url_pattern,
-                    rule_explore = excluded.rule_explore,
-                    explore_url = excluded.explore_url,
-                    enabled_explore = excluded.enabled_explore,
-                    last_update_time = excluded.last_update_time,
-                    book_source_comment = excluded.book_source_comment,
-                    updated_at = excluded.updated_at",
+                SOURCE_UPSERT_SQL,
                 params![
                     effective_id,
                     source.name,
@@ -266,14 +255,20 @@ impl<'a> SourceDao<'a> {
                     source.rule_toc,
                     source.rule_content,
                     source.login_url,
+                    source.login_ui,
+                    source.login_check_js,
                     source.header,
                     source.js_lib,
+                    source.cover_decode_js,
                     source.book_url_pattern,
                     source.rule_explore,
                     source.explore_url,
                     source.enabled_explore as i32,
                     source.last_update_time,
                     source.book_source_comment,
+                    source.concurrent_rate,
+                    source.variable_comment,
+                    source.explore_screen,
                     source.created_at,
                     source.updated_at,
                 ],
@@ -329,14 +324,20 @@ impl<'a> SourceDao<'a> {
             rule_toc: None,
             rule_content: None,
             login_url: None,
+            login_ui: None,
+            login_check_js: None,
             header: None,
             js_lib: None,
+            cover_decode_js: None,
             book_url_pattern: None,
             rule_explore: None,
             explore_url: None,
             enabled_explore: true,
             last_update_time: 0,
             book_source_comment: None,
+            concurrent_rate: None,
+            variable_comment: None,
+            explore_screen: None,
             created_at: now,
             updated_at: now,
         };
@@ -367,16 +368,22 @@ fn book_source_from_row(row: &rusqlite::Row) -> SqlResult<BookSource> {
         rule_toc: row.get(10)?,
         rule_content: row.get(11)?,
         login_url: row.get(12)?,
-        header: row.get(13)?,
-        js_lib: row.get(14)?,
-        book_url_pattern: row.get(15)?,
-        rule_explore: row.get(16)?,
-        explore_url: row.get(17)?,
-        enabled_explore: row.get::<_, i32>(18)? != 0,
-        last_update_time: row.get(19)?,
-        book_source_comment: row.get(20)?,
-        created_at: row.get(21)?,
-        updated_at: row.get(22)?,
+        login_ui: row.get(13)?,
+        login_check_js: row.get(14)?,
+        header: row.get(15)?,
+        js_lib: row.get(16)?,
+        cover_decode_js: row.get(17)?,
+        book_url_pattern: row.get(18)?,
+        rule_explore: row.get(19)?,
+        explore_url: row.get(20)?,
+        enabled_explore: row.get::<_, i32>(21)? != 0,
+        last_update_time: row.get(22)?,
+        book_source_comment: row.get(23)?,
+        concurrent_rate: row.get(24)?,
+        variable_comment: row.get(25)?,
+        explore_screen: row.get(26)?,
+        created_at: row.get(27)?,
+        updated_at: row.get(28)?,
     })
 }
 
@@ -401,8 +408,14 @@ struct LegadoBookSource {
     header: Option<String>,
     #[serde(rename = "loginUrl", default)]
     login_url: Option<String>,
+    #[serde(rename = "loginUi", default)]
+    login_ui: Option<String>,
+    #[serde(rename = "loginCheckJs", default)]
+    login_check_js: Option<String>,
     #[serde(rename = "jsLib", default)]
     js_lib: Option<String>,
+    #[serde(rename = "coverDecodeJs", default)]
+    cover_decode_js: Option<String>,
     #[serde(rename = "searchUrl", default)]
     search_url: Option<String>,
     #[serde(rename = "ruleSearch", default)]
@@ -429,6 +442,12 @@ struct LegadoBookSource {
     last_update_time: i64,
     #[serde(rename = "bookSourceComment", default)]
     book_source_comment: Option<String>,
+    #[serde(rename = "concurrentRate", default)]
+    concurrent_rate: Option<String>,
+    #[serde(rename = "variableComment", default)]
+    variable_comment: Option<String>,
+    #[serde(rename = "exploreScreen", default)]
+    explore_screen: Option<i32>,
 }
 
 fn deser_flexible_i64<'de, D>(deserializer: D) -> Result<i64, D::Error>
@@ -559,14 +578,20 @@ fn legado_to_storage(source: &LegadoBookSource) -> Result<BookSource, String> {
         rule_toc: normalize_rule_value(source.rule_toc.clone()),
         rule_content: normalize_rule_value(source.rule_content.clone()),
         login_url: source.login_url.clone(),
+        login_ui: source.login_ui.clone(),
+        login_check_js: source.login_check_js.clone(),
         header: source.header.clone(),
         js_lib: source.js_lib.clone(),
+        cover_decode_js: source.cover_decode_js.clone(),
         rule_explore: normalize_rule_value(source.rule_explore.clone()),
         explore_url: source.explore_url.clone(),
         book_url_pattern: source.book_url_pattern.clone(),
         enabled_explore: source.enabled_explore,
         last_update_time: source.last_update_time,
         book_source_comment: source.book_source_comment.clone(),
+        concurrent_rate: source.concurrent_rate.clone(),
+        variable_comment: source.variable_comment.clone(),
+        explore_screen: source.explore_screen,
         created_at: now,
         updated_at: now,
     })
@@ -587,25 +612,37 @@ fn normalize_rule_keys(mut value: serde_json::Value) -> serde_json::Value {
         return value;
     };
 
+    // Keep this list in sync with core-source `legado::import::normalize_rule_keys`.
+    // Out-of-sync mappings cause silent field drops on Legado JSON import.
     for (from, to) in [
         ("bookList", "book_list"),
         ("bookUrl", "book_url"),
         ("coverUrl", "cover_url"),
         ("lastChapter", "last_chapter"),
+        ("wordCount", "word_count"),
         ("chapterList", "chapter_list"),
         ("chapterName", "chapter_name"),
         ("chapterUrl", "chapter_url"),
         ("nextContentUrl", "next_content_url"),
-        ("searchUrl", "search_url"),
-        ("wordCount", "word_count"),
-        ("bookInfoInit", "book_info_init"),
-        ("tocUrl", "toc_url"),
-        ("canReName", "can_rename"),
         ("nextTocUrl", "next_toc_url"),
-        ("updateTime", "update_time"),
-        ("webJs", "web_js"),
-        ("sourceRegex", "source_regex"),
         ("isVip", "is_vip"),
+        ("isPay", "is_pay"),
+        ("isVolume", "is_volume"),
+        ("updateTime", "update_time"),
+        ("canReName", "can_rename"),
+        ("tocUrl", "toc_url"),
+        ("bookInfoInit", "book_info_init"),
+        ("sourceRegex", "source_regex"),
+        ("replaceRegex", "replace_regex"),
+        ("imageStyle", "image_style"),
+        ("imageDecode", "image_decode"),
+        ("payAction", "pay_action"),
+        ("webJs", "web_js"),
+        ("downloadUrls", "download_urls"),
+        ("searchUrl", "search_url"),
+        ("checkKeyWord", "check_keyword"),
+        ("formatJs", "format_js"),
+        ("preUpdateJs", "pre_update_js"),
     ] {
         if !obj.contains_key(to) {
             if let Some(v) = obj.remove(from) {
@@ -681,6 +718,7 @@ impl<'a> SourceDao<'a> {
                     "bookSourceType": s.source_type,
                     "bookSourceComment": s.book_source_comment.as_deref().unwrap_or(""),
                     "bookUrlPattern": s.book_url_pattern.as_deref().unwrap_or(""),
+                    "concurrentRate": s.concurrent_rate.as_deref().unwrap_or(""),
                     "customOrder": s.custom_order,
                     "enabled": s.enabled,
                     "enabledExplore": s.enabled_explore,
@@ -726,20 +764,30 @@ fn denormalize_rule_keys(mut value: serde_json::Value) -> serde_json::Value {
         ("book_url", "bookUrl"),
         ("cover_url", "coverUrl"),
         ("last_chapter", "lastChapter"),
+        ("word_count", "wordCount"),
         ("chapter_list", "chapterList"),
         ("chapter_name", "chapterName"),
         ("chapter_url", "chapterUrl"),
         ("next_content_url", "nextContentUrl"),
-        ("search_url", "searchUrl"),
-        ("word_count", "wordCount"),
-        ("book_info_init", "bookInfoInit"),
-        ("toc_url", "tocUrl"),
-        ("can_rename", "canReName"),
         ("next_toc_url", "nextTocUrl"),
-        ("update_time", "updateTime"),
-        ("web_js", "webJs"),
-        ("source_regex", "sourceRegex"),
         ("is_vip", "isVip"),
+        ("is_pay", "isPay"),
+        ("is_volume", "isVolume"),
+        ("update_time", "updateTime"),
+        ("can_rename", "canReName"),
+        ("toc_url", "tocUrl"),
+        ("book_info_init", "bookInfoInit"),
+        ("source_regex", "sourceRegex"),
+        ("replace_regex", "replaceRegex"),
+        ("image_style", "imageStyle"),
+        ("image_decode", "imageDecode"),
+        ("pay_action", "payAction"),
+        ("web_js", "webJs"),
+        ("download_urls", "downloadUrls"),
+        ("search_url", "searchUrl"),
+        ("check_keyword", "checkKeyWord"),
+        ("format_js", "formatJs"),
+        ("pre_update_js", "preUpdateJs"),
     ];
     for (from, to) in renames {
         if let Some(v) = obj.remove(from) {
