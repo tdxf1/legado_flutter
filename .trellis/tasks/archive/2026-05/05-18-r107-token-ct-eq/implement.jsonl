@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "spec index"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "lint/test 基线"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "auth 失败 path 401 返回方式"}
+{"file": ".trellis/tasks/05-18-r107-token-ct-eq/prd.md", "reason": "本任务 PRD 含策略 + subtle dep 选择"}

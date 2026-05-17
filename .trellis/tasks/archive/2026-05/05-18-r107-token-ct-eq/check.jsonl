@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "spec index"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "lint/test 标准"}
+{"file": ".trellis/tasks/05-18-r107-token-ct-eq/prd.md", "reason": "验收标准"}
