@@ -2,3 +2,7 @@ core/target/
 *.a
 *.so
 sy/
+
+# Trellis: per-developer workspace (journals, session traces)
+.trellis/workspace/
+
