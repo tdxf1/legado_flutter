@@ -19,21 +19,25 @@ impl<'a> ReplaceRuleDao<'a> {
         Self { conn }
     }
 
-    /// 插入或更新替换规则
+    /// 插入或更新替换规则。R24 schema 含 scope/scope_title/scope_content/exclude_scope。
     pub fn upsert(&self, rule: &ReplaceRule) -> SqlResult<()> {
         debug!("插入/更新替换规则: {}", rule.name);
 
         self.conn.execute(
             "INSERT INTO replace_rules (
-                id, name, pattern, replacement, enabled, scope, sort_number,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, name, pattern, replacement, enabled,
+                scope, scope_title, scope_content, exclude_scope,
+                sort_number, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 pattern = excluded.pattern,
                 replacement = excluded.replacement,
                 enabled = excluded.enabled,
                 scope = excluded.scope,
+                scope_title = excluded.scope_title,
+                scope_content = excluded.scope_content,
+                exclude_scope = excluded.exclude_scope,
                 sort_number = excluded.sort_number,
                 updated_at = excluded.updated_at",
             params![
@@ -43,6 +47,9 @@ impl<'a> ReplaceRuleDao<'a> {
                 rule.replacement,
                 rule.enabled as i32,
                 rule.scope,
+                rule.scope_title as i32,
+                rule.scope_content as i32,
+                rule.exclude_scope,
                 rule.sort_number,
                 rule.created_at,
                 rule.updated_at,
@@ -54,11 +61,7 @@ impl<'a> ReplaceRuleDao<'a> {
 
     /// 根据 ID 获取替换规则
     pub fn get_by_id(&self, id: &str) -> SqlResult<Option<ReplaceRule>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, pattern, replacement, enabled, scope, sort_number,
-                    created_at, updated_at
-             FROM replace_rules WHERE id = ?",
-        )?;
+        let mut stmt = self.conn.prepare(SELECT_COLUMNS_SQL)?;
 
         let mut rows = stmt.query(params![id])?;
 
@@ -72,8 +75,9 @@ impl<'a> ReplaceRuleDao<'a> {
     /// 获取所有替换规则（按排序号）
     pub fn get_all(&self) -> SqlResult<Vec<ReplaceRule>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, pattern, replacement, enabled, scope, sort_number,
-                    created_at, updated_at
+            "SELECT id, name, pattern, replacement, enabled,
+                    scope, scope_title, scope_content, exclude_scope,
+                    sort_number, created_at, updated_at
              FROM replace_rules ORDER BY sort_number ASC",
         )?;
 
@@ -84,24 +88,13 @@ impl<'a> ReplaceRuleDao<'a> {
     /// 获取所有启用的替换规则
     pub fn get_enabled(&self) -> SqlResult<Vec<ReplaceRule>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, name, pattern, replacement, enabled, scope, sort_number,
-                    created_at, updated_at
+            "SELECT id, name, pattern, replacement, enabled,
+                    scope, scope_title, scope_content, exclude_scope,
+                    sort_number, created_at, updated_at
              FROM replace_rules WHERE enabled = 1 ORDER BY sort_number ASC",
         )?;
 
         let rows = stmt.query_map([], replace_rule_from_row)?;
-        rows.collect()
-    }
-
-    /// 根据作用域获取替换规则
-    pub fn get_by_scope(&self, scope: i32) -> SqlResult<Vec<ReplaceRule>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, pattern, replacement, enabled, scope, sort_number,
-                    created_at, updated_at
-             FROM replace_rules WHERE scope = ? ORDER BY sort_number ASC",
-        )?;
-
-        let rows = stmt.query_map(params![scope], replace_rule_from_row)?;
         rows.collect()
     }
 
@@ -131,13 +124,16 @@ impl<'a> ReplaceRuleDao<'a> {
         Ok(())
     }
 
-    /// 创建新替换规则（便捷函数）
+    /// 创建新替换规则（便捷函数）。
+    ///
+    /// R24: 默认创建全局正文规则（scope=None, scope_content=true,
+    /// scope_title=false）。需要自定义作用范围的 caller 应该构造
+    /// 完整 [`ReplaceRule`] 后调用 [`upsert`]。
     pub fn create(
         &self,
         name: &str,
         pattern: &str,
         replacement: &str,
-        scope: i32,
     ) -> SqlResult<ReplaceRule> {
         let now = Utc::now().timestamp();
         let rule = ReplaceRule {
@@ -146,7 +142,10 @@ impl<'a> ReplaceRuleDao<'a> {
             pattern: pattern.to_string(),
             replacement: replacement.to_string(),
             enabled: true,
-            scope,
+            scope: None,
+            scope_title: false,
+            scope_content: true,
+            exclude_scope: None,
             sort_number: 0,
             created_at: now,
             updated_at: now,
@@ -157,6 +156,11 @@ impl<'a> ReplaceRuleDao<'a> {
     }
 }
 
+const SELECT_COLUMNS_SQL: &str = "SELECT id, name, pattern, replacement, enabled,
+            scope, scope_title, scope_content, exclude_scope,
+            sort_number, created_at, updated_at
+     FROM replace_rules WHERE id = ?";
+
 /// 从数据库行转换到 ReplaceRule 结构体
 fn replace_rule_from_row(row: &rusqlite::Row) -> SqlResult<ReplaceRule> {
     Ok(ReplaceRule {
@@ -166,8 +170,11 @@ fn replace_rule_from_row(row: &rusqlite::Row) -> SqlResult<ReplaceRule> {
         replacement: row.get(3)?,
         enabled: row.get::<_, i32>(4)? != 0,
         scope: row.get(5)?,
-        sort_number: row.get(6)?,
-        created_at: row.get(7)?,
-        updated_at: row.get(8)?,
+        scope_title: row.get::<_, i32>(6)? != 0,
+        scope_content: row.get::<_, i32>(7)? != 0,
+        exclude_scope: row.get(8)?,
+        sort_number: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
     })
 }

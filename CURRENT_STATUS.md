@@ -438,14 +438,15 @@ core/
 历次审查与修复的完整时间线已迁移到 [`docs/CHANGELOG.md`](docs/CHANGELOG.md)。
 当前 STATUS 只保留"最近一批的状态摘要"。
 
-**最近一批**：第十三批（2026-05-17，commit 13）— R82 设计层重构: ParserError 替代静默 Vec。
-新增 `core_source::ParserError` 枚举（`RuleConfig` / `Network` / `Parse` / `Empty`）替换原来用 `Vec<>` / `Option<>` 静默吞失败的设计。所有 5 个 parser 公共 entry 签名改 `Result<T, ParserError>`，9 处 bridge wire fn / 6 个 api-server 路由 / 18 个 mock 测试同步更新。
+**最近一批**：第十四批（2026-05-17，commit 14）— R24 ReplaceRule scope 完整对齐 Legado。
 
-**调用方迁移**：bridge 把 Empty 转空集合（保持 Dart 契约）、其他 ParserError 转 `Err(String)`；api-server 把 Empty 当合法 0 结果、其他变 BadRequest；download_runner 把真实错误（trim 200 字）写进 download_chapters.error_message。删除了原"smuggled [ERR] SearchResult.name"的 hack。
+参照原项目 (`legado/app/data/entities/ReplaceRule.kt`) 的真实设计，把 `scope: INTEGER` enum 改回 `scope: Option<String>` 子串匹配语义。Migration v10 用 rebuild-table（SQLite 不支持 ALTER COLUMN type）：建新表 → 复制 → drop → rename，同时新增 `scope_title` / `scope_content` / `exclude_scope` 三个 column。原 scope=1/2 的 enum 值因 schema 没存 target 信息全部丢弃成 NULL（行为上等同 R24 修复前的"全局生效"）。
 
-**已知风险（仍然成立）**：R3 codegen 模板 unreachable / R22 / R23 / R24 ReplaceRule.scope（需 schema 改动）。R82 完成后这是真正剩下的 backlog。
+`apply_replace_rules` 签名加 3 个新参数（book_name / book_origin / apply_to_title），Rust 端按子串包含 book_name 或 book_origin 过滤。FRB funcId 57 手补。Reader caller 传 `_bookName` + `_sourceUrl`（对应 Legado 的 `book.origin`，是书源 URL）。UI dropdown 改文本输入框（hint "选填书名或书源 URL"）+ 两个 checkbox。首次进入页面弹一次 SnackBar 说明 schema 升级。
 
-**总评**：经过 7 轮全面复审 + 13 个 commit，所有列出的 R 问题（R1-R92）已全部清理或显式延后。剩余 4 个 design-level item 都需要 schema 或 FRB codegen 改动，独立批次处理。每批完成后 `cargo test --workspace` 与 `flutter test` 都全绿；本批完成时 cargo 250 (+2 ParserError 单测) / flutter 112 / `flutter analyze` 0 issue。详细问题清单与具体改动见 CHANGELOG。
+**已知风险（仍然成立）**：R3 codegen 模板 unreachable / R22 / R23（Web 平台兼容）。R24 完成后 schema 层 design-level backlog 已清空。
+
+**总评**：经过 8 轮全面复审 + 14 个 commit，原列表上的所有 R 问题（R1-R92 + R24 重做）已全部清理或显式延后。每批完成后 `cargo test --workspace` 与 `flutter test` 都全绿；本批完成时 cargo 259 (+9 scope/migration) / flutter 112 / `flutter analyze` 0 issue。详细问题清单与具体改动见 CHANGELOG。
 
 ---
 

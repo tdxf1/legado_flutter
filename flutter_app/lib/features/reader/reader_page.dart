@@ -325,6 +325,10 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   /// P1-7: 单次 FRB 调用代替之前 Dart 主 isolate 的 RegExp 循环。
   /// 失败时记录日志、提示一次 toast、然后退回原始内容（向后兼容，
   /// 优先保证用户能继续读，但不再让规则失效悄无声息）。
+  ///
+  /// R24: 把 [_bookName] 与 [_sourceUrl] 传给 Rust，让 scope 子串
+  /// 匹配能正确判断这条规则是否对当前书生效。`_sourceUrl` 对应原
+  /// Legado `book.origin` 字段（书源 URL，不是 source.id）。
   Future<String> _applyReplaceRulesViaRust(
       String dbPath, String content) async {
     if (content.isEmpty) return content;
@@ -334,6 +338,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         dbPath: dbPath,
         content: content,
         cacheGeneration: generation,
+        bookName: _bookName.isNotEmpty ? _bookName : null,
+        bookOrigin: _sourceUrl.isNotEmpty ? _sourceUrl : null,
+        applyToTitle: false,
       );
     } catch (e) {
       debugPrint('[Reader] applyReplaceRules failed: $e');

@@ -107,14 +107,25 @@ Future<String> explore(
 /// - 加载已启用规则用 [cacheGeneration] 参与的进程内缓存（Rust 侧 OnceLock）
 /// - 编译失败的规则只 warn 一次
 /// - 调用方在 ReplaceRule CRUD 后递增 [cacheGeneration] 即可让缓存失效
+///
+/// R24: [bookName] / [bookOrigin] 用于 scope 子串匹配（参考 Legado 原版
+/// `ReplaceRuleDao.findEnabledByContentScope`）。null 表示"调用方不知道
+/// 这本书是什么"——此时 scope 非空的规则会被跳过。[applyToTitle] 选择
+/// 本次跑作用于 章节标题 (true) 还是 正文 (false) 的规则集。
 Future<String> applyReplaceRules(
         {required String dbPath,
         required String content,
-        required PlatformInt64 cacheGeneration}) =>
+        required PlatformInt64 cacheGeneration,
+        String? bookName,
+        String? bookOrigin,
+        bool applyToTitle = false}) =>
     RustLib.instance.api.crateApiApplyReplaceRules(
         dbPath: dbPath,
         content: content,
-        cacheGeneration: cacheGeneration);
+        cacheGeneration: cacheGeneration,
+        bookName: bookName,
+        bookOrigin: bookOrigin,
+        applyToTitle: applyToTitle);
 
 /// 启用 / 禁用书源
 Future<void> setSourceEnabled(

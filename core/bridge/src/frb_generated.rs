@@ -2079,6 +2079,12 @@ fn wire__crate__api__apply_replace_rules_impl(
             let api_db_path = <String>::sse_decode(&mut deserializer);
             let api_content = <String>::sse_decode(&mut deserializer);
             let api_cache_generation = <i64>::sse_decode(&mut deserializer);
+            // R24: 3 new params for scope filtering. Manual patch — must
+            // be re-applied after any flutter_rust_bridge_codegen run
+            // (see bridge/build.rs guard).
+            let api_book_name = <Option<String>>::sse_decode(&mut deserializer);
+            let api_book_origin = <Option<String>>::sse_decode(&mut deserializer);
+            let api_apply_to_title = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
@@ -2086,6 +2092,9 @@ fn wire__crate__api__apply_replace_rules_impl(
                         api_db_path,
                         api_content,
                         api_cache_generation,
+                        api_book_name,
+                        api_book_origin,
+                        api_apply_to_title,
                     )?;
                     Ok(output_ok)
                 })())

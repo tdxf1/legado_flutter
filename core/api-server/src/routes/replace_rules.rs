@@ -14,7 +14,16 @@ pub struct CreateReplaceRuleRequest {
     pub name: String,
     pub pattern: String,
     pub replacement: String,
-    pub scope: Option<i32>,
+    /// R24: scope 现在是 Option<String>（子串匹配 book.name 或
+    /// book.origin），不再是 enum int。Caller 留空表示全局。
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub scope_title: Option<bool>,
+    #[serde(default)]
+    pub scope_content: Option<bool>,
+    #[serde(default)]
+    pub exclude_scope: Option<String>,
 }
 
 async fn list_rules(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
@@ -47,13 +56,27 @@ async fn create_rule(
     }
     let rule = db_blocking(&state, move |conn| {
         let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(conn);
-        dao.create(
-            &req.name,
-            &req.pattern,
-            &req.replacement,
-            req.scope.unwrap_or(0),
-        )
-        .map_err(|e| ApiError::Database(e.to_string()))
+        // 先用 create() 拿默认全局规则，然后按需 upsert 覆盖 scope 字段。
+        let mut rule = dao
+            .create(&req.name, &req.pattern, &req.replacement)
+            .map_err(|e| ApiError::Database(e.to_string()))?;
+        let needs_update = req.scope.is_some()
+            || req.scope_title.is_some()
+            || req.scope_content.is_some()
+            || req.exclude_scope.is_some();
+        if needs_update {
+            rule.scope = req.scope.filter(|s| !s.is_empty());
+            if let Some(t) = req.scope_title {
+                rule.scope_title = t;
+            }
+            if let Some(c) = req.scope_content {
+                rule.scope_content = c;
+            }
+            rule.exclude_scope = req.exclude_scope.filter(|s| !s.is_empty());
+            dao.upsert(&rule)
+                .map_err(|e| ApiError::Database(e.to_string()))?;
+        }
+        Ok::<_, ApiError>(rule)
     })
     .await?;
     Ok(Json(serde_json::to_value(rule)?))

@@ -278,7 +278,10 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiApplyReplaceRules(
       {required String dbPath,
       required String content,
-      required PlatformInt64 cacheGeneration});
+      required PlatformInt64 cacheGeneration,
+      String? bookName,
+      String? bookOrigin,
+      bool applyToTitle = false});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -1829,13 +1832,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<String> crateApiApplyReplaceRules(
       {required String dbPath,
       required String content,
-      required PlatformInt64 cacheGeneration}) {
+      required PlatformInt64 cacheGeneration,
+      String? bookName,
+      String? bookOrigin,
+      bool applyToTitle = false}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(dbPath, serializer);
         sse_encode_String(content, serializer);
         sse_encode_i_64(cacheGeneration, serializer);
+        // R24: 3 new params for scope filtering. Manual patch — must
+        // be re-applied after flutter_rust_bridge_codegen run.
+        sse_encode_opt_String(bookName, serializer);
+        sse_encode_opt_String(bookOrigin, serializer);
+        sse_encode_bool(applyToTitle, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 57, port: port_);
       },
@@ -1844,14 +1855,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: sse_decode_String,
       ),
       constMeta: kCrateApiApplyReplaceRulesConstMeta,
-      argValues: [dbPath, content, cacheGeneration],
+      argValues: [
+        dbPath,
+        content,
+        cacheGeneration,
+        bookName,
+        bookOrigin,
+        applyToTitle,
+      ],
       apiImpl: this,
     ));
   }
 
   TaskConstMeta get kCrateApiApplyReplaceRulesConstMeta => const TaskConstMeta(
         debugName: "apply_replace_rules",
-        argNames: ["dbPath", "content", "cacheGeneration"],
+        argNames: [
+          "dbPath",
+          "content",
+          "cacheGeneration",
+          "bookName",
+          "bookOrigin",
+          "applyToTitle",
+        ],
       );
 
   @protected

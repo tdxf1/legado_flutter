@@ -902,18 +902,36 @@ pub fn set_replace_rule_enabled(db_path: String, id: String, enabled: bool) -> R
 /// 同时 Dart 侧的 ReplaceRule 缓存也可以复用：参数加 `cache_generation`，
 /// Rust 端用 OnceLock + RwLock 保存上次拉取的规则；调用方在 ReplaceRule
 /// CRUD 后递增 generation 即可让缓存失效，不必每次走 DAO。
+///
+/// **R24**: scope 现在按 Legado 原版语义匹配。`book_name` 与
+/// `book_origin` 由 caller 提供（reader_page 持有），filter 逻辑见
+/// [`matches_scope`]。`apply_to_title=true` 表示本次跑作用于标题
+/// 的规则；false 表示作用于正文。
 pub fn apply_replace_rules(
     db_path: String,
     content: String,
     cache_generation: i64,
+    book_name: Option<String>,
+    book_origin: Option<String>,
+    apply_to_title: bool,
 ) -> Result<String, String> {
-    apply_replace_rules_impl(&db_path, &content, cache_generation)
+    apply_replace_rules_impl(
+        &db_path,
+        &content,
+        cache_generation,
+        book_name.as_deref().unwrap_or(""),
+        book_origin.as_deref().unwrap_or(""),
+        apply_to_title,
+    )
 }
 
 fn apply_replace_rules_impl(
     db_path: &str,
     content: &str,
     cache_generation: i64,
+    book_name: &str,
+    book_origin: &str,
+    apply_to_title: bool,
 ) -> Result<String, String> {
     let rules = load_enabled_replace_rules(db_path, cache_generation)?;
     // R12: collect all compiled regexes under a *single* short critical
@@ -929,6 +947,10 @@ fn apply_replace_rules_impl(
     // effect (previously the cache keyed by `id` only and silently served
     // the old compiled regex). It also bounds memory: cache size never
     // exceeds the current generation's enabled rule count.
+    //
+    // R24: filter by scope (book_name / book_origin substring match) +
+    // scope_title vs scope_content before compiling, so unrelated rules
+    // don't even hit the regex cache.
     let compiled: Vec<(Regex, String)> = {
         let mut cache = REGEX_CACHE
             .lock()
@@ -937,6 +959,14 @@ fn apply_replace_rules_impl(
         rules
             .iter()
             .filter(|r| !r.pattern.is_empty())
+            .filter(|r| {
+                if apply_to_title {
+                    r.scope_title
+                } else {
+                    r.scope_content
+                }
+            })
+            .filter(|r| matches_scope(r, book_name, book_origin))
             .filter_map(|rule| {
                 cache
                     .get_or_compile(&rule.id, &rule.pattern)
@@ -949,6 +979,49 @@ fn apply_replace_rules_impl(
         out = re.replace_all(&out, replacement.as_str()).into_owned();
     }
     Ok(out)
+}
+
+/// R24: scope 子串匹配 + exclude 优先。模仿原 Legado
+/// `ReplaceRuleDao.findEnabledByContentScope` 的 SQL LIKE 语义：
+///
+/// - `scope` 为 `None` 或空字符串 → 全局，对所有书生效
+/// - 否则 `scope` 字符串里**包含** `book_name` 或 `book_origin` 即匹配
+/// - `exclude_scope` 同语义但反向：命中即跳过该规则
+/// - 当 `book_name` / `book_origin` 自身为空时，不参与子串匹配（防御
+///   `"".contains("") == true` 的边界 case），相当于"我们不知道这本
+///   书是什么"，scope 非空的规则就会被跳过
+fn matches_scope(rule: &core_storage::models::ReplaceRule, book_name: &str, book_origin: &str) -> bool {
+    let scope = rule.scope.as_deref().unwrap_or("");
+    if scope.is_empty() {
+        // Even with global scope, an excluded book name/origin still skips.
+        if let Some(ref exclude) = rule.exclude_scope {
+            if !exclude.is_empty() {
+                let name_excluded = !book_name.is_empty() && exclude.contains(book_name);
+                let origin_excluded =
+                    !book_origin.is_empty() && exclude.contains(book_origin);
+                if name_excluded || origin_excluded {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    let name_match = !book_name.is_empty() && scope.contains(book_name);
+    let origin_match = !book_origin.is_empty() && scope.contains(book_origin);
+    if !(name_match || origin_match) {
+        return false;
+    }
+    if let Some(ref exclude) = rule.exclude_scope {
+        if !exclude.is_empty() {
+            let name_excluded = !book_name.is_empty() && exclude.contains(book_name);
+            let origin_excluded =
+                !book_origin.is_empty() && exclude.contains(book_origin);
+            if name_excluded || origin_excluded {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Reload the enabled replace-rule list from the DB iff the caller's
@@ -1180,5 +1253,91 @@ mod regex_cache_tests {
         // Fixed pattern under same id.
         let fixed = cache.get_or_compile("bad-rule", "[abc]").unwrap();
         assert!(fixed.is_match("a"));
+    }
+}
+
+#[cfg(test)]
+mod scope_filter_tests {
+    use super::matches_scope;
+    use core_storage::models::ReplaceRule;
+
+    fn rule(scope: Option<&str>, exclude: Option<&str>) -> ReplaceRule {
+        ReplaceRule {
+            id: "r1".into(),
+            name: "test".into(),
+            pattern: "x".into(),
+            replacement: "y".into(),
+            enabled: true,
+            scope: scope.map(|s| s.to_string()),
+            scope_title: false,
+            scope_content: true,
+            exclude_scope: exclude.map(|s| s.to_string()),
+            sort_number: 0,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    /// R24: scope=None → 全局，对所有书生效。
+    #[test]
+    fn scope_none_matches_anything() {
+        let r = rule(None, None);
+        assert!(matches_scope(&r, "三体", "https://x.com"));
+        assert!(matches_scope(&r, "", ""));
+    }
+
+    /// R24: scope="" → 同 None，全局生效。
+    #[test]
+    fn scope_empty_matches_anything() {
+        let r = rule(Some(""), None);
+        assert!(matches_scope(&r, "三体", "https://x.com"));
+    }
+
+    /// R24: scope 子串包含 book_name 即匹配。
+    #[test]
+    fn scope_substring_matches_book_name() {
+        let r = rule(Some("三体 笔趣阁"), None);
+        assert!(matches_scope(&r, "三体", "https://other.com"));
+    }
+
+    /// R24: scope 子串包含 book_origin (书源 URL) 即匹配。
+    /// 注意子串方向：scope 是 haystack，origin 是 needle。所以
+    /// scope 字段需要"包含"完整的 origin 字符串。
+    #[test]
+    fn scope_substring_matches_book_origin() {
+        let r = rule(Some("https://qidian.com/book/1 起点"), None);
+        assert!(matches_scope(&r, "无关书名", "https://qidian.com/book/1"));
+    }
+
+    /// R24: scope 不命中任何 → 跳过。
+    #[test]
+    fn scope_no_match() {
+        let r = rule(Some("某本书"), None);
+        assert!(!matches_scope(&r, "另一本书", "https://other.com"));
+    }
+
+    /// R24: book_name / book_origin 都为空时 scope 非空 → 不参与
+    /// 子串匹配（防 "".contains("") == true 误命中所有规则）。
+    #[test]
+    fn empty_caller_context_does_not_match_scoped_rule() {
+        let r = rule(Some("三体"), None);
+        assert!(!matches_scope(&r, "", ""));
+    }
+
+    /// R24: exclude 优先于 scope 命中。
+    #[test]
+    fn exclude_wins_over_scope_match() {
+        let r = rule(Some("三体"), Some("三体"));
+        assert!(!matches_scope(&r, "三体", "https://x.com"));
+    }
+
+    /// R24: 全局规则也能被 exclude 排除掉。注意 exclude 是 haystack，
+    /// 所以排除某本书需要在 exclude_scope 字段里写下完整的 book_name
+    /// 或 book_origin 字符串。
+    #[test]
+    fn exclude_blocks_global_scope() {
+        let r = rule(None, Some("三体 烂书一本"));
+        assert!(!matches_scope(&r, "三体", "https://x.com"));
+        assert!(matches_scope(&r, "其他书", "https://x.com"));
     }
 }

@@ -7,7 +7,7 @@ use rusqlite::{Connection, Result as SqlResult};
 use tracing::{debug, info, warn};
 
 /// 数据库版本（用于迁移，通过 PRAGMA user_version 持久化）
-const DB_VERSION: i32 = 9;
+const DB_VERSION: i32 = 10;
 
 /// 初始化数据库
 /// 创建所有必要的表，如果数据库已存在则检查是否需要迁移
@@ -185,6 +185,10 @@ pub fn create_tables(conn: &Connection) -> SqlResult<()> {
     )?;
 
     // 替换规则表
+    // R24: schema 对齐原 Legado (app/data/entities/ReplaceRule.kt)。
+    // scope 是 TEXT (nullable)，子串匹配 book.name 或 book.origin；
+    // scope_title / scope_content 控制作用于哪一部分；exclude_scope
+    // 与 scope 同语义但反向（命中即跳过）。
     conn.execute(
         "CREATE TABLE IF NOT EXISTS replace_rules (
             id TEXT PRIMARY KEY,
@@ -192,7 +196,10 @@ pub fn create_tables(conn: &Connection) -> SqlResult<()> {
             pattern TEXT NOT NULL,
             replacement TEXT NOT NULL,
             enabled INTEGER DEFAULT 1,
-            scope INTEGER DEFAULT 0,
+            scope TEXT,
+            scope_title INTEGER DEFAULT 0,
+            scope_content INTEGER DEFAULT 1,
+            exclude_scope TEXT,
             sort_number INTEGER DEFAULT 0,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
@@ -319,6 +326,7 @@ fn migrate_database(conn: &Connection, from_version: i32, to_version: i32) -> Sq
                 7 => migrate_v7(conn)?,
                 8 => migrate_v8(conn)?,
                 9 => migrate_v9(conn)?,
+                10 => migrate_v10(conn)?,
                 _ => {
                     return Err(rusqlite::Error::SqliteFailure(
                         rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
@@ -532,6 +540,84 @@ fn migrate_v9(conn: &Connection) -> SqlResult<()> {
             )?;
         }
     }
+    Ok(())
+}
+
+/// 版本 10 迁移：R24 — 重塑 replace_rules 表对齐原 Legado 设计。
+///
+/// 旧 schema：`scope INTEGER DEFAULT 0`（0/1/2 enum，但 schema 没有
+/// 配套的 target 字段，导致 scope=1/2 的规则在 R24 修复前被错误地
+/// 全局应用）。
+///
+/// 新 schema：
+///   - `scope TEXT`（nullable）：子串匹配 `book.name` 或 `book.origin`
+///   - `scope_title INTEGER DEFAULT 0`：是否作用于章节标题
+///   - `scope_content INTEGER DEFAULT 1`：是否作用于正文
+///   - `exclude_scope TEXT`（nullable）：排除范围，子串语义同 scope
+///
+/// 由于 SQLite 不支持 ALTER COLUMN 修改类型，使用"建新表 → 复制
+/// 数据 → 删旧表 → 重命名"模式。原 scope=0/1/2 的 enum 信息全部
+/// 丢弃成 NULL（全局），因为 schema 里本来就没存"具体哪个书源/书"，
+/// 用户原本想限定的对象信息没办法救回。Flutter UI 在用户首次进入
+/// 替换规则页面时弹一次 SnackBar 说明。
+fn migrate_v10(conn: &Connection) -> SqlResult<()> {
+    info!("v10: 重塑 replace_rules 表，对齐原 Legado scope String 设计");
+
+    // 防重跑：如果 scope 列已经是 TEXT 类型，直接跳过。
+    let scope_col_type: Option<String> = conn
+        .query_row(
+            "SELECT type FROM pragma_table_info('replace_rules') WHERE name = 'scope'",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    if scope_col_type.as_deref() == Some("TEXT") {
+        debug!("v10: replace_rules.scope 已经是 TEXT，跳过重建");
+        return Ok(());
+    }
+
+    // 重建表：原表数据 → 新表，scope/exclude_scope 全部 NULL，
+    // scope_title=0，scope_content=1（与新建默认值一致）。
+    conn.execute(
+        "CREATE TABLE replace_rules_new (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            pattern TEXT NOT NULL,
+            replacement TEXT NOT NULL,
+            enabled INTEGER DEFAULT 1,
+            scope TEXT,
+            scope_title INTEGER DEFAULT 0,
+            scope_content INTEGER DEFAULT 1,
+            exclude_scope TEXT,
+            sort_number INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )",
+        [],
+    )?;
+
+    let migrated: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM replace_rules",
+        [],
+        |row| row.get(0),
+    )?;
+    conn.execute(
+        "INSERT INTO replace_rules_new
+            (id, name, pattern, replacement, enabled, scope,
+             scope_title, scope_content, exclude_scope,
+             sort_number, created_at, updated_at)
+         SELECT id, name, pattern, replacement, enabled, NULL,
+                0, 1, NULL,
+                sort_number, created_at, updated_at
+           FROM replace_rules",
+        [],
+    )?;
+    conn.execute("DROP TABLE replace_rules", [])?;
+    conn.execute(
+        "ALTER TABLE replace_rules_new RENAME TO replace_rules",
+        [],
+    )?;
+    info!("v10: 迁移 {} 条替换规则", migrated);
     Ok(())
 }
 
@@ -940,17 +1026,19 @@ mod tests {
         let conn = init_database(&db_path).unwrap();
         let dao = crate::replace_rule_dao::ReplaceRuleDao::new(&conn);
 
-        let rule = dao.create("Test Rule", r"\d+", "NUM", 0).unwrap();
+        let rule = dao.create("Test Rule", r"\d+", "NUM").unwrap();
         assert_eq!(rule.name, "Test Rule");
         assert!(rule.enabled);
+        // R24: 默认创建是全局正文规则
+        assert!(rule.scope.is_none());
+        assert!(!rule.scope_title);
+        assert!(rule.scope_content);
 
         let retrieved = dao.get_by_id(&rule.id).unwrap().unwrap();
         assert_eq!(retrieved.pattern, r"\d+");
 
         assert_eq!(dao.get_all().unwrap().len(), 1);
         assert_eq!(dao.get_enabled().unwrap().len(), 1);
-        assert_eq!(dao.get_by_scope(0).unwrap().len(), 1);
-        assert!(dao.get_by_scope(1).unwrap().is_empty());
 
         dao.set_enabled(&rule.id, false).unwrap();
         assert!(!dao.get_by_id(&rule.id).unwrap().unwrap().enabled);
@@ -1032,5 +1120,78 @@ mod tests {
         assert_eq!(fetched.login_ui.as_deref(), Some("ui v2"));
         assert_eq!(fetched.login_check_js.as_deref(), Some("check v2"));
         assert_eq!(fetched.cover_decode_js.as_deref(), Some("cover v2"));
+    }
+
+    /// R24: v10 migration rebuilds replace_rules with `scope TEXT` (was
+    /// `scope INTEGER`) and adds scope_title / scope_content /
+    /// exclude_scope columns. Old scope=1/2 enum values are dropped to
+    /// NULL because schema never stored what they pointed at.
+    #[test]
+    fn test_migration_from_v9_rebuilds_replace_rules() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir
+            .path()
+            .join("test_migrate_v10.db")
+            .to_string_lossy()
+            .to_string();
+
+        // Build a v9-shape replace_rules table with mixed scope values.
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+            conn.execute(
+                "CREATE TABLE replace_rules (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    pattern TEXT NOT NULL,
+                    replacement TEXT NOT NULL,
+                    enabled INTEGER DEFAULT 1,
+                    scope INTEGER DEFAULT 0,
+                    sort_number INTEGER DEFAULT 0,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )",
+                [],
+            )
+            .unwrap();
+            for (id, scope) in [("rule0", 0), ("rule1", 1), ("rule2", 2)] {
+                conn.execute(
+                    "INSERT INTO replace_rules
+                        (id, name, pattern, replacement, enabled, scope,
+                         sort_number, created_at, updated_at)
+                     VALUES (?, 'test', 'x', 'y', 1, ?, 0, 0, 0)",
+                    rusqlite::params![id, scope],
+                )
+                .unwrap();
+            }
+            conn.pragma_update(None, "user_version", 9_i32).unwrap();
+        }
+
+        // Run the migration.
+        let migrated = init_database(&db_path).unwrap();
+        let version = get_db_version(&migrated).unwrap();
+        assert_eq!(version, DB_VERSION);
+
+        // scope column should now be TEXT and all rows should have
+        // scope=NULL, scope_title=0, scope_content=1, exclude_scope=NULL.
+        let scope_type: String = migrated
+            .query_row(
+                "SELECT type FROM pragma_table_info('replace_rules') WHERE name = 'scope'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(scope_type, "TEXT");
+
+        let count: i64 = migrated
+            .query_row(
+                "SELECT COUNT(*) FROM replace_rules WHERE scope IS NULL
+                 AND scope_title = 0 AND scope_content = 1
+                 AND exclude_scope IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 3, "all 3 rules should be migrated to global");
     }
 }

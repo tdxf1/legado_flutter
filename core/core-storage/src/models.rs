@@ -123,6 +123,13 @@ pub struct Bookmark {
 }
 
 /// 替换规则结构体
+///
+/// **R24**: schema 对齐原 Legado 设计 (`app/data/entities/ReplaceRule.kt`)。
+/// 之前用 `scope: i32` enum (0=全局, 1=书源, 2=书籍) 但 schema 没有
+/// 配套的 target 字段，导致所有 enabled 规则不分作用范围一律生效。
+/// v10 schema 把 `scope` 改成 `Option<String>`，子串包含 `book.name`
+/// 或 `book.origin` 即匹配；并补齐 scope_title / scope_content /
+/// exclude_scope 等原项目里就有的辅助字段。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplaceRule {
     pub id: String,
@@ -130,7 +137,15 @@ pub struct ReplaceRule {
     pub pattern: String,
     pub replacement: String,
     pub enabled: bool,
-    pub scope: i32, // 0=全局, 1=书源, 2=书籍
+    /// 作用范围。`None` 或空字符串表示全局；否则按子串包含
+    /// `book.name` 或 `book.origin` (书源 URL) 来匹配。
+    pub scope: Option<String>,
+    /// 是否作用于章节标题。原 Legado 默认 false。
+    pub scope_title: bool,
+    /// 是否作用于正文。原 Legado 默认 true。
+    pub scope_content: bool,
+    /// 排除范围。子串语义同 [`scope`]，命中即跳过该规则。
+    pub exclude_scope: Option<String>,
     pub sort_number: i32,
     pub created_at: i64,
     pub updated_at: i64,
