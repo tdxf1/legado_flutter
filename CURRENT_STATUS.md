@@ -438,16 +438,18 @@ core/
 历次审查与修复的完整时间线已迁移到 [`docs/CHANGELOG.md`](docs/CHANGELOG.md)。
 当前 STATUS 只保留"最近一批的状态摘要"。
 
-**最近一批**：第三轮全面复审 — 第七批（2026-05-17，commit 7）。第二轮 14 项落地后再做一次端到端复审，捞出 18 项（R27–R45 / R47），本批先修最高 ROI 的 4 项：
+**最近一批**：第四轮全面复审 — 第八批（2026-05-17，commit 8）。第三轮第七批落地后再扫一遍，重点看 commit 7 自身有没有引入问题，再扩展到 api-server / DownloadRunner / migration 等之前未深入的模块。捞出 20 项（R48–R67、R69–R70），其中 commit 7 自己 4 处需要复修，本批集中修了 9 项最高 ROI：
 
-- 高危：R27 `RegexCache` cache key 漏 pattern 导致改规则后命中旧编译（P1-7 引入的真实回归）/ R47 同一处的无界增长，重构 cache 与 `cache_generation` 联动
-- 中等：R29 SSE chunk 边界 CRLF 拆分形成伪块分隔符 / R30 `stable_search_result_id` 空字段塌陷碰撞
+- 高危：R55（**回退 commit 7 的 R30**——改算法会让所有已入库书 id 漂移）/ R52 SSE 流尾 pendingCr 不 flush 丢最后 event / R56 api-server token 改强制必填 / R57 Origin 头白名单纵深防御 / R58 pool 16→32 + 抽 SEARCH_FANOUT 常量 / R61 sse 加 Semaphore / R67 java_set_cookie 整体作为单条 Set-Cookie 解析（之前把 attributes 当 cookie 写入 jar）
+- 中等：R53 SSE 末块无尾空行也 dispatch / R48 rule list cache key 加 db_path
 
-**剩余 R 项延后**：R28（DNS TOCTOU 文档/命名）/ R31–R33 / R34（节流锁嵌套）/ R35–R36（build.rs）/ R37（ReaderRenderMode 半成品）/ R38–R39（PageView 状态机）/ R40（脱敏）/ R41–R42（cookie 局限）/ R43（多 isolate 缓存）/ R44（toast）/ R45（Web `<<` modulo-32）。
+**关键判断**：R55 是最反直觉的发现——commit 7 我自己引入的"修复"实际上引入了比它修的问题更大的回归。教训：任何会改变持久化数据 id 的改动都需要 migration 计划。
+
+**剩余 R 项延后**：R28（DNS TOCTOU）/ R31-R33 / R34（节流锁嵌套）/ R35-R36（build.rs）/ R37（ReaderRenderMode 半成品）/ R38-R39（PageView 状态机）/ R40（脱敏）/ R41-R42（cookie 局限）/ R43（多 isolate 缓存）/ R44（toast）/ R45（Web `<<`）/ R50（三次哈希）/ R59（TOCTOU 注释）/ R60（spawn_blocking）/ R62（logs_sse 注释）/ R64-R65（migration trivial）/ R66（didUpdateWidget）/ R69-R70（DownloadRunner）。
 
 **已知风险（更早就延后）**：R3 codegen 模板 unreachable / R22 / R23 / R24 ReplaceRule.scope（需 schema 改动）。
 
-每批完成后 `cargo test --workspace` 与 `flutter test` 都全绿；本批完成时 cargo 248 / flutter 109 / `flutter analyze` 0 issue。详细问题清单与具体改动见 CHANGELOG。
+每批完成后 `cargo test --workspace` 与 `flutter test` 都全绿；本批完成时 cargo 248 / flutter 112 / `flutter analyze` 0 issue。详细问题清单与具体改动见 CHANGELOG。
 
 ---
 

@@ -146,3 +146,34 @@
 **验证**：`cargo test --workspace` 248 passed；`flutter analyze` 0 issue；`flutter test` 109 passed。
 
 **剩余 R 项延后**：R28（DNS rebinding TOCTOU 文档/命名）/ R31-R33（doc 与 trivial）/ R34（节流锁嵌套，改 atomic）/ R35-R36（build.rs 改进）/ R37（ReaderRenderMode refactor 半成品）/ R38-R39（PageViewController 同步状态机）/ R40（DownloadRunner errorMessage 脱敏）/ R41-R42（cookie removal 局限）/ R43（多 isolate 缓存撞车）/ R44（替换规则报错 toast）/ R45（_paragraphKeyId Web 兼容）。
+
+## 第四轮全面复审 — 第八批（2026-05-17，commit 8）
+
+第三轮第七批落地后再扫一遍，重点看 commit 7 自身有没有引入问题，再扩展到 api-server / DownloadRunner / migration 等之前未深入的模块。捞出 20 项（R48–R67、R69–R70），其中 commit 7 自己就有 4 处需要复修。
+
+| 项 | 严重度 | 摘要 |
+|----|--------|------|
+| R55 | 高危 | 回退 R30：`stable_search_result_id` 改算法会让所有已入库书的 id 漂移，搜索"加入书架"会变成重复添加 + 旧记录变孤儿。R30 修的"空字段塌陷"在生产路径不可达（source_id 永远非空），修复成本远超收益。doc-comment 明确算法已锁定，未来改动必须配 migration |
+| R52 | 高危 | `parseSseStream` 流结束时若 `pendingCr=true` 不 flush，最后一个靠 lone CR 终止的 SSE event 会丢。修复：循环外加 `if (pendingCr) buffer.write('\n')` 兜底 |
+| R53 | 中等 | `parseSseStream` 流关流时 buffer 残留不 dispatch。简陋 SSE 服务器不发尾 `\n\n` 就 close，最后 event 也丢。修复：循环外把残留 buffer 当最后一个 block 解析；同时把单 block 解析抽成 `_parseSseBlock` 函数复用 |
+| R56 | 高危 | api-server token 强制必填。之前 loopback + 无 token 时 `auth_middleware` 不挂，任何浏览器 / 外部 app 都能 POST 改 DB。新行为：未设 `LEGADO_API_TOKEN` 时启动生成 UUIDv4 + warn 日志输出 token，仍然走 auth |
+| R57 | 高危 | `auth_middleware` 增加 Origin 头检查作纵深防御：带 Origin 的请求若 host 不在 `allowed_origin_hosts()` 白名单（默认 = bind_host + loopback aliases），直接 403。token 仍是主要防线，Origin 是浏览器侧的额外门槛 |
+| R58 | 高危 | api-server pool 由 16 扩到 32，新增 `SQLITE_POOL_SIZE` 常量与 `SEARCH_FANOUT=16` 对齐。先前 pool=16 与 search 信号量=16 一致，单个 search 把 pool 全占满，第二个 search 或 /health probe 必须等 30s pool timeout |
+| R61 | 高危 | `routes/sse.rs::search_sse` 之前对 `source_ids` 无并发限制，100 书源 = 100 task 同时 fan-out。新增 `Semaphore::new(SEARCH_FANOUT)` 与非 SSE 路径对齐 |
+| R67 | 高危 | `java_set_cookie` 修复：之前按 `;` 分割并把每段当独立 cookie，结果 `Path=/`、`Expires=...` 被当成名叫 `Path` / `Expires` 的 cookie 写入 jar，污染 cookie store。新实现把整个 `cookie_str` 当一条 Set-Cookie header value，让 reqwest jar 自己解析 attributes |
+| R48 | 中等 | `load_enabled_replace_rules` cache key 改为 `(db_path, generation, rules)`。先前只看 generation，多 db_path 切换时（测试 fixture / 未来 profile / 多 isolate）会拿到错的 rule list |
+
+**测试新增**：
+- `flutter test`：3 个 `parseSseStream` 边界（R52 流尾 pendingCr flush / R53 末块无 trailing 空行 / 空 keep-alive 不破坏 pendingCr）
+
+**验证**：`cargo test --workspace` 248 passed；`flutter analyze` 0 issue；`flutter test` 112 passed（109 → 112，+3）。
+
+**自我反思 / 关键判断**：
+
+R55 是最反直觉的发现——commit 7 (R30) 我自己引入的"修复"实际上引入了比它修的问题更大的回归。教训：**任何会改变持久化数据 id 的改动都需要 migration 计划，不能直接覆盖**。
+
+R52/R53 提醒：审查自己刚写的 stream parser 容易盲，特别是流结束 / chunk 是单字符这两类边界。
+
+R56-R58 是个老毛病：api-server 一直按"反正都跑 localhost"假设，但 localhost 不等于 trusted。
+
+**剩余 R 项延后**：R28（DNS TOCTOU）/ R31-R33 / R34（节流锁嵌套）/ R35-R36（build.rs）/ R37（ReaderRenderMode 半成品）/ R38-R39（PageView 状态机）/ R40（脱敏）/ R41-R42（cookie 局限）/ R43（多 isolate 缓存）/ R44（toast）/ R45（Web `<<` modulo-32）/ R50（RegexCache 三次哈希）/ R59（TOCTOU 注释）/ R60（Axum handler 同步阻塞 → spawn_blocking）/ R62（logs_sse 注释误导）/ R64-R65（migration trivial）/ R66（didUpdateWidget setState）/ R69-R70（DownloadRunner status 常量化 / 串行 UX）。

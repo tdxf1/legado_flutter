@@ -892,18 +892,22 @@ fn apply_replace_rules_impl(
 /// Reload the enabled replace-rule list from the DB iff the caller's
 /// `generation` is newer than the cached one. Cached snapshot is shared
 /// across threads.
+///
+/// R48: cache key includes `db_path` so a multi-DB workflow (test
+/// fixtures, future profile switching, two isolates pointed at
+/// different files) doesn't get a hit from another DB's rule set.
 fn load_enabled_replace_rules(
     db_path: &str,
     generation: i64,
 ) -> Result<std::sync::Arc<Vec<core_storage::models::ReplaceRule>>, String> {
     use std::sync::{Mutex, OnceLock};
-    type Cell = Mutex<Option<(i64, std::sync::Arc<Vec<core_storage::models::ReplaceRule>>)>>;
+    type Cell = Mutex<Option<(String, i64, std::sync::Arc<Vec<core_storage::models::ReplaceRule>>)>>;
     static CACHE: OnceLock<Cell> = OnceLock::new();
     let cell = CACHE.get_or_init(|| Mutex::new(None));
     {
         let guard = cell.lock().map_err(|e| format!("rule cache lock: {e}"))?;
-        if let Some((gen, ref rules)) = *guard {
-            if gen == generation {
+        if let Some((ref cached_path, gen, ref rules)) = *guard {
+            if gen == generation && cached_path == db_path {
                 return Ok(rules.clone());
             }
         }
@@ -915,7 +919,7 @@ fn load_enabled_replace_rules(
         .map_err(|e| format!("加载替换规则失败: {}", e))?;
     let arc = std::sync::Arc::new(fresh);
     if let Ok(mut guard) = cell.lock() {
-        *guard = Some((generation, arc.clone()));
+        *guard = Some((db_path.to_string(), generation, arc.clone()));
     }
     Ok(arc)
 }

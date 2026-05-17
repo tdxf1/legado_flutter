@@ -23,12 +23,14 @@ use futures::stream::{self, Stream};
 use serde::Deserialize;
 use serde_json::json;
 use std::convert::Infallible;
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinSet;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
 use crate::error::ApiError;
+use crate::routes::search::SEARCH_FANOUT;
 use crate::state::AppState;
 use crate::util;
 
@@ -69,11 +71,30 @@ async fn search_sse(
     let pool = state.pool.clone();
 
     tokio::spawn(async move {
+        // R61: cap concurrent downstream fetches so a request that lists
+        // 100+ sources can't drain the SQLite pool or hammer remote
+        // servers in lockstep. Same fan-out cap as the non-SSE search
+        // route — both share the pool budget calibrated by
+        // [`crate::state::SQLITE_POOL_SIZE`].
+        let semaphore = Arc::new(Semaphore::new(SEARCH_FANOUT));
         let mut join_set = JoinSet::new();
         for sid in source_ids {
             let pool = pool.clone();
             let keyword = keyword.clone();
-            join_set.spawn(async move { run_one(&pool, &sid, &keyword).await });
+            let semaphore = semaphore.clone();
+            join_set.spawn(async move {
+                let _permit = match semaphore.acquire_owned().await {
+                    Ok(p) => p,
+                    Err(_) => {
+                        return Err((
+                            sid.clone(),
+                            String::new(),
+                            "信号量获取失败".to_string(),
+                        ));
+                    }
+                };
+                run_one(&pool, &sid, &keyword).await
+            });
         }
         while let Some(joined) = join_set.join_next().await {
             let event = match joined {

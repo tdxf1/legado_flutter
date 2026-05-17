@@ -195,10 +195,23 @@ pub struct SearchResult {
 /// (no padding). Dart side trusts this id verbatim (R18 deleted the
 /// previous Dart re-hash fallback, so Rust is now the sole authority).
 ///
-/// R30: previously we filtered empty components *before* joining, which
-/// collapsed `(src, url, name, "")` and `(src, url, "", name)` to the same
-/// hash. Always preserve all four positions so structurally different
-/// inputs get structurally different ids.
+/// **Stability contract.** This function's output is persisted in the
+/// `books` table once a user adds a search result to their bookshelf.
+/// Changing the algorithm would orphan every previously-added book under
+/// a stale id, so the implementation here is intentionally locked in:
+///
+///   - Empty components are filtered out *before* joining (so e.g.
+///     `("a", "", "b", "")` joins as `"a|b"`).
+///   - That technically allows two structurally-different inputs to
+///     collapse into the same id when an empty field swaps places with a
+///     non-empty one (R30, originally raised as a defect). In practice no
+///     production caller ever produces such an input — `source_id` is
+///     always non-empty, and book sources never put `author` data into
+///     the `book_url` slot — so the collision risk stays theoretical.
+///   - An attempted "always preserve all four positions" fix in commit 7
+///     produced different ids for the same input on existing databases
+///     (R55) and was reverted. Any future change MUST come with a
+///     migration that rewrites stored book ids.
 ///
 /// If literally every input is empty (offline / explore corner case) we
 /// fall back to `unknown|<unix_secs>` so two distinct entries within the
@@ -212,9 +225,14 @@ pub(crate) fn stable_search_result_id(
 ) -> String {
     use base64::Engine;
     use sha2::{Digest, Sha256};
-    let all_empty =
-        source_id.is_empty() && book_url.is_empty() && name.is_empty() && author.is_empty();
-    let input = if all_empty {
+    let parts = [source_id, book_url, name, author];
+    let joined = parts
+        .iter()
+        .filter(|s| !s.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join("|");
+    let input = if joined.is_empty() {
         format!(
             "unknown|{}",
             std::time::SystemTime::now()
@@ -223,7 +241,7 @@ pub(crate) fn stable_search_result_id(
                 .unwrap_or(0)
         )
     } else {
-        format!("{}|{}|{}|{}", source_id, book_url, name, author)
+        joined
     };
     let digest = Sha256::digest(input.as_bytes());
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
@@ -1983,19 +2001,20 @@ mod tests {
     }
 
     #[test]
-    fn test_stable_search_result_id_preserves_position() {
-        // R30: previous behaviour filtered empty fields *before* joining,
-        // which collapsed structurally-different inputs into the same
-        // hash. Now empty fields keep their slot in the `|`-joined string,
-        // so identical components in different positions hash distinctly.
-        let a_in_pos0 = stable_search_result_id("a", "", "", "");
-        let a_in_pos1 = stable_search_result_id("", "a", "", "");
-        let a_in_pos2 = stable_search_result_id("", "", "a", "");
-        let a_in_pos3 = stable_search_result_id("", "", "", "a");
-        assert_ne!(a_in_pos0, a_in_pos1);
-        assert_ne!(a_in_pos1, a_in_pos2);
-        assert_ne!(a_in_pos2, a_in_pos3);
-        assert_ne!(a_in_pos0, a_in_pos3);
+    fn test_stable_search_result_id_skips_empty_components() {
+        // R55: this filter-empties-then-join behaviour is locked in by
+        // the persistence contract — every book id already in users'
+        // databases was minted with this algorithm. The collision
+        // identified as R30 (different orderings collapsing to the same
+        // hash when an empty field swaps with a non-empty one) is real
+        // but unreachable in practice, so we keep the algorithm and
+        // document the assumption.
+        let with_empty = stable_search_result_id("", "u", "n", "a");
+        let manual = stable_search_result_id("u", "n", "a", "");
+        // Both should reduce to joining "u|n|a" — same hash. Inverting
+        // this assertion would require a DB migration that rewrites
+        // every books.id row.
+        assert_eq!(with_empty, manual);
     }
 
     #[test]

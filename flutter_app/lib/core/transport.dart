@@ -176,12 +176,13 @@ class HttpTransport implements Transport {
 /// - LF / CR / CRLF line terminators (R6)
 /// - CRLF that gets split across two chunks: trailing '\r' is held back
 ///   until the next chunk so it can be paired or normalised correctly (R29)
+/// - lone trailing '\r' at end-of-stream: flushed as '\n' so the final
+///   block is still parseable (R52)
+/// - non-spec final block without a trailing blank line: dispatched on
+///   stream close so partial servers don't drop the last event (R53)
 /// - multi-line `data:` joined with '\n' per the SSE spec
 @visibleForTesting
 Stream<TransportEvent> parseSseStream(Stream<String> chunks) async* {
-  String currentEvent = 'message';
-  String currentId = '';
-  final dataLines = <String>[];
   final buffer = StringBuffer();
   // R29: if a chunk ends in a bare '\r' it might be the first half of a
   // CRLF that got split across the HTTP chunk boundary. Hold it back
@@ -192,7 +193,27 @@ Stream<TransportEvent> parseSseStream(Stream<String> chunks) async* {
   // separator and mis-dispatching the SSE event.
   bool pendingCr = false;
 
+  // Drain whatever is in `buffer` up to the last '\n\n' boundary,
+  // dispatching a TransportEvent per block. Returns events via the
+  // provided sink so the same routine can also be called once after the
+  // stream ends to flush any final block (R53).
+  Iterable<TransportEvent> drainBlocks() sync* {
+    while (true) {
+      final raw = buffer.toString();
+      final sep = raw.indexOf('\n\n');
+      if (sep < 0) break;
+      final block = raw.substring(0, sep);
+      buffer.clear();
+      buffer.write(raw.substring(sep + 2));
+      final dispatched = _parseSseBlock(block);
+      if (dispatched != null) yield dispatched;
+    }
+  }
+
   await for (final chunk in chunks) {
+    // Empty keep-alive chunks (some servers send empty data frames) must
+    // not consume the pendingCr — that decision needs to wait for the
+    // next chunk that actually has bytes.
     if (chunk.isEmpty) continue;
     var work = chunk;
     if (pendingCr) {
@@ -216,46 +237,61 @@ Stream<TransportEvent> parseSseStream(Stream<String> chunks) async* {
     // so the rest of the parser only deals with '\n'.
     final normalized = work.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
     buffer.write(normalized);
-    while (true) {
-      final raw = buffer.toString();
-      final sep = raw.indexOf('\n\n');
-      if (sep < 0) break;
-      final block = raw.substring(0, sep);
-      buffer.clear();
-      buffer.write(raw.substring(sep + 2));
+    yield* Stream.fromIterable(drainBlocks());
+  }
 
-      currentEvent = 'message';
-      currentId = '';
-      dataLines.clear();
-      for (final line in block.split('\n')) {
-        if (line.isEmpty) continue;
-        if (line.startsWith(':')) continue; // SSE comment
-        final colonIdx = line.indexOf(':');
-        if (colonIdx < 0) continue;
-        final field = line.substring(0, colonIdx).trim();
-        var value = line.substring(colonIdx + 1);
-        if (value.startsWith(' ')) value = value.substring(1);
-        switch (field) {
-          case 'event':
-            currentEvent = value;
-            break;
-          case 'data':
-            dataLines.add(value);
-            break;
-          case 'id':
-            currentId = value;
-            break;
-        }
-      }
-      if (dataLines.isNotEmpty) {
-        yield TransportEvent(
-          event: currentEvent,
-          data: dataLines.join('\n'),
-          id: currentId.isEmpty ? null : currentId,
-        );
-      }
+  // R52: stream ended while holding a trailing '\r'. There is no next
+  // chunk to pair it with, so treat it as a lone CR and flush as '\n'.
+  if (pendingCr) {
+    buffer.write('\n');
+    pendingCr = false;
+  }
+  // R53: drain again in case the trailing CR completed a block. Then
+  // dispatch any remaining content even without a final '\n\n' — some
+  // servers close the connection right after the last event without the
+  // spec-required blank-line terminator.
+  yield* Stream.fromIterable(drainBlocks());
+  final tail = buffer.toString();
+  buffer.clear();
+  if (tail.isNotEmpty) {
+    final dispatched = _parseSseBlock(tail);
+    if (dispatched != null) yield dispatched;
+  }
+}
+
+/// Parse a single SSE block (lines separated by '\n', no terminating
+/// blank line). Returns the dispatched event, or null when the block
+/// produced no `data:` lines (per spec: ignore).
+TransportEvent? _parseSseBlock(String block) {
+  String currentEvent = 'message';
+  String currentId = '';
+  final dataLines = <String>[];
+  for (final line in block.split('\n')) {
+    if (line.isEmpty) continue;
+    if (line.startsWith(':')) continue; // SSE comment
+    final colonIdx = line.indexOf(':');
+    if (colonIdx < 0) continue;
+    final field = line.substring(0, colonIdx).trim();
+    var value = line.substring(colonIdx + 1);
+    if (value.startsWith(' ')) value = value.substring(1);
+    switch (field) {
+      case 'event':
+        currentEvent = value;
+        break;
+      case 'data':
+        dataLines.add(value);
+        break;
+      case 'id':
+        currentId = value;
+        break;
     }
   }
+  if (dataLines.isEmpty) return null;
+  return TransportEvent(
+    event: currentEvent,
+    data: dataLines.join('\n'),
+    id: currentId.isEmpty ? null : currentId,
+  );
 }
 
 /// 占位 LocalTransport — 为了让上层在 BackendMode.frb 时也能拿到一个非空实例。

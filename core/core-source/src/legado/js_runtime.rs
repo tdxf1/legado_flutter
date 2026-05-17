@@ -1121,14 +1121,18 @@ fn java_set_cookie(url_str: String, cookie_str: String) -> String {
         return String::new();
     };
     let jar = current_js_cookie_jar();
-    // Parse cookie string: "name=value; name2=value2" → set each as Set-Cookie
-    for pair in cookie_str.split(';') {
-        let trimmed = pair.trim();
-        if !trimmed.is_empty() {
-            if let Ok(hv) = HeaderValue::from_str(trimmed) {
-                jar.set_cookies(&mut [hv].iter(), &url);
-            }
-        }
+    // R67: Legado's `java.setCookie(url, cookieStr)` passes a single
+    // Set-Cookie header value: e.g. `"name=value; Path=/; Max-Age=3600"`.
+    // The previous implementation split on `;` and wrote each segment as
+    // its own cookie, so attributes like `Path=/` ended up stored as a
+    // bogus cookie named "Path". Hand the whole string to reqwest's jar
+    // unsplit; it knows how to parse Set-Cookie attributes.
+    let trimmed = cookie_str.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if let Ok(hv) = HeaderValue::from_str(trimmed) {
+        jar.set_cookies(&mut [hv].iter(), &url);
     }
     String::new()
 }

@@ -12,6 +12,15 @@ use crate::error::ApiError;
 use crate::state::AppState;
 use crate::util;
 
+/// R58: how many sources we'll search in parallel for a single request.
+///
+/// Each task takes one connection from the pool while it loads the
+/// source row, so this cap must stay strictly below
+/// [`SQLITE_POOL_SIZE`](crate::state::SQLITE_POOL_SIZE) — otherwise a
+/// single search request can drain the pool and stall every other
+/// route (including /health). Tuned for "useful fan-out + headroom".
+pub const SEARCH_FANOUT: usize = 16;
+
 #[derive(Debug, Deserialize)]
 pub struct SearchRequest {
     pub keyword: String,
@@ -57,7 +66,7 @@ async fn search(
             .collect()
     };
 
-    let semaphore = Arc::new(Semaphore::new(16));
+    let semaphore = Arc::new(Semaphore::new(SEARCH_FANOUT));
     let mut join_set = JoinSet::new();
     for sid in &source_ids {
         let sid = sid.clone();

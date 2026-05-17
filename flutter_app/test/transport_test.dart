@@ -216,5 +216,47 @@ void main() {
       // 'Y' has no colon so it's ignored as a field; data lines join with \n.
       expect(events.single.data, 'x\nz');
     });
+
+    test('flushes pending CR when stream ends mid-CRLF (R52)', () async {
+      // The block is terminated by a final CRLF that's split across the
+      // last chunk and end-of-stream: chunk ends in '\r' and there is no
+      // next chunk. A previous implementation kept the '\r' in pendingCr
+      // and never wrote anything, so the final block stayed in the
+      // buffer and was lost. Fix: treat trailing pendingCr as lone-CR on
+      // close and flush the buffer.
+      const c1 = 'data: only\n\r';
+      final events = await parseSseStream(
+        Stream<String>.fromIterable([c1]),
+      ).toList();
+      expect(events.length, 1);
+      expect(events.single.data, 'only');
+    });
+
+    test('dispatches final block without trailing blank line (R53)', () async {
+      // Some servers close the connection right after the last event,
+      // omitting the spec-required blank line. The implementation should
+      // still surface that final event rather than silently dropping it.
+      const c1 = 'event: tail\ndata: payload\n';
+      final events = await parseSseStream(
+        Stream<String>.fromIterable([c1]),
+      ).toList();
+      expect(events.length, 1);
+      expect(events.single.event, 'tail');
+      expect(events.single.data, 'payload');
+    });
+
+    test('empty keep-alive chunks do not collapse pendingCr', () async {
+      // Server sends a chunk ending in '\r', then an empty keep-alive,
+      // then a chunk starting with '\n'. The CRLF should still pair
+      // correctly across the empty chunk and produce a single event.
+      const c1 = 'data: hello\r';
+      const c2 = '';
+      const c3 = '\n\n';
+      final events = await parseSseStream(
+        Stream<String>.fromIterable([c1, c2, c3]),
+      ).toList();
+      expect(events.length, 1);
+      expect(events.single.data, 'hello');
+    });
   });
 }
