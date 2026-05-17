@@ -230,9 +230,32 @@ fn main() {
 /// for that prefix to avoid false-matching numbers that appear inside
 /// function bodies or comments. Trailing `=>` is required so we don't
 /// pick up other constructs.
+///
+/// R94: scope the scan to inside `pde_ffi_dispatcher_primary_impl` and
+/// `pde_ffi_dispatcher_sync_impl` function bodies. Other parts of
+/// `frb_generated.rs` may use the same 8-space `        N => ...` indent
+/// for unrelated match arms (enum decoders etc.); without this scoping
+/// such arms would be miscounted as funcIds and trigger spurious
+/// "Rust dispatcher has funcIds Dart never calls" warnings.
 fn extract_rust_func_ids(content: &str) -> Vec<i32> {
     let mut ids = Vec::new();
+    let mut in_dispatcher = false;
     for line in content.lines() {
+        if line.starts_with("fn pde_ffi_dispatcher_primary_impl(")
+            || line.starts_with("fn pde_ffi_dispatcher_sync_impl(")
+        {
+            in_dispatcher = true;
+            continue;
+        }
+        // Closing `}` at column 0 marks the end of a top-level fn body
+        // in the generated file.
+        if in_dispatcher && line == "}" {
+            in_dispatcher = false;
+            continue;
+        }
+        if !in_dispatcher {
+            continue;
+        }
         // Rust dispatcher arms are 8-space-indented: "        42 => ..."
         let stripped = match line.strip_prefix("        ") {
             Some(s) => s,

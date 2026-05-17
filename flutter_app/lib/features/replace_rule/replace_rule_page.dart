@@ -61,7 +61,7 @@ class _ReplaceRulePageState extends ConsumerState<ReplaceRulePage> {
         error: (e, _) => Center(child: Text('加载失败: $e')),
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => _showAddRuleDialog(context),
+        onPressed: () => _showRuleEditDialog(context),
         child: const Icon(Icons.add),
       ),
     );
@@ -137,20 +137,36 @@ class _ReplaceRulePageState extends ConsumerState<ReplaceRulePage> {
     }
   }
 
-  void _showAddRuleDialog(BuildContext context) {
-    final nameCtrl = TextEditingController();
-    final patternCtrl = TextEditingController();
-    final replacementCtrl = TextEditingController();
-    final scopeCtrl = TextEditingController();
-    final excludeCtrl = TextEditingController();
-    bool scopeContent = true;
-    bool scopeTitle = false;
+  /// R110: 统一的添加 / 编辑对话框。`existing == null` 时表现等同
+  /// 原 `_showAddRuleDialog`（生成新 id）；`existing != null` 时预填
+  /// 全部字段、保留原 id / sort_number / created_at / enabled，
+  /// 通过 `saveReplaceRule` upsert。
+  void _showRuleEditDialog(BuildContext context,
+      [Map<String, dynamic>? existing]) {
+    final isEdit = existing != null;
+    final nameCtrl =
+        TextEditingController(text: existing?['name'] as String? ?? '');
+    final patternCtrl = TextEditingController(
+        text: existing?['pattern'] as String? ?? '');
+    final replacementCtrl = TextEditingController(
+        text: existing?['replacement'] as String? ?? '');
+    final scopeCtrl = TextEditingController(
+        text: (existing?['scope'] as String?) ?? '');
+    final excludeCtrl = TextEditingController(
+        text: (existing?['exclude_scope'] as String?) ?? '');
+    // R24 默认值：scope_content=true, scope_title=false。
+    bool scopeContent = existing == null
+        ? true
+        : (existing['scope_content'] != false);
+    bool scopeTitle = existing == null
+        ? false
+        : (existing['scope_title'] == true);
 
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
-          title: const Text('添加替换规则'),
+          title: Text(isEdit ? '编辑替换规则' : '添加替换规则'),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -222,7 +238,11 @@ class _ReplaceRulePageState extends ConsumerState<ReplaceRulePage> {
                   final dbPath = await ref.read(dbPathProvider.future);
                   final now =
                       DateTime.now().millisecondsSinceEpoch ~/ 1000;
-                  final id = '${now}_${Random().nextInt(99999)}';
+                  // R110: edit 模式复用原 id / sort_number / created_at /
+                  // enabled，仅刷新 updated_at；add 模式生成新 id。
+                  final id = isEdit
+                      ? existing['id'] as String
+                      : '${now}_${Random().nextInt(99999)}';
                   final scopeText = scopeCtrl.text.trim();
                   final excludeText = excludeCtrl.text.trim();
                   final ruleJson = jsonEncode({
@@ -230,14 +250,19 @@ class _ReplaceRulePageState extends ConsumerState<ReplaceRulePage> {
                     'name': name,
                     'pattern': pattern,
                     'replacement': replacementCtrl.text,
-                    'enabled': true,
+                    'enabled':
+                        isEdit ? (existing['enabled'] != false) : true,
                     'scope': scopeText.isEmpty ? null : scopeText,
                     'scope_title': scopeTitle,
                     'scope_content': scopeContent,
                     'exclude_scope':
                         excludeText.isEmpty ? null : excludeText,
-                    'sort_number': 0,
-                    'created_at': now,
+                    'sort_number': isEdit
+                        ? (existing['sort_number'] as int? ?? 0)
+                        : 0,
+                    'created_at': isEdit
+                        ? (existing['created_at'] as int? ?? now)
+                        : now,
                     'updated_at': now,
                   });
                   await rust_api.saveReplaceRule(
@@ -247,12 +272,14 @@ class _ReplaceRulePageState extends ConsumerState<ReplaceRulePage> {
                 } catch (e) {
                   if (ctx.mounted) {
                     ScaffoldMessenger.of(ctx).showSnackBar(
-                      SnackBar(content: Text('添加失败: $e')),
+                      SnackBar(
+                          content:
+                              Text('${isEdit ? "保存" : "添加"}失败: $e')),
                     );
                   }
                 }
               },
-              child: const Text('添加'),
+              child: Text(isEdit ? '保存' : '添加'),
             ),
           ],
         ),
@@ -262,12 +289,52 @@ class _ReplaceRulePageState extends ConsumerState<ReplaceRulePage> {
 
   void _showRuleActions(
       BuildContext context, Map<String, dynamic> rule) {
+    // R111: 结构化展示完整字段而非仅 pattern，方便用户在不进入编辑
+    // 的情况下确认规则配置（scope / exclude_scope / 作用对象）。
+    final pattern = rule['pattern'] as String? ?? '';
+    final replacement = rule['replacement'] as String? ?? '';
+    final scope = (rule['scope'] as String?)?.trim() ?? '';
+    final excludeScope =
+        (rule['exclude_scope'] as String?)?.trim() ?? '';
+    final scopeContent = rule['scope_content'] != false;
+    final scopeTitle = rule['scope_title'] == true;
+    final targetLabel = scopeContent && scopeTitle
+        ? '正文+标题'
+        : scopeContent
+            ? '正文'
+            : scopeTitle
+                ? '标题'
+                : '（未选）';
+    final scopeDisplay = scope.isEmpty ? '全局' : _truncate(scope, 200);
+    final excludeDisplay =
+        excludeScope.isEmpty ? '无' : _truncate(excludeScope, 200);
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(rule['name'] ?? '规则操作'),
-        content: Text(rule['pattern'] ?? ''),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _ruleDetailRow('匹配模式', _truncate(pattern, 200)),
+              _ruleDetailRow('替换为',
+                  replacement.isEmpty ? '（空）' : _truncate(replacement, 200)),
+              _ruleDetailRow('作用范围', scopeDisplay),
+              _ruleDetailRow('排除范围', excludeDisplay),
+              _ruleDetailRow('作用对象', targetLabel),
+            ],
+          ),
+        ),
         actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _showRuleEditDialog(context, rule);
+            },
+            child: const Text('编辑'),
+          ),
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
@@ -280,6 +347,23 @@ class _ReplaceRulePageState extends ConsumerState<ReplaceRulePage> {
             onPressed: () => Navigator.pop(ctx),
             child: const Text('取消'),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _ruleDetailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 2),
+          SelectableText(value),
         ],
       ),
     );

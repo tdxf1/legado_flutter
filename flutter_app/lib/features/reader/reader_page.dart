@@ -329,9 +329,35 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   /// R24: 把 [_bookName] 与 [_sourceUrl] 传给 Rust，让 scope 子串
   /// 匹配能正确判断这条规则是否对当前书生效。`_sourceUrl` 对应原
   /// Legado `book.origin` 字段（书源 URL，不是 source.id）。
+  ///
+  /// R105: `_fetchBookName` / `_fetchSourceInfo` 是 async，与第一章
+  /// `_loadChapter` 并发；如果章节加载先完成，本方法看到的
+  /// `_bookName` / `_sourceUrl` 会是空串，scope 限定的规则就会被
+  /// Rust 端 R24 过滤逻辑当成 "empty caller context" 跳过，导致用户
+  /// 看到第一章规则没生效但第二章生效。这里用 `bookByIdProvider`
+  /// 兜底把 metadata 同步加载好再调 Rust。该 provider 是 FutureProvider
+  /// 已做缓存，重复 await 同一 future 不会重复查询数据库。
   Future<String> _applyReplaceRulesViaRust(
       String dbPath, String content) async {
     if (content.isEmpty) return content;
+    if (_bookName.isEmpty || _sourceUrl.isEmpty) {
+      try {
+        final book =
+            await ref.read(bookByIdProvider(widget.bookId).future);
+        if (book != null && mounted) {
+          if (_bookName.isEmpty) {
+            _bookName = book['name'] as String? ?? '';
+          }
+          if (_sourceUrl.isEmpty) {
+            _sourceUrl = book['source_url'] as String? ?? '';
+          }
+        }
+      } catch (e) {
+        debugPrint('[Reader] R105 backfill book metadata failed: $e');
+        // Fall through — the rule call will still proceed with whatever
+        // is populated (possibly empty), matching pre-R105 behaviour.
+      }
+    }
     try {
       final generation = ref.read(replaceRuleGenerationProvider);
       return await rust_api.applyReplaceRules(
