@@ -2262,7 +2262,24 @@ fn pde_ffi_dispatcher_primary_impl(
         }
         56 => wire__crate__api__explore_impl(port, ptr, rust_vec_len, data_len),
         57 => wire__crate__api__apply_replace_rules_impl(port, ptr, rust_vec_len, data_len),
-        _ => unreachable!(),
+        // R3: codegen default branch hit at runtime means Rust and Dart
+        // have inconsistent funcId tables. build.rs catches this at
+        // compile time when both sides are visible (R3 cross-check),
+        // but if the binary was built before the divergence we still
+        // surface a diagnostic message instead of a bare unreachable!().
+        // build.rs's R3 fragment guard depends on the exact substring
+        // "FRB primary dispatcher: unknown funcId" being present, so any
+        // codegen run that reverts this arm will fail the build.
+        other => {
+            tracing::error!("FRB primary dispatcher: unknown funcId {}", other);
+            eprintln!(
+                "[FRB] primary dispatcher: unknown funcId {} — Dart/Rust schema \
+                 mismatch. Rebuild both sides or check manual frb_generated patches \
+                 (see CURRENT_STATUS).",
+                other
+            );
+            panic!("FRB primary dispatcher: unknown funcId {}", other);
+        }
     }
 }
 
@@ -2273,8 +2290,23 @@ fn pde_ffi_dispatcher_sync_impl(
     data_len: i32,
 ) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
+    //
+    // R3: no sync wire fns are currently registered (every wire is async),
+    // so any call here means a Dart/Rust mismatch. Same diagnostic story
+    // as the primary dispatcher above. build.rs's R3 guard requires the
+    // "FRB sync dispatcher: unknown funcId" substring; codegen runs that
+    // restore `_ => unreachable!()` will fail the build.
     match func_id {
-        _ => unreachable!(),
+        other => {
+            tracing::error!("FRB sync dispatcher: unknown funcId {}", other);
+            eprintln!(
+                "[FRB] sync dispatcher: unknown funcId {} — no sync wire fns are \
+                 registered, so this means a Dart/Rust schema mismatch. Rebuild \
+                 both sides or check manual frb_generated patches.",
+                other
+            );
+            panic!("FRB sync dispatcher: unknown funcId {}", other);
+        }
     }
 }
 

@@ -11,6 +11,14 @@
 //! known-manual wire impls disappears from `src/frb_generated.rs`. It is
 //! intentionally string-matching (not a real Rust parser) so it stays cheap
 //! and survives codegen-format churn.
+//!
+//! **R3** (commit 15): the script also cross-checks the Rust dispatcher's
+//! funcId table against the Dart side (`flutter_app/lib/src/rust/frb_generated.dart`).
+//! If Dart calls a funcId that Rust doesn't dispatch, the build fails (the
+//! runtime would otherwise hit `unreachable!()` mid-request and surface as
+//! an unresponsive Flutter call). Rust having extra funcIds that Dart
+//! never calls only triggers a warning — that pattern fits "wire fn
+//! added but caller not yet wired up".
 
 use std::fs;
 use std::path::PathBuf;
@@ -70,6 +78,14 @@ const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
     "        57 =>",
 ];
 
+/// R3: the dispatcher default arms must surface the unknown funcId
+/// instead of bare `unreachable!()`. If a codegen run reverts those to
+/// the codegen template, this fragment list catches it.
+const REQUIRED_PANIC_FRAGMENTS: &[&str] = &[
+    "FRB primary dispatcher: unknown funcId",
+    "FRB sync dispatcher: unknown funcId",
+];
+
 fn main() {
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let frb = manifest_dir.join("src/frb_generated.rs");
@@ -101,6 +117,11 @@ fn main() {
             missing.push(*needle);
         }
     }
+    for needle in REQUIRED_PANIC_FRAGMENTS {
+        if !content.contains(needle) {
+            missing.push(*needle);
+        }
+    }
 
     if !missing.is_empty() {
         // Hard error: a missing wire fn means runtime calls from Dart will
@@ -115,11 +136,160 @@ fn main() {
             "frb_generated.rs is missing {} hand-edited wire/dispatch fragment(s). \
              A `flutter_rust_bridge_codegen generate` run probably overwrote the manual \
              patches. This guard only covers the funcIds we know were hand-edited \
-             (currently 42-52 plus 54-57; 53 is intentionally a hole, do not re-introduce). \
+             (currently 42-52 plus 54-57; 53 is intentionally a hole, do not re-introduce), \
+             plus the R3 informative panic in the dispatcher default arms. \
              funcIds outside that range are produced by codegen and are NOT checked here, \
              so a regression in those needs separate attention. See CURRENT_STATUS.md \
              (FRB patch chapter) for the full re-apply procedure.",
             missing.len()
         );
     }
+
+    // R3: cross-check Rust dispatcher funcIds against Dart-side wire calls.
+    // If the Dart binary calls a funcId Rust doesn't dispatch, the runtime
+    // will hit the dispatcher's default arm and panic mid-request, which
+    // surfaces as a hung Flutter future. Catching this at compile time
+    // requires both files to be visible — for headless / CI builds that
+    // only compile core, the Dart file may be absent; in that case we
+    // skip with a warning rather than fail.
+    let dart_path = manifest_dir.join("../../flutter_app/lib/src/rust/frb_generated.dart");
+    println!(
+        "cargo:rerun-if-changed={}",
+        dart_path.display()
+    );
+    let dart_content = match fs::read_to_string(&dart_path) {
+        Ok(s) => s,
+        Err(_) => {
+            // Don't fail; not every build environment has the Flutter
+            // tree available (e.g. cargo-only CI pipelines).
+            println!(
+                "cargo:warning=bridge build.rs: Dart frb_generated.dart not found at {} \
+                 (R3 funcId-table cross-check skipped)",
+                dart_path.display()
+            );
+            return;
+        }
+    };
+
+    let rust_ids = extract_rust_func_ids(&content);
+    let dart_ids = extract_dart_func_ids(&dart_content);
+
+    if rust_ids.is_empty() {
+        println!(
+            "cargo:warning=bridge build.rs: parsed 0 funcIds from Rust dispatcher \
+             — parser may be out of date with codegen format"
+        );
+        return;
+    }
+    if dart_ids.is_empty() {
+        println!(
+            "cargo:warning=bridge build.rs: parsed 0 funcIds from Dart frb_generated.dart \
+             — parser may be out of date with codegen format"
+        );
+        return;
+    }
+
+    let dart_only: Vec<i32> = dart_ids
+        .iter()
+        .copied()
+        .filter(|id| !rust_ids.contains(id))
+        .collect();
+    let rust_only: Vec<i32> = rust_ids
+        .iter()
+        .copied()
+        .filter(|id| !dart_ids.contains(id))
+        .collect();
+
+    if !rust_only.is_empty() {
+        // R3: Rust has wire fns Dart doesn't call. Common case is a
+        // hand-added wire fn pending its Dart caller — warn but don't
+        // fail.
+        println!(
+            "cargo:warning=bridge build.rs: Rust dispatcher has funcIds Dart never \
+             calls: {:?} — caller might be missing on the Dart side",
+            rust_only
+        );
+    }
+
+    if !dart_only.is_empty() {
+        panic!(
+            "Dart frb_generated.dart calls funcId(s) {:?} that the Rust dispatcher \
+             does NOT route. Runtime dispatch would hit `unreachable!()` and the \
+             Flutter request would hang. Re-run codegen on the side that's behind, \
+             or hand-patch the missing wire fn(s) into core/bridge/src/frb_generated.rs \
+             (see CURRENT_STATUS.md FRB patch chapter).",
+            dart_only
+        );
+    }
+}
+
+/// R3: extract all funcIds the Rust dispatcher routes.
+///
+/// The dispatcher arms look like `        42 => wire__crate__api__...`,
+/// generated with 8-space indent inside `match func_id { ... }`. We scan
+/// for that prefix to avoid false-matching numbers that appear inside
+/// function bodies or comments. Trailing `=>` is required so we don't
+/// pick up other constructs.
+fn extract_rust_func_ids(content: &str) -> Vec<i32> {
+    let mut ids = Vec::new();
+    for line in content.lines() {
+        // Rust dispatcher arms are 8-space-indented: "        42 => ..."
+        let stripped = match line.strip_prefix("        ") {
+            Some(s) => s,
+            None => continue,
+        };
+        // After leading 8 spaces, take ascii digits then space-then-`=>`
+        let (digits, rest) = take_digits(stripped);
+        if digits.is_empty() {
+            continue;
+        }
+        let rest = rest.trim_start();
+        if !rest.starts_with("=>") {
+            continue;
+        }
+        if let Ok(id) = digits.parse::<i32>() {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+/// R3: extract all funcIds the Dart binding calls.
+///
+/// Dart wire fn calls look like `            funcId: 42, port: port_);`
+/// inside the impl methods. We scan lines whose trimmed start is
+/// `funcId:` to avoid matching `funcId` mentions in doc comments or
+/// other contexts. Trailing comma is required.
+fn extract_dart_func_ids(content: &str) -> Vec<i32> {
+    let mut ids = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        let after_keyword = match trimmed.strip_prefix("funcId:") {
+            Some(s) => s.trim_start(),
+            None => continue,
+        };
+        let (digits, rest) = take_digits(after_keyword);
+        if digits.is_empty() {
+            continue;
+        }
+        // Must be followed by comma (i.e. an argument-list entry, not
+        // a property name in some unrelated map literal).
+        if !rest.trim_start().starts_with(',') {
+            continue;
+        }
+        if let Ok(id) = digits.parse::<i32>() {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+/// Slice off leading ASCII-digit run and return (digits, rest).
+fn take_digits(s: &str) -> (&str, &str) {
+    let split_at = s
+        .char_indices()
+        .find(|(_, c)| !c.is_ascii_digit())
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    s.split_at(split_at)
 }

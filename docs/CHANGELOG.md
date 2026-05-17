@@ -425,3 +425,33 @@ replace_rules
 - cargo test --workspace: 259 passed (+8 scope filter, +1 v10 migration)
 - flutter analyze: 0 issue
 - flutter test: 112 passed
+
+## 第十五批（2026-05-17，commit 15）— R3 FRB dispatcher 双层防御
+
+R3 之前在已知风险列表里挂着——`frb_generated.rs` 两处 `_ => unreachable!()` 是 codegen 默认模板，理论上 Dart/Rust funcId 表一致就到不了；但版本错配 / 手补错填 funcId 时会运行时 panic，表现为 Flutter future 无响应。本批做双层防御彻底关闭这个 hazard。
+
+| 项 | 严重度 | 摘要 |
+|----|--------|------|
+| R3 | 低 | 双层防御：(1) `core/bridge/build.rs` 编译期解析 Rust dispatcher 的 funcId 表与 Dart `flutter_app/lib/src/rust/frb_generated.dart` 的 funcId 调用集合，Dart 调了 Rust 没的 → build fail；Rust 多余 → cargo:warning（手补 wire fn 但 caller 暂未挂的 pattern 很常见，不阻塞）。(2) 两处 `_ => unreachable!()` 改成 `other => { tracing::error! + eprintln! + panic! }`，运行时仍 panic 但带 funcId 与 Dart/Rust mismatch 提示，方便诊断。build.rs 防覆盖断言扩展 `REQUIRED_PANIC_FRAGMENTS` 常量，未来 codegen 还原 `unreachable!()` 时也能 catch |
+
+**实现要点**：
+- build.rs 解析两端用纯字符串扫描，不引入 build-dep。Rust 端识别 `        N =>` 8-space-indent 模式（与现有 dispatcher fragment 检查复用）；Dart 端识别 `funcId: N,` trim_start 后开头模式，要求后接逗号避免误匹配 map literal
+- `take_digits` helper：char_indices 扫第一个非 ASCII digit 切分
+- 解析结果为空 → cargo:warning 不 fail，防御自身解析逻辑过期
+- Dart 文件不存在（CI/headless 只 build core）→ cargo:warning 跳过，不 fail
+- `cargo:rerun-if-changed=../../flutter_app/lib/src/rust/frb_generated.dart` 让 Dart 文件改动也触发 bridge 重 build
+
+**为什么值得做（即使 R3 触发概率极低）**：
+- 现有 build.rs 防的是"手补 wire fn 名字消失了"，R3 防的是另一类"funcId 表错配"——两类 bug 触发条件不同
+- 比如手补时 funcId 数字写错（57 写成 75），现 build.rs 看到 `wire__crate__api__apply_replace_rules_impl` 字符串还在就放行，但 dispatcher 里 funcId 75 不存在，运行时 unreachable! panic
+- R3 检查后这类 bug 在 build 期就被捕获
+
+**测试**：build.rs 内部 parsing 逻辑通过 `cargo build` 自身验证（当前 funcId 一致性 OK，build 不报错；如果失配 build 就直接 fail）。无需新单测——build.rs 的 #[cfg(test)] 块在 `cargo test` 不被执行。
+
+**已知风险（仍然成立）**：R22 / R23（Web 平台兼容）。R3 完成后 design-level backlog 全部清空。
+
+**验证**：
+- cargo check --workspace: clean (build.rs 一致性检查通过)
+- cargo test --workspace: 259 passed
+- flutter analyze: 0 issue
+- flutter test: 112 passed
