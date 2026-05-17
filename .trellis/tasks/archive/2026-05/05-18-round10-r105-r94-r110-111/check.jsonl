@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "spec index — 通用质量基线"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "check 阶段对照的 lint / typecheck / 测试 标准"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "R94 build.rs panic / warn 与 R105 await 失败兜底是否符合 spec"}
+{"file": ".trellis/tasks/05-18-round10-r105-r94-r110-111/prd.md", "reason": "验收标准与不在范围声明"}

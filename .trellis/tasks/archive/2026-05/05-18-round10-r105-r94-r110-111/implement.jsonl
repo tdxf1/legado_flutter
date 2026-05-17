@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "spec index — pre-development checklist + 项目级别开发约定，确保 sub-agent 进入正确上下文"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "R94 build.rs 修改涉及 panic / warn 路径；R105 涉及 await 失败回退；按 spec 错误处理约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "lint / typecheck / 测试 行为基线"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "R105 reader_page → bridge → core-source 跨 isolate / 跨层数据流，需要按跨层指南思考首章 race"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "R110/R111 把 _showAddRuleDialog 抽成 _showRuleEditDialog 复用，避免 add/edit 两套 UI"}
+{"file": ".trellis/tasks/05-18-round10-r105-r94-r110-111/prd.md", "reason": "本任务 prd 详细描述 4 项修复策略与验收标准"}
