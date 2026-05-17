@@ -853,16 +853,21 @@ mod tests {
             .join("test_chapter_dao.db")
             .to_string_lossy()
             .to_string();
-        let conn = init_database(&db_path).unwrap();
+        let mut conn = init_database(&db_path).unwrap();
         // Insert required book_source for foreign key constraint
         conn.execute(
             "INSERT INTO book_sources (id, name, url, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params!["src1", "Test", "https://example.com", chrono::Utc::now().timestamp(), chrono::Utc::now().timestamp()],
         ).unwrap();
-        let book_dao = crate::book_dao::BookDao::new(&conn);
-        let book = book_dao.create("src1", None, "Book", None).unwrap();
+        // Take a short-lived &conn borrow for BookDao, then drop it so we
+        // can re-borrow as &mut for ChapterDao (R77: ChapterDao now needs
+        // &mut Connection to open transactions internally).
+        let book = {
+            let book_dao = crate::book_dao::BookDao::new(&conn);
+            book_dao.create("src1", None, "Book", None).unwrap()
+        };
 
-        let dao = crate::chapter_dao::ChapterDao::new(&conn);
+        let dao = crate::chapter_dao::ChapterDao::new(&mut conn);
         let chapter = dao
             .create(&book.id, 0, "Chapter 1", "https://example.com/ch1")
             .unwrap();

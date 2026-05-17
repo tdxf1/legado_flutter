@@ -42,6 +42,12 @@ pub fn pooled_conn(
 /// `'static` is satisfied because [`SqlitePool::clone`] yields an
 /// owned, fully self-contained handle and the closure captures only
 /// inputs the caller has already cloned/owned.
+///
+/// **Atomicity note (R73)**: each call grabs a fresh connection and
+/// commits independently. Sequences of `db_blocking` calls do *not*
+/// form a single transaction — the connection is returned to the pool
+/// between calls. Use [`db_transaction`] when a sequence of DAO
+/// operations must succeed or fail together.
 pub async fn db_blocking<F, T, E>(state: &AppState, f: F) -> Result<T, ApiError>
 where
     F: FnOnce(
@@ -58,6 +64,58 @@ where
             .get()
             .map_err(|e| ApiError::Database(format!("connection pool: {e}")))?;
         f(&mut conn).map_err(Into::into)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("blocking task join failed: {e}")))?
+}
+
+/// R74: run a synchronous DB closure inside a single transaction on
+/// tokio's blocking pool.
+///
+/// Same off-thread story as [`db_blocking`], with the addition that the
+/// closure receives a `&mut rusqlite::Transaction` instead of a raw
+/// connection. The transaction is committed automatically when the
+/// closure returns `Ok(_)` and rolled back when it returns `Err(_)` or
+/// panics — `Transaction`'s `Drop` impl rolls back if you don't call
+/// `.commit()`, so we explicitly commit at the end of the success
+/// branch.
+///
+/// Use this whenever a sequence of writes must be atomic. Multi-step
+/// sequences spread across separate `db_blocking` calls each commit
+/// independently and can leave the DB half-updated if a later step
+/// fails (R73).
+///
+/// Note: DAO constructors that take `&Connection` / `&mut Connection`
+/// still work because `Transaction` derefs to `Connection`. Pass
+/// `&*tx` or `tx.deref_mut()` if a constructor needs the explicit
+/// reference type.
+pub async fn db_transaction<F, T, E>(state: &AppState, f: F) -> Result<T, ApiError>
+where
+    F: FnOnce(&mut rusqlite::Transaction<'_>) -> Result<T, E> + Send + 'static,
+    T: Send + 'static,
+    E: Into<ApiError> + Send + 'static,
+{
+    let pool: SqlitePool = state.pool.clone();
+    tokio::task::spawn_blocking(move || -> Result<T, ApiError> {
+        let mut conn = pool
+            .get()
+            .map_err(|e| ApiError::Database(format!("connection pool: {e}")))?;
+        let mut tx = conn
+            .transaction()
+            .map_err(|e| ApiError::Database(format!("begin transaction: {e}")))?;
+        match f(&mut tx) {
+            Ok(value) => {
+                tx.commit()
+                    .map_err(|e| ApiError::Database(format!("commit transaction: {e}")))?;
+                Ok(value)
+            }
+            Err(e) => {
+                // Drop without commit triggers rollback; explicit drop is
+                // not strictly needed but documents intent.
+                drop(tx);
+                Err(e.into())
+            }
+        }
     })
     .await
     .map_err(|e| ApiError::Internal(format!("blocking task join failed: {e}")))?

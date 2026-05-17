@@ -11,27 +11,30 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 /// 章节 DAO
+///
+/// **R77**: holds a `&mut Connection` because some operations
+/// (`replace_by_book_preserving_content`, `replace_by_book`) open a
+/// `rusqlite::Transaction`, which requires mutable access. Single-row
+/// helpers (`get_by_id`, `update_content`, etc.) only need `&Connection`
+/// internally; the `&mut` requirement is a side-effect of API
+/// uniformity, not a real exclusivity need.
 pub struct ChapterDao<'a> {
-    conn: &'a Connection,
+    conn: &'a mut Connection,
 }
 
 impl<'a> ChapterDao<'a> {
     /// 创建新的 ChapterDao
-    pub fn new(conn: &'a Connection) -> Self {
+    pub fn new(conn: &'a mut Connection) -> Self {
         Self { conn }
     }
 
-    /// 插入或更新章节。
-    ///
-    /// `content = COALESCE(excluded.content, content)` 是 by-design：
-    /// 调用方频繁通过 [`replace_by_book_preserving_content`] 刷新目录，
-    /// 这种场景下传入的 chapter 没有 content（None），我们必须保留旧的
-    /// content。如果调用方真的想清空正文（强制重新拉），应显式传 Some("")
-    /// 而不是 None，或者走 [`update_content`] / [`replace_by_book`]。
-    pub fn upsert(&self, chapter: &Chapter) -> SqlResult<()> {
+    /// Internal upsert that operates on any connection-like reference
+    /// (`&Connection`, `&Transaction`). Used by both the standalone
+    /// methods on `ChapterDao` and the `_in_tx` variants that run
+    /// inside a caller-supplied transaction.
+    fn upsert_using_conn(conn: &Connection, chapter: &Chapter) -> SqlResult<()> {
         debug!("插入/更新章节: {} - {}", chapter.title, chapter.url);
-
-        self.conn.execute(
+        conn.execute(
             "INSERT INTO chapters (
                 id, book_id, index_num, title, url, content,
                 is_volume, is_checked, start, end,
@@ -42,7 +45,8 @@ impl<'a> ChapterDao<'a> {
                 title = excluded.title,
                 url = excluded.url,
                 -- Preserve cached content when callers refresh the TOC with
-                -- a contentless chapter (None). See doc comment above.
+                -- a contentless chapter (None). See doc comment on
+                -- `upsert` below.
                 content = COALESCE(excluded.content, content),
                 is_volume = excluded.is_volume,
                 is_checked = excluded.is_checked,
@@ -64,60 +68,95 @@ impl<'a> ChapterDao<'a> {
                 chapter.updated_at,
             ],
         )?;
-
         Ok(())
     }
 
+    /// Internal `get_by_book` for use against a `Transaction`. Same
+    /// shape as the public method but takes a raw `&Connection`.
+    fn get_by_book_using_conn(conn: &Connection, book_id: &str) -> SqlResult<Vec<Chapter>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, book_id, index_num, title, url, content,
+                    is_volume, is_checked, start, end,
+                    created_at, updated_at
+             FROM chapters WHERE book_id = ? ORDER BY index_num ASC",
+        )?;
+        let rows = stmt.query_map(params![book_id], chapter_from_row)?;
+        rows.collect()
+    }
+
+    /// 插入或更新章节。
+    ///
+    /// `content = COALESCE(excluded.content, content)` 是 by-design：
+    /// 调用方频繁通过 [`replace_by_book_preserving_content`] 刷新目录，
+    /// 这种场景下传入的 chapter 没有 content（None），我们必须保留旧的
+    /// content。如果调用方真的想清空正文（强制重新拉），应显式传 Some("")
+    /// 而不是 None，或者走 [`update_content`] / [`replace_by_book`]。
+    pub fn upsert(&self, chapter: &Chapter) -> SqlResult<()> {
+        Self::upsert_using_conn(self.conn, chapter)
+    }
+
+    /// Replace all chapters for `book_id`, preserving previously-saved
+    /// chapter content (matched by URL) so that already-read chapters
+    /// don't lose their cached body just because the chapter list was
+    /// re-fetched.
+    ///
+    /// **Transaction behaviour (R77)**: this method runs the DELETE +
+    /// UPSERT batch as a single atomic unit. Previously it called raw
+    /// `BEGIN` / `COMMIT` via `execute_batch`, which prevented composition
+    /// — callers that wanted "replace chapters AND update book metadata"
+    /// in one transaction couldn't, because nested `BEGIN` errors out on
+    /// SQLite. Now we use the `rusqlite::Connection::transaction()`
+    /// scope guard, which RAII-rolls-back on error or panic and is safe
+    /// to call from outside any transaction.
+    ///
+    /// If you need to combine this with other writes in a larger
+    /// transaction, use [`replace_by_book_preserving_content_in_tx`]
+    /// instead and supply your own transaction.
     pub fn replace_by_book_preserving_content(
-        &self,
+        &mut self,
         book_id: &str,
         chapters: &[Chapter],
     ) -> SqlResult<()> {
-        let existing = self.get_by_book(book_id)?;
+        let tx = self.conn.transaction()?;
+        Self::replace_by_book_preserving_content_in_tx(&tx, book_id, chapters)?;
+        tx.commit()
+    }
+
+    /// In-transaction variant of [`replace_by_book_preserving_content`]
+    /// for callers that already hold a transaction (e.g. api-server's
+    /// `db_transaction` helper combining chapter replace with book
+    /// metadata updates).
+    pub fn replace_by_book_preserving_content_in_tx(
+        tx: &rusqlite::Transaction<'_>,
+        book_id: &str,
+        chapters: &[Chapter],
+    ) -> SqlResult<()> {
+        // Snapshot existing chapter contents indexed by URL so we can
+        // re-attach them after the DELETE+INSERT cycle.
+        let existing = Self::get_by_book_using_conn(tx, book_id)?;
         let content_by_url: HashMap<String, Option<String>> = existing
             .into_iter()
             .map(|chapter| (chapter.url, chapter.content))
             .collect();
 
-        self.conn.execute_batch("BEGIN")?;
-        let result = (|| -> SqlResult<()> {
-            self.conn
-                .execute("DELETE FROM chapters WHERE book_id = ?", params![book_id])?;
-            for chapter in chapters {
-                let mut chapter = chapter.clone();
-                if chapter.content.is_none() {
-                    chapter.content = content_by_url.get(&chapter.url).cloned().flatten();
-                }
-                self.upsert(&chapter)?;
+        tx.execute("DELETE FROM chapters WHERE book_id = ?", params![book_id])?;
+        for chapter in chapters {
+            let mut chapter = chapter.clone();
+            if chapter.content.is_none() {
+                chapter.content = content_by_url.get(&chapter.url).cloned().flatten();
             }
-            Ok(())
-        })();
-        match result {
-            Ok(()) => self.conn.execute_batch("COMMIT"),
-            Err(e) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
-                Err(e)
-            }
+            Self::upsert_using_conn(tx, &chapter)?;
         }
+        Ok(())
     }
 
-    pub fn replace_by_book(&self, book_id: &str, chapters: &[Chapter]) -> SqlResult<()> {
-        self.conn.execute_batch("BEGIN")?;
-        let result = (|| -> SqlResult<()> {
-            self.conn
-                .execute("DELETE FROM chapters WHERE book_id = ?", params![book_id])?;
-            for chapter in chapters {
-                self.upsert(chapter)?;
-            }
-            Ok(())
-        })();
-        match result {
-            Ok(()) => self.conn.execute_batch("COMMIT"),
-            Err(e) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
-                Err(e)
-            }
+    pub fn replace_by_book(&mut self, book_id: &str, chapters: &[Chapter]) -> SqlResult<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM chapters WHERE book_id = ?", params![book_id])?;
+        for chapter in chapters {
+            Self::upsert_using_conn(&tx, chapter)?;
         }
+        tx.commit()
     }
 
     /// 根据 ID 获取章节
@@ -140,15 +179,7 @@ impl<'a> ChapterDao<'a> {
 
     /// 获取书籍的所有章节
     pub fn get_by_book(&self, book_id: &str) -> SqlResult<Vec<Chapter>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, book_id, index_num, title, url, content,
-                    is_volume, is_checked, start, end,
-                    created_at, updated_at
-             FROM chapters WHERE book_id = ? ORDER BY index_num ASC",
-        )?;
-
-        let rows = stmt.query_map(params![book_id], chapter_from_row)?;
-        rows.collect()
+        Self::get_by_book_using_conn(self.conn, book_id)
     }
 
     /// 根据 URL 获取章节
@@ -282,8 +313,8 @@ mod tests {
 
     #[test]
     fn test_upsert_updates_index_num() {
-        let (_dir, conn) = setup();
-        let dao = ChapterDao::new(&conn);
+        let (_dir, mut conn) = setup();
+        let dao = ChapterDao::new(&mut conn);
         dao.upsert(&chapter("ch1", 0, "/a", None)).unwrap();
         dao.upsert(&chapter("ch1", 3, "/a", None)).unwrap();
         let updated = dao.get_by_id("ch1").unwrap().unwrap();
@@ -292,8 +323,8 @@ mod tests {
 
     #[test]
     fn test_replace_by_book_removes_stale_and_preserves_content_by_url() {
-        let (_dir, conn) = setup();
-        let dao = ChapterDao::new(&conn);
+        let (_dir, mut conn) = setup();
+        let mut dao = ChapterDao::new(&mut conn);
         dao.upsert(&chapter("old1", 0, "/keep", Some("cached")))
             .unwrap();
         dao.upsert(&chapter("old2", 1, "/stale", Some("stale")))
@@ -315,8 +346,8 @@ mod tests {
 
     #[test]
     fn test_replace_by_book_drops_cached_content() {
-        let (_dir, conn) = setup();
-        let dao = ChapterDao::new(&conn);
+        let (_dir, mut conn) = setup();
+        let mut dao = ChapterDao::new(&mut conn);
         dao.upsert(&chapter("old1", 0, "/same", Some("old cached")))
             .unwrap();
         dao.replace_by_book("book1", &[chapter("new1", 0, "/same", None)])

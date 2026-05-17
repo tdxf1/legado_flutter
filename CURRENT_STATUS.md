@@ -438,17 +438,19 @@ core/
 历次审查与修复的完整时间线已迁移到 [`docs/CHANGELOG.md`](docs/CHANGELOG.md)。
 当前 STATUS 只保留"最近一批的状态摘要"。
 
-**最近一批**：第十批（2026-05-17，commit 10）— R60 api-server DAO 包 spawn_blocking。
-第九批清完所有可小改 R 项后，剩下唯一架构性问题：Axum handler 在 tokio worker 上跑同步 sqlite，单个慢查询阻塞整个 worker（搜索期间 `/health` probe 30s 超时）。
+**最近一批**：第十一批（2026-05-17，commit 11）— R71-R77: 事务化 + 多步 db_blocking 合并。
+第五轮全面复审在 R60 重构后捞出 13 项（R71-R83），其中 R73 是真实回归（多步 DB 操作失去原子性）。本批一次性修复 5 项最高 ROI 的：
 
-本批新增 `util::db_blocking<F, T, E>` helper，转换全 9 个路由 41 处 DAO 调用：
-- sources / bookshelf / replace_rules / explore / reader / search / sse
-- `search_single_source` 与 `run_one` 因 error 类型是自定义 tuple，直接用 `spawn_blocking` 不走 helper
-- 关键设计：克隆 `SqlitePool` (Arc) 进闭包，在闭包内 `pool.get()` 绕过 PooledConnection 的非 'static 生命周期
+- 高危：R74 新增 `db_transaction` helper / R73 `add_book` + `refresh_chapters` 把 chapter replace + book metadata 合并为单事务（修真实回归）
+- 中等：R72 减少 db_blocking 调用次数 / R71 book+source lookup 合并为单 db_blocking / R77 chapter_dao 改用 `rusqlite::Transaction` RAII（解锁 R73 的事务嵌套）
 
-**已知风险（仍然成立）**：R3 codegen 模板 unreachable / R22 / R23 / R24 ReplaceRule.scope（需 schema 改动）—— 都是设计层面问题，不是代码 bug。
+**关键架构改动**：`ChapterDao::new` 由 `&Connection` 改 `&mut Connection`，因为 `Connection::transaction()` 需要可变借用。这是破坏性改动，影响 `core_storage::Storage`、`bridge/api.rs` 6 处 caller、api-server 多处。新增 `replace_by_book_preserving_content_in_tx` 静态函数给已持有事务的 caller 复用 chapter replace 逻辑。
 
-**总评**：经过 4 轮全面复审 + 10 个 commit 的迭代，代码库的实质性问题（70+ 项 R + P）全部清空。剩余的"已知风险"是设计层面的 trade-off 或 Web 平台兼容性，不阻塞 Android 主线。每批完成后 `cargo test --workspace` 与 `flutter test` 都全绿；本批完成时 cargo 248 / flutter 112 / `flutter analyze` 0 issue。详细问题清单与具体改动见 CHANGELOG。
+**剩余 R 项**：R75 (重复代码) / R76 (fan-out 嵌套 spawn_blocking) / R78 (SourceDao 单条 upsert) / R79 (O(n²) brace scan) / R80 (mounted guard) / R81 (FRB worker pool) / R82 (parser.search Result)。都是 perf nano / 设计层重构 / 生产路径不可达，留作后续。
+
+**已知风险（仍然成立）**：R3 codegen 模板 unreachable / R22 / R23 / R24 ReplaceRule.scope（需 schema 改动）。
+
+**总评**：经过 5 轮全面复审 + 11 个 commit 的迭代，所有"真实正确性问题"全部清空。剩余约 7 项 R 都是 perf 优化、命名/注释、或设计层重构话题，不阻塞 Android 主线。每批完成后 `cargo test --workspace` 与 `flutter test` 都全绿；本批完成时 cargo 248 / flutter 112 / `flutter analyze` 0 issue。详细问题清单与具体改动见 CHANGELOG。
 
 ---
 

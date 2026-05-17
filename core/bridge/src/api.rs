@@ -64,12 +64,12 @@ pub fn save_book(db_path: String, book_json: String) -> Result<(), String> {
 
 /// 从书架删除一本书（同时级联删除该书籍的章节和阅读进度）
 pub fn delete_book(db_path: String, id: String) -> Result<(), String> {
-    let conn = open_db(&db_path)?;
-    let book_dao = core_storage::book_dao::BookDao::new(&conn);
+    let mut conn = open_db(&db_path)?;
     // 先删除章节和进度（子记录）
-    let _ = core_storage::chapter_dao::ChapterDao::new(&conn).delete_by_book(&id);
+    let _ = core_storage::chapter_dao::ChapterDao::new(&mut conn).delete_by_book(&id);
     let _ = core_storage::progress_dao::ProgressDao::new(&conn).delete(&id);
     // 再删除书籍本身
+    let book_dao = core_storage::book_dao::BookDao::new(&conn);
     book_dao.delete(&id).map_err(|e| format!("删除失败: {}", e))
 }
 
@@ -172,8 +172,8 @@ pub fn get_source_for_download(db_path: String, source_id: String) -> Result<Str
 
 /// 获取某本书的所有章节，返回 JSON 数组
 pub fn get_book_chapters(db_path: String, book_id: String) -> Result<String, String> {
-    let conn = open_db(&db_path)?;
-    let dao = core_storage::chapter_dao::ChapterDao::new(&conn);
+    let mut conn = open_db(&db_path)?;
+    let dao = core_storage::chapter_dao::ChapterDao::new(&mut conn);
     let chapters = dao
         .get_by_book(&book_id)
         .map_err(|e| format!("获取章节列表失败: {}", e))?;
@@ -186,18 +186,18 @@ pub fn update_chapter_content(
     chapter_id: String,
     content: String,
 ) -> Result<(), String> {
-    let conn = open_db(&db_path)?;
-    let dao = core_storage::chapter_dao::ChapterDao::new(&conn);
+    let mut conn = open_db(&db_path)?;
+    let dao = core_storage::chapter_dao::ChapterDao::new(&mut conn);
     dao.update_content(&chapter_id, &content)
         .map_err(|e| format!("更新章节内容失败: {}", e))
 }
 
 /// 保存章节（chapter_json 为 storage::Chapter 的 JSON）
 pub fn save_chapter(db_path: String, chapter_json: String) -> Result<(), String> {
-    let conn = open_db(&db_path)?;
+    let mut conn = open_db(&db_path)?;
     let chapter: core_storage::models::Chapter =
         serde_json::from_str(&chapter_json).map_err(|e| format!("JSON 解析失败: {}", e))?;
-    let dao = core_storage::chapter_dao::ChapterDao::new(&conn);
+    let dao = core_storage::chapter_dao::ChapterDao::new(&mut conn);
     dao.upsert(&chapter)
         .map_err(|e| format!("保存章节失败: {}", e))
 }
@@ -208,10 +208,10 @@ pub fn replace_book_chapters_preserving_content(
     book_id: String,
     chapters_json: String,
 ) -> Result<(), String> {
-    let conn = open_db(&db_path)?;
+    let mut conn = open_db(&db_path)?;
     let chapters: Vec<core_storage::models::Chapter> =
         serde_json::from_str(&chapters_json).map_err(|e| format!("JSON 解析失败: {}", e))?;
-    let dao = core_storage::chapter_dao::ChapterDao::new(&conn);
+    let mut dao = core_storage::chapter_dao::ChapterDao::new(&mut conn);
     dao.replace_by_book_preserving_content(&book_id, &chapters)
         .map_err(|e| format!("批量保存章节失败: {}", e))
 }
@@ -222,18 +222,18 @@ pub fn replace_book_chapters(
     book_id: String,
     chapters_json: String,
 ) -> Result<(), String> {
-    let conn = open_db(&db_path)?;
+    let mut conn = open_db(&db_path)?;
     let chapters: Vec<core_storage::models::Chapter> =
         serde_json::from_str(&chapters_json).map_err(|e| format!("JSON 解析失败: {}", e))?;
-    let dao = core_storage::chapter_dao::ChapterDao::new(&conn);
+    let mut dao = core_storage::chapter_dao::ChapterDao::new(&mut conn);
     dao.replace_by_book(&book_id, &chapters)
         .map_err(|e| format!("批量替换章节失败: {}", e))
 }
 
 /// 删除章节
 pub fn delete_chapter(db_path: String, id: String) -> Result<(), String> {
-    let conn = open_db(&db_path)?;
-    let dao = core_storage::chapter_dao::ChapterDao::new(&conn);
+    let mut conn = open_db(&db_path)?;
+    let dao = core_storage::chapter_dao::ChapterDao::new(&mut conn);
     dao.delete(&id).map_err(|e| format!("删除章节失败: {}", e))
 }
 

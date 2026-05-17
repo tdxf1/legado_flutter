@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use crate::error::ApiError;
 use crate::state::AppState;
 use crate::util;
-use crate::util::db_blocking;
+use crate::util::{db_blocking, db_transaction};
 
 #[derive(Debug, Serialize)]
 pub struct ChapterContentResponse {
@@ -126,27 +126,26 @@ async fn get_chapter_content(
         } => (chapter_url, chapter_title, chapter_id),
     };
 
-    let book_id_for_book = book_id.clone();
+    // R71: collapse the previous "lookup book → lookup source" pair
+    // into a single db_blocking. Both reads share one PooledConnection
+    // and one tokio worker switch, instead of two of each. This is the
+    // hot path for "user opens a chapter with content not yet cached".
+    let book_id_for_lookup = book_id.clone();
     let chapter_url_for_check = chapter_url.clone();
-    let source_id = db_blocking(&state, move |conn| {
-        let dao = core_storage::book_dao::BookDao::new(conn);
-        let book = dao
-            .get_by_id(&book_id_for_book)
+    let storage_source = db_blocking(&state, move |conn| -> Result<core_storage::models::BookSource, ApiError> {
+        let book_dao = core_storage::book_dao::BookDao::new(conn);
+        let book = book_dao
+            .get_by_id(&book_id_for_lookup)
             .map_err(|e| ApiError::Database(e.to_string()))?
-            .ok_or_else(|| ApiError::NotFound(format!("书籍不存在: {}", book_id_for_book)))?;
+            .ok_or_else(|| ApiError::NotFound(format!("书籍不存在: {}", book_id_for_lookup)))?;
         if book.source_id.is_empty() || chapter_url_for_check.is_empty() {
             return Err(ApiError::BadRequest("缺少书源信息或章节链接".into()));
         }
-        Ok(book.source_id)
-    })
-    .await?;
-
-    let source_id_for_lookup = source_id.clone();
-    let storage_source = db_blocking(&state, move |conn| {
-        let dao = core_storage::source_dao::SourceDao::new(conn);
-        dao.get_by_id(&source_id_for_lookup)
+        let source_dao = core_storage::source_dao::SourceDao::new(conn);
+        source_dao
+            .get_by_id(&book.source_id)
             .map_err(|e| ApiError::Database(e.to_string()))?
-            .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", source_id_for_lookup)))
+            .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", book.source_id)))
     })
     .await?;
 
@@ -253,36 +252,39 @@ async fn refresh_chapters(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
 ) -> Result<Json<RefreshChaptersResponse>, ApiError> {
+    // R71: same merge as get_chapter_content — collapse book lookup +
+    // source lookup into a single db_blocking. We also pull `toc_url`
+    // out of the book row in the same closure so the caller doesn't
+    // need to round-trip again just to read it.
     let book_id_for_lookup = book_id.clone();
-    let (source_id, toc_url) = db_blocking(&state, move |conn| {
-        let dao = core_storage::book_dao::BookDao::new(conn);
-        let book = dao
-            .get_by_id(&book_id_for_lookup)
-            .map_err(|e| ApiError::Database(e.to_string()))?
-            .ok_or_else(|| ApiError::NotFound(format!("书籍不存在: {}", book_id_for_lookup)))?;
-
-        if book.source_id.is_empty() {
-            return Err(ApiError::BadRequest("缺少书源信息".into()));
-        }
-        let url = book
-            .toc_url
-            .filter(|t| !t.trim().is_empty())
-            .or_else(|| book.book_url.clone())
-            .unwrap_or_default();
-        if url.is_empty() {
-            return Err(ApiError::BadRequest("缺少 book_url".into()));
-        }
-        Ok((book.source_id, url))
-    })
-    .await?;
-
-    let source_id_for_lookup = source_id.clone();
-    let storage_source = db_blocking(&state, move |conn| {
-        let dao = core_storage::source_dao::SourceDao::new(conn);
-        dao.get_by_id(&source_id_for_lookup)
-            .map_err(|e| ApiError::Database(e.to_string()))?
-            .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", source_id_for_lookup)))
-    })
+    let (storage_source, toc_url) = db_blocking(
+        &state,
+        move |conn| -> Result<(core_storage::models::BookSource, String), ApiError> {
+            let book_dao = core_storage::book_dao::BookDao::new(conn);
+            let book = book_dao
+                .get_by_id(&book_id_for_lookup)
+                .map_err(|e| ApiError::Database(e.to_string()))?
+                .ok_or_else(|| ApiError::NotFound(format!("书籍不存在: {}", book_id_for_lookup)))?;
+            if book.source_id.is_empty() {
+                return Err(ApiError::BadRequest("缺少书源信息".into()));
+            }
+            let url = book
+                .toc_url
+                .clone()
+                .filter(|t| !t.trim().is_empty())
+                .or_else(|| book.book_url.clone())
+                .unwrap_or_default();
+            if url.is_empty() {
+                return Err(ApiError::BadRequest("缺少 book_url".into()));
+            }
+            let source_dao = core_storage::source_dao::SourceDao::new(conn);
+            let source = source_dao
+                .get_by_id(&book.source_id)
+                .map_err(|e| ApiError::Database(e.to_string()))?
+                .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", book.source_id)))?;
+            Ok((source, url))
+        },
+    )
     .await?;
     let source = util::storage_to_core_source(&storage_source)?;
     let parser = core_source::parser::BookSourceParser::new();
@@ -312,25 +314,32 @@ async fn refresh_chapters(
         })
         .collect();
     let total_count = chapters.len();
-    let book_id_for_replace = book_id.clone();
-    db_blocking(&state, move |conn| {
-        let chapter_dao = core_storage::chapter_dao::ChapterDao::new(conn);
-        chapter_dao
-            .replace_by_book_preserving_content(&book_id_for_replace, &storage_chapters)
-            .map_err(|e| ApiError::Database(e.to_string()))
-    })
-    .await?;
 
-    let book_id_for_count = book_id.clone();
-    db_blocking(&state, move |conn| {
-        let dao = core_storage::book_dao::BookDao::new(conn);
-        let mut book = dao
-            .get_by_id(&book_id_for_count)
+    // R73: chapter replace + book.chapter_count update form an atomic
+    // pair. Previously each ran in its own db_blocking → its own
+    // implicit commit, so a failure between them left
+    // book.chapter_count stale relative to the freshly-rewritten
+    // chapters table. Now both run inside a single Transaction.
+    let book_id_for_tx = book_id.clone();
+    db_transaction(&state, move |tx| {
+        // R77: use the `_in_tx` variant so the chapter replace doesn't
+        // try to open its own nested transaction. Pass the borrow
+        // directly — Transaction is the right type for the helper.
+        core_storage::chapter_dao::ChapterDao::replace_by_book_preserving_content_in_tx(
+            tx,
+            &book_id_for_tx,
+            &storage_chapters,
+        )
+        .map_err(|e| ApiError::Database(e.to_string()))?;
+        let book_dao = core_storage::book_dao::BookDao::new(tx);
+        let mut book = book_dao
+            .get_by_id(&book_id_for_tx)
             .map_err(|e| ApiError::Database(e.to_string()))?
             .ok_or_else(|| ApiError::Internal("book not found after refresh".into()))?;
         book.chapter_count = total_count as i32;
         book.updated_at = chrono::Utc::now().timestamp();
-        dao.upsert(&book)
+        book_dao
+            .upsert(&book)
             .map_err(|e| ApiError::Database(e.to_string()))
     })
     .await?;

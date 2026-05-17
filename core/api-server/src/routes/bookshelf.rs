@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::error::ApiError;
 use crate::state::AppState;
 use crate::util;
-use crate::util::db_blocking;
+use crate::util::{db_blocking, db_transaction};
 
 fn stable_hash(input: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(input.as_bytes()))
@@ -138,21 +138,26 @@ async fn add_book(
             updated_at: now,
         })
         .collect();
-    let book_id_for_chapters = book_id.clone();
-    db_blocking(&state, move |conn| {
-        let chapter_dao = core_storage::chapter_dao::ChapterDao::new(conn);
-        chapter_dao
-            .replace_by_book_preserving_content(&book_id_for_chapters, &storage_chapters)
-            .map_err(|e| ApiError::Database(e.to_string()))
-    })
-    .await?;
 
-    // Update book chapter count + metadata
-    let book_id_for_meta = book_id.clone();
-    db_blocking(&state, move |conn| {
-        let dao = core_storage::book_dao::BookDao::new(conn);
-        let mut book = dao
-            .get_by_id(&book_id_for_meta)
+    // R73: chapter replace + book metadata update form an atomic pair
+    // post-network-IO. Previously each ran in its own db_blocking →
+    // independent commits, so a failure between the two left the book
+    // table out of sync with the chapters table. Now they share one
+    // Transaction.
+    //
+    // R72: collapses what used to be two separate db_blocking calls into
+    // one round-trip, saving a thread-switch + pool slot.
+    let book_id_for_tx = book_id.clone();
+    db_transaction(&state, move |tx| {
+        core_storage::chapter_dao::ChapterDao::replace_by_book_preserving_content_in_tx(
+            tx,
+            &book_id_for_tx,
+            &storage_chapters,
+        )
+        .map_err(|e| ApiError::Database(e.to_string()))?;
+        let book_dao = core_storage::book_dao::BookDao::new(tx);
+        let mut book = book_dao
+            .get_by_id(&book_id_for_tx)
             .map_err(|e| ApiError::Database(e.to_string()))?
             .ok_or_else(|| ApiError::Internal("book not found after save".into()))?;
         book.chapter_count = chapter_count as i32;
@@ -172,7 +177,8 @@ async fn add_book(
             }
             book.toc_url = bi.chapters_url.clone();
         }
-        dao.upsert(&book)
+        book_dao
+            .upsert(&book)
             .map_err(|e| ApiError::Database(e.to_string()))
     })
     .await?;

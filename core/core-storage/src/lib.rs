@@ -71,8 +71,8 @@ impl StorageManager {
     }
 
     /// 获取 ChapterDao
-    pub fn chapter_dao(&self) -> ChapterDao<'_> {
-        ChapterDao::new(&self.conn)
+    pub fn chapter_dao(&mut self) -> ChapterDao<'_> {
+        ChapterDao::new(&mut self.conn)
     }
 
     /// 获取 ProgressDao
