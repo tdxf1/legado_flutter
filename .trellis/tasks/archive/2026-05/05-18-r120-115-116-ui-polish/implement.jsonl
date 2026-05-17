@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "spec index"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "lint/test 基线"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "R120 抽 stateful widget 避免 controller pattern 在多处重复"}
+{"file": ".trellis/tasks/05-18-r120-115-116-ui-polish/prd.md", "reason": "本任务 PRD 含三项策略与验收"}
