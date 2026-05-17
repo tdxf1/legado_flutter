@@ -933,30 +933,48 @@ fn apply_replace_rules_impl(
     book_origin: &str,
     apply_to_title: bool,
 ) -> Result<String, String> {
-    let rules = load_enabled_replace_rules(db_path, cache_generation)?;
-    // R12: collect all compiled regexes under a *single* short critical
-    // section, then drop the lock before running `replace_all`. Previously
-    // each iteration re-acquired the global REGEX_CACHE mutex and held it
-    // across `replace_all`, serialising every concurrent caller and
-    // throwing away the perf wins of moving regex evaluation off the Dart
-    // main isolate. `regex::Regex` clones are cheap (Arc internally).
+    // R123: rule list cache + compiled regex cache live under a SINGLE
+    // mutex (`REPLACE_RULES_CACHE`). Previously the two caches each had
+    // their own lock, so two concurrent callers with different
+    // generations could interleave such that one's `ensure_generation`
+    // wiped the other's freshly-built regex entries — leaving callers
+    // with regexes from the wrong generation. Unified lock guarantees
+    // that within a single critical section both halves of the cache
+    // are observed at the same generation.
     //
-    // R27/R47: pin the regex cache to `cache_generation`. When the caller
-    // bumps the generation (rule CRUD), the cache is dropped and rebuilt
-    // — this is what guarantees a freshly-edited pattern actually takes
-    // effect (previously the cache keyed by `id` only and silently served
-    // the old compiled regex). It also bounds memory: cache size never
-    // exceeds the current generation's enabled rule count.
+    // R12: compiled regexes are cloned out of the cache (cheap — Regex
+    // is internally Arc-based) before releasing the lock. `replace_all`
+    // runs over arbitrary user-supplied content WITHOUT holding the
+    // lock, so concurrent callers don't serialise on regex evaluation.
+    //
+    // R27/R47: regex cache is tagged with `cache_generation`. When the
+    // caller bumps the generation (rule CRUD), the regex entries are
+    // dropped — guaranteeing a freshly-edited pattern actually takes
+    // effect, and bounding memory to the current generation's enabled
+    // rule count.
     //
     // R24: filter by scope (book_name / book_origin substring match) +
     // scope_title vs scope_content before compiling, so unrelated rules
     // don't even hit the regex cache.
     let compiled: Vec<(Regex, String)> = {
-        let mut cache = REGEX_CACHE
+        let mut cache = REPLACE_RULES_CACHE
             .lock()
-            .map_err(|e| format!("regex cache lock poisoned: {e}"))?;
-        cache.ensure_generation(cache_generation);
-        rules
+            .map_err(|e| format!("replace rules cache lock poisoned: {e}"))?;
+
+        let rules = cache.get_or_load_rules(db_path, cache_generation, || {
+            let mut conn = open_db(db_path)?;
+            let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(&mut conn);
+            dao.get_enabled()
+                .map_err(|e| format!("加载替换规则失败: {}", e))
+        })?;
+        cache.ensure_regex_generation(cache_generation);
+
+        // `rules` is an Arc — clone bumps the refcount only, but the
+        // borrow checker also needs us to detach the iteration source
+        // from `cache` so we can take `&mut cache` for `get_or_compile_regex`
+        // inside the filter_map closure.
+        let rules_for_iter = rules.clone();
+        rules_for_iter
             .iter()
             .filter(|r| !r.pattern.is_empty())
             .filter(|r| {
@@ -969,11 +987,12 @@ fn apply_replace_rules_impl(
             .filter(|r| matches_scope(r, book_name, book_origin))
             .filter_map(|rule| {
                 cache
-                    .get_or_compile(&rule.id, &rule.pattern)
+                    .get_or_compile_regex(&rule.id, &rule.pattern)
                     .map(|re| (re.clone(), rule.replacement.clone()))
             })
             .collect()
-    };
+    }; // lock released here — `replace_all` runs lock-free below.
+
     let mut out = content.to_string();
     for (re, replacement) in compiled.iter() {
         out = re.replace_all(&out, replacement.as_str()).into_owned();
@@ -1024,83 +1043,84 @@ fn matches_scope(rule: &core_storage::models::ReplaceRule, book_name: &str, book
     true
 }
 
-/// Reload the enabled replace-rule list from the DB iff the caller's
-/// `generation` is newer than the cached one. Cached snapshot is shared
-/// across threads.
+/// R123: unified cache for both the enabled-rule list and the
+/// compiled regexes. Both halves are tagged with the caller's
+/// `cache_generation` and can only be observed inside the single
+/// `Mutex` below — so concurrent callers with different generations
+/// can't interleave such that one wipes the other's freshly-built
+/// state. See [`apply_replace_rules_impl`] for the full rationale.
 ///
-/// R48: cache key includes `db_path` so a multi-DB workflow (test
-/// fixtures, future profile switching, two isolates pointed at
-/// different files) doesn't get a hit from another DB's rule set.
-fn load_enabled_replace_rules(
-    db_path: &str,
-    generation: i64,
-) -> Result<std::sync::Arc<Vec<core_storage::models::ReplaceRule>>, String> {
-    use std::sync::{Mutex, OnceLock};
-    type Cell = Mutex<Option<(String, i64, std::sync::Arc<Vec<core_storage::models::ReplaceRule>>)>>;
-    static CACHE: OnceLock<Cell> = OnceLock::new();
-    let cell = CACHE.get_or_init(|| Mutex::new(None));
+/// Compile failures are remembered as `None` within a single
+/// generation so we don't re-warn on every chapter; advancing the
+/// generation clears them too, which is the right thing if the user
+/// fixed the bad pattern.
+///
+/// R48: the rule-list cache key includes `db_path` so a multi-DB
+/// workflow (test fixtures, profile switching, two isolates pointed
+/// at different files) doesn't get a hit from another DB's rule set.
+struct ReplaceRulesCache {
+    /// Rule list cached by `(db_path, generation)`. `None` until
+    /// the first cache miss populates it.
+    rule_list: Option<(String, i64, std::sync::Arc<Vec<core_storage::models::ReplaceRule>>)>,
+    /// Generation tag for the regex entries below; advancing it clears
+    /// all entries. `None` on first use (cache empty).
+    regex_generation: Option<i64>,
+    /// Compiled regex by `(rule_id, pattern)`. A `None` value remembers
+    /// a compile failure within the current generation.
+    regex_entries: std::collections::HashMap<(String, String), Option<regex::Regex>>,
+}
+
+impl ReplaceRulesCache {
+    fn new() -> Self {
+        Self {
+            rule_list: None,
+            regex_generation: None,
+            regex_entries: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Returns the cached rule list when `(db_path, generation)` matches;
+    /// otherwise loads via the closure and stores. The caller is responsible
+    /// for calling [`Self::ensure_regex_generation`] right after — this
+    /// method intentionally does NOT touch the regex side so that callers
+    /// observe both halves in a single critical section.
+    fn get_or_load_rules<F>(
+        &mut self,
+        db_path: &str,
+        generation: i64,
+        load: F,
+    ) -> Result<std::sync::Arc<Vec<core_storage::models::ReplaceRule>>, String>
+    where
+        F: FnOnce() -> Result<Vec<core_storage::models::ReplaceRule>, String>,
     {
-        let guard = cell.lock().map_err(|e| format!("rule cache lock: {e}"))?;
-        if let Some((ref cached_path, gen, ref rules)) = *guard {
+        if let Some((ref cached_path, gen, ref rules)) = self.rule_list {
             if gen == generation && cached_path == db_path {
                 return Ok(rules.clone());
             }
         }
-    }
-    let mut conn = open_db(db_path)?;
-    let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(&mut conn);
-    let fresh = dao
-        .get_enabled()
-        .map_err(|e| format!("加载替换规则失败: {}", e))?;
-    let arc = std::sync::Arc::new(fresh);
-    if let Ok(mut guard) = cell.lock() {
-        *guard = Some((db_path.to_string(), generation, arc.clone()));
-    }
-    Ok(arc)
-}
-
-/// Compiled-regex cache.
-///
-/// R27/R47: keyed on `(rule_id, pattern)` and tagged with the caller's
-/// `cache_generation`. When the generation changes (i.e. caller bumped the
-/// counter after a rule CRUD), the entire cache is dropped on the next
-/// `ensure_generation` call — guaranteeing that a freshly-edited pattern
-/// actually compiles fresh, and bounding memory at "current enabled rule
-/// count" rather than growing unbounded across migrations.
-///
-/// Compile failures are remembered as `None` within a single generation so
-/// we don't re-warn on every chapter; a `bumpReplaceRuleGeneration` clears
-/// them too, which is the right thing if the user fixed the bad pattern.
-struct RegexCache {
-    /// `cache_generation` of every entry currently in `entries`. `None` on
-    /// first use (cache empty).
-    generation: Option<i64>,
-    entries: std::collections::HashMap<(String, String), Option<regex::Regex>>,
-}
-
-impl RegexCache {
-    fn new() -> Self {
-        Self {
-            generation: None,
-            entries: std::collections::HashMap::new(),
-        }
+        let fresh = load()?;
+        let arc = std::sync::Arc::new(fresh);
+        self.rule_list = Some((db_path.to_string(), generation, arc.clone()));
+        Ok(arc)
     }
 
-    /// Drop cached entries when the caller's generation changes. Cheap when
-    /// generation matches (no allocation, no work).
-    fn ensure_generation(&mut self, generation: i64) {
-        if self.generation == Some(generation) {
+    /// Drop cached regex entries when the caller's generation changes.
+    /// Cheap when generation matches (no allocation, no work).
+    fn ensure_regex_generation(&mut self, generation: i64) {
+        if self.regex_generation == Some(generation) {
             return;
         }
-        self.entries.clear();
-        self.generation = Some(generation);
+        self.regex_entries.clear();
+        self.regex_generation = Some(generation);
     }
 
-    fn get_or_compile(&mut self, id: &str, pattern: &str) -> Option<&regex::Regex> {
+    /// Get-or-compile a regex within the current generation. Returns
+    /// `None` if the pattern fails to compile (and remembers the failure
+    /// so we don't re-warn on every chapter).
+    fn get_or_compile_regex(&mut self, id: &str, pattern: &str) -> Option<&regex::Regex> {
         // R50: single hash via `entry` instead of contains_key + insert + get.
-        // Compile failures are stored as `None` so we don't re-warn.
         let key = (id.to_string(), pattern.to_string());
-        self.entries
+        self.regex_entries
             .entry(key)
             .or_insert_with(|| {
                 let compiled = regex::Regex::new(pattern);
@@ -1113,8 +1133,8 @@ impl RegexCache {
     }
 }
 
-static REGEX_CACHE: std::sync::LazyLock<std::sync::Mutex<RegexCache>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(RegexCache::new()));
+static REPLACE_RULES_CACHE: std::sync::LazyLock<std::sync::Mutex<ReplaceRulesCache>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(ReplaceRulesCache::new()));
 
 // ============================================================
 // 内部辅助函数
@@ -1197,46 +1217,47 @@ fn storage_to_source_book_source(
 mod regex_cache_tests {
     use super::*;
 
-    /// R27: a freshly-edited pattern under the SAME rule id must produce a
-    /// different compiled Regex once the caller bumps the generation. The
-    /// previous keying-by-id-only kept the stale compile around forever.
+    /// R27/R123: a freshly-edited pattern under the SAME rule id must
+    /// produce a different compiled Regex once the caller bumps the
+    /// generation. The previous keying-by-id-only kept the stale compile
+    /// around forever.
     #[test]
     fn cache_invalidates_on_generation_bump() {
-        let mut cache = RegexCache::new();
+        let mut cache = ReplaceRulesCache::new();
 
-        cache.ensure_generation(1);
-        let r1_addr = cache.get_or_compile("rule-A", "foo").unwrap() as *const _ as usize;
+        cache.ensure_regex_generation(1);
+        let r1_addr = cache.get_or_compile_regex("rule-A", "foo").unwrap() as *const _ as usize;
         // Same pattern within the same generation should hit the cache.
-        let r1_again = cache.get_or_compile("rule-A", "foo").unwrap() as *const _ as usize;
+        let r1_again = cache.get_or_compile_regex("rule-A", "foo").unwrap() as *const _ as usize;
         assert_eq!(r1_addr, r1_again, "same gen + pattern should reuse compile");
 
         // Caller edits rule "A" pattern; bumps generation.
-        cache.ensure_generation(2);
-        let r2 = cache.get_or_compile("rule-A", "bar").unwrap();
+        cache.ensure_regex_generation(2);
+        let r2 = cache.get_or_compile_regex("rule-A", "bar").unwrap();
         assert!(r2.is_match("bar"));
         assert!(!r2.is_match("foo"), "old pattern must not still apply");
     }
 
-    /// R47: cache size never grows beyond the current generation's worth
-    /// of (id, pattern) tuples.
+    /// R47/R123: cache size never grows beyond the current generation's
+    /// worth of (id, pattern) tuples.
     #[test]
     fn cache_drops_old_entries_on_generation_bump() {
-        let mut cache = RegexCache::new();
-        cache.ensure_generation(1);
+        let mut cache = ReplaceRulesCache::new();
+        cache.ensure_regex_generation(1);
         for i in 0..50 {
             let id = format!("rule-{i}");
             let pattern = format!("p{i}");
-            cache.get_or_compile(&id, &pattern);
+            cache.get_or_compile_regex(&id, &pattern);
         }
-        assert_eq!(cache.entries.len(), 50);
-        cache.ensure_generation(2);
+        assert_eq!(cache.regex_entries.len(), 50);
+        cache.ensure_regex_generation(2);
         assert_eq!(
-            cache.entries.len(),
+            cache.regex_entries.len(),
             0,
             "generation bump should drop all entries"
         );
-        cache.get_or_compile("rule-0", "p0");
-        assert_eq!(cache.entries.len(), 1);
+        cache.get_or_compile_regex("rule-0", "p0");
+        assert_eq!(cache.regex_entries.len(), 1);
     }
 
     /// Compile failures still get remembered within a generation but do
@@ -1244,14 +1265,14 @@ mod regex_cache_tests {
     /// the fix take effect on next chapter).
     #[test]
     fn compile_failures_clear_on_generation_bump() {
-        let mut cache = RegexCache::new();
-        cache.ensure_generation(1);
+        let mut cache = ReplaceRulesCache::new();
+        cache.ensure_regex_generation(1);
         // Invalid pattern: unclosed bracket.
-        assert!(cache.get_or_compile("bad-rule", "[").is_none());
-        assert_eq!(cache.entries.len(), 1);
-        cache.ensure_generation(2);
+        assert!(cache.get_or_compile_regex("bad-rule", "[").is_none());
+        assert_eq!(cache.regex_entries.len(), 1);
+        cache.ensure_regex_generation(2);
         // Fixed pattern under same id.
-        let fixed = cache.get_or_compile("bad-rule", "[abc]").unwrap();
+        let fixed = cache.get_or_compile_regex("bad-rule", "[abc]").unwrap();
         assert!(fixed.is_match("a"));
     }
 }
@@ -1339,5 +1360,82 @@ mod scope_filter_tests {
         let r = rule(None, Some("三体 烂书一本"));
         assert!(!matches_scope(&r, "三体", "https://x.com"));
         assert!(matches_scope(&r, "其他书", "https://x.com"));
+    }
+}
+
+#[cfg(test)]
+mod cache_concurrency_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::thread;
+
+    fn make_rule(id: &str, pattern: &str) -> core_storage::models::ReplaceRule {
+        core_storage::models::ReplaceRule {
+            id: id.into(),
+            name: "t".into(),
+            pattern: pattern.into(),
+            replacement: "X".into(),
+            enabled: true,
+            scope: None,
+            scope_title: false,
+            scope_content: true,
+            exclude_scope: None,
+            sort_number: 0,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    /// R123: simulate two concurrent threads with different generations
+    /// hammering the unified cache. Each thread's per-call view of
+    /// `(rules, regex)` must reflect its own generation, not the other
+    /// thread's. This is the regression that proves the unified lock
+    /// fixed the cross-generation interference bug — pre-fix code with
+    /// two independent mutexes would intermittently fail because thread
+    /// A could observe a regex compiled from generation 2's pattern
+    /// while thinking it was on generation 1.
+    #[test]
+    fn unified_cache_keeps_generations_isolated() {
+        let cache = Arc::new(std::sync::Mutex::new(ReplaceRulesCache::new()));
+
+        let rules_v1 = Arc::new(vec![make_rule("r1", "foo")]);
+        let rules_v2 = Arc::new(vec![make_rule("r1", "bar")]);
+
+        let cache_a = cache.clone();
+        let rules_v1_a = rules_v1.clone();
+        let t_a = thread::spawn(move || {
+            for _ in 0..200 {
+                let mut c = cache_a.lock().unwrap();
+                let r = c
+                    .get_or_load_rules("db", 1, || Ok((*rules_v1_a).clone()))
+                    .unwrap();
+                c.ensure_regex_generation(1);
+                let id = r[0].id.clone();
+                let pattern = r[0].pattern.clone();
+                let re = c.get_or_compile_regex(&id, &pattern).unwrap();
+                assert!(re.is_match("foo"));
+                assert!(!re.is_match("bar"));
+            }
+        });
+
+        let cache_b = cache.clone();
+        let rules_v2_b = rules_v2.clone();
+        let t_b = thread::spawn(move || {
+            for _ in 0..200 {
+                let mut c = cache_b.lock().unwrap();
+                let r = c
+                    .get_or_load_rules("db", 2, || Ok((*rules_v2_b).clone()))
+                    .unwrap();
+                c.ensure_regex_generation(2);
+                let id = r[0].id.clone();
+                let pattern = r[0].pattern.clone();
+                let re = c.get_or_compile_regex(&id, &pattern).unwrap();
+                assert!(re.is_match("bar"));
+                assert!(!re.is_match("foo"));
+            }
+        });
+
+        t_a.join().unwrap();
+        t_b.join().unwrap();
     }
 }
