@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "spec index — pre-development checklist"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "锁中毒 / Result 错误传播"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "lint / test 基线"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "合并两 cache 为一个 struct，避免分散状态"}
+{"file": ".trellis/tasks/05-18-r123-cache-atomic/prd.md", "reason": "本任务详细策略与不变量"}
