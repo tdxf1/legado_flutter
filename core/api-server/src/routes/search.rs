@@ -11,6 +11,7 @@ use tokio::task::JoinSet;
 use crate::error::ApiError;
 use crate::state::AppState;
 use crate::util;
+use crate::util::db_blocking;
 
 /// R58: how many sources we'll search in parallel for a single request.
 ///
@@ -57,13 +58,14 @@ async fn search(
         }
         ids
     } else {
-        let mut conn = util::pooled_conn(&state)?;
-        let dao = core_storage::source_dao::SourceDao::new(&mut conn);
-        dao.get_enabled()
-            .map_err(|e| ApiError::Database(e.to_string()))?
-            .into_iter()
-            .map(|s| s.id)
-            .collect()
+        // R60: synchronous DAO call moved off the tokio worker thread.
+        db_blocking(&state, |conn| {
+            let dao = core_storage::source_dao::SourceDao::new(conn);
+            dao.get_enabled()
+                .map_err(|e| ApiError::Database(e.to_string()))
+                .map(|sources| sources.into_iter().map(|s| s.id).collect::<Vec<_>>())
+        })
+        .await?
     };
 
     let semaphore = Arc::new(Semaphore::new(SEARCH_FANOUT));
@@ -121,15 +123,33 @@ async fn search_single_source(
     source_id: &str,
     keyword: &str,
 ) -> Result<Vec<core_source::parser::SearchResult>, (String, String, String)> {
-    let storage_source = {
-        let mut conn = pool
-            .get()
-            .map_err(|e| (source_id.to_string(), "".into(), format!("connection pool: {e}")))?;
+    // R60: DB row lookup moved off the tokio worker. We can't reuse
+    // `db_blocking` here because the error type for this fan-out
+    // routine is a custom tuple, not `ApiError`, but the pattern is
+    // the same: pool clone + spawn_blocking.
+    let pool_for_blocking = pool.clone();
+    let source_id_owned = source_id.to_string();
+    let storage_source = tokio::task::spawn_blocking(move || {
+        let mut conn = pool_for_blocking.get().map_err(|e| {
+            (
+                source_id_owned.clone(),
+                String::new(),
+                format!("connection pool: {e}"),
+            )
+        })?;
         let dao = core_storage::source_dao::SourceDao::new(&mut conn);
-        dao.get_by_id(source_id)
-            .map_err(|e| (source_id.to_string(), "".into(), e.to_string()))?
-            .ok_or_else(|| (source_id.to_string(), "".into(), "书源不存在".into()))?
-    };
+        dao.get_by_id(&source_id_owned)
+            .map_err(|e| (source_id_owned.clone(), String::new(), e.to_string()))?
+            .ok_or_else(|| (source_id_owned.clone(), String::new(), "书源不存在".to_string()))
+    })
+    .await
+    .map_err(|e| {
+        (
+            source_id.to_string(),
+            String::new(),
+            format!("blocking task join failed: {e}"),
+        )
+    })??;
     let source_name = storage_source.name.clone();
     let source = util::storage_to_core_source(&storage_source)
         .map_err(|e| (source_id.to_string(), source_name.clone(), e.to_string()))?;

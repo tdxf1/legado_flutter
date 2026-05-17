@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use crate::error::ApiError;
 use crate::state::AppState;
 use crate::util;
+use crate::util::db_blocking;
 
 #[derive(Debug, Serialize)]
 pub struct ChapterContentResponse {
@@ -49,12 +50,28 @@ async fn list_chapters(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::pooled_conn(&state)?;
-    let dao = core_storage::chapter_dao::ChapterDao::new(&conn);
-    let chapters = dao
-        .get_by_book(&book_id)
-        .map_err(|e| ApiError::Database(e.to_string()))?;
+    let chapters = db_blocking(&state, move |conn| {
+        let dao = core_storage::chapter_dao::ChapterDao::new(conn);
+        dao.get_by_book(&book_id)
+            .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
     Ok(Json(serde_json::to_value(chapters)?))
+}
+
+/// Inner result of the cached-content lookup: either we have content
+/// already and can short-circuit, or we need to go fetch it from the
+/// source.
+enum CachedChapter {
+    Cached {
+        title: String,
+        content: String,
+    },
+    NeedsFetch {
+        chapter_url: String,
+        chapter_title: String,
+        chapter_id: String,
+    },
 }
 
 async fn get_chapter_content(
@@ -68,56 +85,70 @@ async fn get_chapter_content(
         .parse()
         .map_err(|_| ApiError::BadRequest("无效的章节索引".into()))?;
 
-    let (chapter_url, chapter_title, chapter_id) = {
-        let conn = util::pooled_conn(&state)?;
-        let chapter_dao = core_storage::chapter_dao::ChapterDao::new(&conn);
+    let book_id_for_chapter = book_id.clone();
+    let cached = db_blocking(&state, move |conn| -> Result<CachedChapter, ApiError> {
+        let chapter_dao = core_storage::chapter_dao::ChapterDao::new(conn);
         let chapters = chapter_dao
-            .get_by_book(&book_id)
+            .get_by_book(&book_id_for_chapter)
             .map_err(|e| ApiError::Database(e.to_string()))?;
-
         let chapter = chapters
             .get(chapter_index as usize)
             .ok_or_else(|| ApiError::NotFound(format!("章节不存在: index {}", chapter_index)))?;
-
         if let Some(ref content) = chapter.content {
+            Ok(CachedChapter::Cached {
+                title: chapter.title.clone(),
+                content: content.clone(),
+            })
+        } else {
+            Ok(CachedChapter::NeedsFetch {
+                chapter_url: chapter.url.clone(),
+                chapter_title: chapter.title.clone(),
+                chapter_id: chapter.id.clone(),
+            })
+        }
+    })
+    .await?;
+
+    let (chapter_url, chapter_title, chapter_id) = match cached {
+        CachedChapter::Cached { title, content } => {
             return Ok(Json(ChapterContentResponse {
                 book_id,
                 chapter_index,
-                title: chapter.title.clone(),
-                content: content.clone(),
+                title,
+                content,
                 platform_request: None,
             }));
         }
-
-        (
-            chapter.url.clone(),
-            chapter.title.clone(),
-            chapter.id.clone(),
-        )
+        CachedChapter::NeedsFetch {
+            chapter_url,
+            chapter_title,
+            chapter_id,
+        } => (chapter_url, chapter_title, chapter_id),
     };
 
-    let source_id = {
-        let conn = util::pooled_conn(&state)?;
-        let dao = core_storage::book_dao::BookDao::new(&conn);
+    let book_id_for_book = book_id.clone();
+    let chapter_url_for_check = chapter_url.clone();
+    let source_id = db_blocking(&state, move |conn| {
+        let dao = core_storage::book_dao::BookDao::new(conn);
         let book = dao
-            .get_by_id(&book_id)
+            .get_by_id(&book_id_for_book)
             .map_err(|e| ApiError::Database(e.to_string()))?
-            .ok_or_else(|| ApiError::NotFound(format!("书籍不存在: {}", book_id)))?;
-
-        if book.source_id.is_empty() || chapter_url.is_empty() {
+            .ok_or_else(|| ApiError::NotFound(format!("书籍不存在: {}", book_id_for_book)))?;
+        if book.source_id.is_empty() || chapter_url_for_check.is_empty() {
             return Err(ApiError::BadRequest("缺少书源信息或章节链接".into()));
         }
+        Ok(book.source_id)
+    })
+    .await?;
 
-        book.source_id
-    };
-
-    let storage_source = {
-        let mut conn = util::pooled_conn(&state)?;
-        let dao = core_storage::source_dao::SourceDao::new(&mut conn);
-        dao.get_by_id(&source_id)
+    let source_id_for_lookup = source_id.clone();
+    let storage_source = db_blocking(&state, move |conn| {
+        let dao = core_storage::source_dao::SourceDao::new(conn);
+        dao.get_by_id(&source_id_for_lookup)
             .map_err(|e| ApiError::Database(e.to_string()))?
-            .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", source_id)))?
-    };
+            .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", source_id_for_lookup)))
+    })
+    .await?;
 
     let source = util::storage_to_core_source(&storage_source)?;
     let parser = core_source::parser::BookSourceParser::new();
@@ -129,10 +160,14 @@ async fn get_chapter_content(
     };
 
     if platform_request.is_none() {
-        let conn = util::pooled_conn(&state)?;
-        let dao = core_storage::chapter_dao::ChapterDao::new(&conn);
-        dao.update_content(&chapter_id, &content)
-            .map_err(|e| ApiError::Database(e.to_string()))?;
+        let content_for_save = content.clone();
+        let chapter_id_for_save = chapter_id.clone();
+        db_blocking(&state, move |conn| {
+            let dao = core_storage::chapter_dao::ChapterDao::new(conn);
+            dao.update_content(&chapter_id_for_save, &content_for_save)
+                .map_err(|e| ApiError::Database(e.to_string()))
+        })
+        .await?;
     }
 
     Ok(Json(ChapterContentResponse {
@@ -149,21 +184,22 @@ async fn save_chapter_content(
     Path(book_id): Path<String>,
     Json(req): Json<SaveChapterContentRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let chapter_id = {
-        let conn = util::pooled_conn(&state)?;
-        let chapter_dao = core_storage::chapter_dao::ChapterDao::new(&conn);
+    let chapter_index = req.chapter_index;
+    let req_content = req.content;
+    db_blocking(&state, move |conn| {
+        let chapter_dao = core_storage::chapter_dao::ChapterDao::new(conn);
         let chapters = chapter_dao
             .get_by_book(&book_id)
             .map_err(|e| ApiError::Database(e.to_string()))?;
-        chapters
-            .get(req.chapter_index as usize)
+        let chapter_id = chapters
+            .get(chapter_index as usize)
             .map(|chapter| chapter.id.clone())
-            .ok_or_else(|| ApiError::NotFound(format!("章节不存在: index {}", req.chapter_index)))?
-    };
-    let conn = util::pooled_conn(&state)?;
-    let dao = core_storage::chapter_dao::ChapterDao::new(&conn);
-    dao.update_content(&chapter_id, &req.content)
-        .map_err(|e| ApiError::Database(e.to_string()))?;
+            .ok_or_else(|| ApiError::NotFound(format!("章节不存在: index {}", chapter_index)))?;
+        chapter_dao
+            .update_content(&chapter_id, &req_content)
+            .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -171,11 +207,12 @@ async fn get_progress(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::pooled_conn(&state)?;
-    let dao = core_storage::progress_dao::ProgressDao::new(&conn);
-    let progress = dao
-        .get_by_book(&book_id)
-        .map_err(|e| ApiError::Database(e.to_string()))?;
+    let progress = db_blocking(&state, move |conn| {
+        let dao = core_storage::progress_dao::ProgressDao::new(conn);
+        dao.get_by_book(&book_id)
+            .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
     Ok(Json(serde_json::to_value(progress)?))
 }
 
@@ -184,15 +221,17 @@ async fn save_progress(
     Path(book_id): Path<String>,
     Json(req): Json<SaveProgressRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::pooled_conn(&state)?;
-    let book_dao = core_storage::book_dao::BookDao::new(&conn);
-    book_dao
-        .get_by_id(&book_id)
-        .map_err(|e| ApiError::Database(e.to_string()))?
-        .ok_or_else(|| ApiError::NotFound(format!("书籍不存在: {}", book_id)))?;
-    let dao = core_storage::progress_dao::ProgressDao::new(&conn);
-    dao.update_progress(&book_id, req.chapter_index, req.paragraph_index, req.offset)
-        .map_err(|e| ApiError::Database(e.to_string()))?;
+    db_blocking(&state, move |conn| {
+        let book_dao = core_storage::book_dao::BookDao::new(conn);
+        book_dao
+            .get_by_id(&book_id)
+            .map_err(|e| ApiError::Database(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("书籍不存在: {}", book_id)))?;
+        let dao = core_storage::progress_dao::ProgressDao::new(conn);
+        dao.update_progress(&book_id, req.chapter_index, req.paragraph_index, req.offset)
+            .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -200,12 +239,13 @@ async fn get_book(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::pooled_conn(&state)?;
-    let dao = core_storage::book_dao::BookDao::new(&conn);
-    let book = dao
-        .get_by_id(&book_id)
-        .map_err(|e| ApiError::Database(e.to_string()))?
-        .ok_or_else(|| ApiError::NotFound(format!("书籍不存在: {}", book_id)))?;
+    let book = db_blocking(&state, move |conn| {
+        let dao = core_storage::book_dao::BookDao::new(conn);
+        dao.get_by_id(&book_id)
+            .map_err(|e| ApiError::Database(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("书籍不存在: {}", book_id)))
+    })
+    .await?;
     Ok(Json(serde_json::to_value(book)?))
 }
 
@@ -213,13 +253,13 @@ async fn refresh_chapters(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
 ) -> Result<Json<RefreshChaptersResponse>, ApiError> {
-    let (source_id, toc_url) = {
-        let conn = util::pooled_conn(&state)?;
-        let dao = core_storage::book_dao::BookDao::new(&conn);
+    let book_id_for_lookup = book_id.clone();
+    let (source_id, toc_url) = db_blocking(&state, move |conn| {
+        let dao = core_storage::book_dao::BookDao::new(conn);
         let book = dao
-            .get_by_id(&book_id)
+            .get_by_id(&book_id_for_lookup)
             .map_err(|e| ApiError::Database(e.to_string()))?
-            .ok_or_else(|| ApiError::NotFound(format!("书籍不存在: {}", book_id)))?;
+            .ok_or_else(|| ApiError::NotFound(format!("书籍不存在: {}", book_id_for_lookup)))?;
 
         if book.source_id.is_empty() {
             return Err(ApiError::BadRequest("缺少书源信息".into()));
@@ -232,31 +272,32 @@ async fn refresh_chapters(
         if url.is_empty() {
             return Err(ApiError::BadRequest("缺少 book_url".into()));
         }
-        (book.source_id, url)
-    };
+        Ok((book.source_id, url))
+    })
+    .await?;
 
-    let storage_source = {
-        let mut conn = util::pooled_conn(&state)?;
-        let dao = core_storage::source_dao::SourceDao::new(&mut conn);
-        dao.get_by_id(&source_id)
+    let source_id_for_lookup = source_id.clone();
+    let storage_source = db_blocking(&state, move |conn| {
+        let dao = core_storage::source_dao::SourceDao::new(conn);
+        dao.get_by_id(&source_id_for_lookup)
             .map_err(|e| ApiError::Database(e.to_string()))?
-            .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", source_id)))?
-    };
+            .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", source_id_for_lookup)))
+    })
+    .await?;
     let source = util::storage_to_core_source(&storage_source)?;
     let parser = core_source::parser::BookSourceParser::new();
     let chapters = parser.get_chapters(&source, &toc_url).await;
 
     let now = chrono::Utc::now().timestamp();
-    let conn = util::pooled_conn(&state)?;
-    let chapter_dao = core_storage::chapter_dao::ChapterDao::new(&conn);
+    let book_id_for_chapters = book_id.clone();
     let storage_chapters: Vec<_> = chapters
         .iter()
         .enumerate()
         .map(|(i, ch)| {
-            let ch_id = hash_id(&format!("{}|{}|{}", book_id, ch.url, i));
+            let ch_id = hash_id(&format!("{}|{}|{}", book_id_for_chapters, ch.url, i));
             core_storage::models::Chapter {
                 id: ch_id,
-                book_id: book_id.clone(),
+                book_id: book_id_for_chapters.clone(),
                 index_num: ch.index,
                 title: ch.title.clone(),
                 url: ch.url.clone(),
@@ -270,23 +311,29 @@ async fn refresh_chapters(
             }
         })
         .collect();
-    chapter_dao
-        .replace_by_book_preserving_content(&book_id, &storage_chapters)
-        .map_err(|e| ApiError::Database(e.to_string()))?;
     let total_count = chapters.len();
+    let book_id_for_replace = book_id.clone();
+    db_blocking(&state, move |conn| {
+        let chapter_dao = core_storage::chapter_dao::ChapterDao::new(conn);
+        chapter_dao
+            .replace_by_book_preserving_content(&book_id_for_replace, &storage_chapters)
+            .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
 
-    {
-        let conn = util::pooled_conn(&state)?;
-        let dao = core_storage::book_dao::BookDao::new(&conn);
+    let book_id_for_count = book_id.clone();
+    db_blocking(&state, move |conn| {
+        let dao = core_storage::book_dao::BookDao::new(conn);
         let mut book = dao
-            .get_by_id(&book_id)
+            .get_by_id(&book_id_for_count)
             .map_err(|e| ApiError::Database(e.to_string()))?
             .ok_or_else(|| ApiError::Internal("book not found after refresh".into()))?;
         book.chapter_count = total_count as i32;
         book.updated_at = chrono::Utc::now().timestamp();
         dao.upsert(&book)
-            .map_err(|e| ApiError::Database(e.to_string()))?;
-    }
+            .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
 
     Ok(Json(RefreshChaptersResponse {
         book_id,

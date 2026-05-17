@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use crate::error::ApiError;
 use crate::state::AppState;
-use crate::util;
+use crate::util::db_blocking;
 
 #[derive(Debug, Deserialize)]
 pub struct CreateReplaceRuleRequest {
@@ -18,22 +18,23 @@ pub struct CreateReplaceRuleRequest {
 }
 
 async fn list_rules(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::pooled_conn(&state)?;
-    let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(&conn);
-    let rules = dao
-        .get_all()
-        .map_err(|e| ApiError::Database(e.to_string()))?;
+    let rules = db_blocking(&state, |conn| {
+        let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(conn);
+        dao.get_all().map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
     Ok(Json(serde_json::to_value(rules)?))
 }
 
 async fn list_enabled_rules(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::pooled_conn(&state)?;
-    let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(&conn);
-    let rules = dao
-        .get_enabled()
-        .map_err(|e| ApiError::Database(e.to_string()))?;
+    let rules = db_blocking(&state, |conn| {
+        let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(conn);
+        dao.get_enabled()
+            .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
     Ok(Json(serde_json::to_value(rules)?))
 }
 
@@ -44,16 +45,17 @@ async fn create_rule(
     if req.name.trim().is_empty() {
         return Err(ApiError::BadRequest("规则名称不能为空".into()));
     }
-    let conn = util::pooled_conn(&state)?;
-    let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(&conn);
-    let rule = dao
-        .create(
+    let rule = db_blocking(&state, move |conn| {
+        let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(conn);
+        dao.create(
             &req.name,
             &req.pattern,
             &req.replacement,
             req.scope.unwrap_or(0),
         )
-        .map_err(|e| ApiError::Database(e.to_string()))?;
+        .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
     Ok(Json(serde_json::to_value(rule)?))
 }
 
@@ -61,13 +63,15 @@ async fn delete_rule(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::pooled_conn(&state)?;
-    let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(&conn);
-    dao.get_by_id(&id)
-        .map_err(|e| ApiError::Database(e.to_string()))?
-        .ok_or_else(|| ApiError::NotFound(format!("替换规则不存在: {}", id)))?;
-    dao.delete(&id)
-        .map_err(|e| ApiError::Database(e.to_string()))?;
+    db_blocking(&state, move |conn| {
+        let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(conn);
+        dao.get_by_id(&id)
+            .map_err(|e| ApiError::Database(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("替换规则不存在: {}", id)))?;
+        dao.delete(&id)
+            .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

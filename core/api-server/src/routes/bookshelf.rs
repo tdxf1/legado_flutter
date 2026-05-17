@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::error::ApiError;
 use crate::state::AppState;
 use crate::util;
+use crate::util::db_blocking;
 
 fn stable_hash(input: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(input.as_bytes()))
@@ -32,11 +33,11 @@ pub struct AddBookResponse {
 }
 
 async fn list_books(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::pooled_conn(&state)?;
-    let dao = core_storage::book_dao::BookDao::new(&conn);
-    let books = dao
-        .get_all()
-        .map_err(|e| ApiError::Database(e.to_string()))?;
+    let books = db_blocking(&state, |conn| {
+        let dao = core_storage::book_dao::BookDao::new(conn);
+        dao.get_all().map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
     Ok(Json(serde_json::to_value(books)?))
 }
 
@@ -55,13 +56,14 @@ async fn add_book(
     }
 
     // Validate source and URL before writing anything
-    let storage_source = {
-        let mut conn = util::pooled_conn(&state)?;
-        let dao = core_storage::source_dao::SourceDao::new(&mut conn);
-        dao.get_by_id(&req.source_id)
+    let source_id_lookup = req.source_id.clone();
+    let storage_source = db_blocking(&state, move |conn| {
+        let dao = core_storage::source_dao::SourceDao::new(conn);
+        dao.get_by_id(&source_id_lookup)
             .map_err(|e| ApiError::Database(e.to_string()))?
-            .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", req.source_id)))?
-    };
+            .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", source_id_lookup)))
+    })
+    .await?;
     let source = util::storage_to_core_source(&storage_source)?;
     if !core_source::parser::source_matches_url(&source, &req.book_url) {
         return Err(ApiError::BadRequest(
@@ -78,46 +80,45 @@ async fn add_book(
         req.author.as_deref().unwrap_or("")
     ));
 
-    // Save the book
-    {
-        let conn = util::pooled_conn(&state)?;
-        let dao = core_storage::book_dao::BookDao::new(&conn);
-        let book = core_storage::models::Book {
-            id: book_id.clone(),
-            source_id: req.source_id.clone(),
-            source_name: req.source_name.clone(),
-            name: req.name.clone(),
-            author: req.author.clone(),
-            cover_url: req.cover_url.clone(),
-            chapter_count: 0,
-            latest_chapter_title: None,
-            intro: None,
-            kind: None,
-            book_url: Some(req.book_url.clone()),
-            toc_url: None,
-            last_check_time: None,
-            last_check_count: 0,
-            total_word_count: 0,
-            can_update: true,
-            order_time: now,
-            latest_chapter_time: None,
-            custom_cover_path: None,
-            custom_info_json: None,
-            created_at: now,
-            updated_at: now,
-        };
-        dao.upsert(&book)
-            .map_err(|e| ApiError::Database(e.to_string()))?;
-    }
-    // Fetch book info for toc_url and metadata
+    // Save the book (initial upsert)
+    let book_for_save = core_storage::models::Book {
+        id: book_id.clone(),
+        source_id: req.source_id.clone(),
+        source_name: req.source_name.clone(),
+        name: req.name.clone(),
+        author: req.author.clone(),
+        cover_url: req.cover_url.clone(),
+        chapter_count: 0,
+        latest_chapter_title: None,
+        intro: None,
+        kind: None,
+        book_url: Some(req.book_url.clone()),
+        toc_url: None,
+        last_check_time: None,
+        last_check_count: 0,
+        total_word_count: 0,
+        can_update: true,
+        order_time: now,
+        latest_chapter_time: None,
+        custom_cover_path: None,
+        custom_info_json: None,
+        created_at: now,
+        updated_at: now,
+    };
+    db_blocking(&state, move |conn| {
+        let dao = core_storage::book_dao::BookDao::new(conn);
+        dao.upsert(&book_for_save)
+            .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
+
+    // Fetch book info for toc_url and metadata (network IO — stays async)
     let parser = core_source::parser::BookSourceParser::new();
     let book_info = parser.get_book_info(&source, &req.book_url).await;
     let toc_url = book_info.as_ref().and_then(|bi| bi.chapters_url.clone());
     let chapters_url = toc_url.as_deref().unwrap_or(&req.book_url);
     let chapters = parser.get_chapters(&source, chapters_url).await;
 
-    let conn = util::pooled_conn(&state)?;
-    let chapter_dao = core_storage::chapter_dao::ChapterDao::new(&conn);
     let chapter_count = chapters.len();
     let storage_chapters: Vec<_> = chapters
         .iter()
@@ -137,16 +138,21 @@ async fn add_book(
             updated_at: now,
         })
         .collect();
-    chapter_dao
-        .replace_by_book_preserving_content(&book_id, &storage_chapters)
-        .map_err(|e| ApiError::Database(e.to_string()))?;
+    let book_id_for_chapters = book_id.clone();
+    db_blocking(&state, move |conn| {
+        let chapter_dao = core_storage::chapter_dao::ChapterDao::new(conn);
+        chapter_dao
+            .replace_by_book_preserving_content(&book_id_for_chapters, &storage_chapters)
+            .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
 
-    // Update book chapter count
-    {
-        let conn = util::pooled_conn(&state)?;
-        let dao = core_storage::book_dao::BookDao::new(&conn);
+    // Update book chapter count + metadata
+    let book_id_for_meta = book_id.clone();
+    db_blocking(&state, move |conn| {
+        let dao = core_storage::book_dao::BookDao::new(conn);
         let mut book = dao
-            .get_by_id(&book_id)
+            .get_by_id(&book_id_for_meta)
             .map_err(|e| ApiError::Database(e.to_string()))?
             .ok_or_else(|| ApiError::Internal("book not found after save".into()))?;
         book.chapter_count = chapter_count as i32;
@@ -167,8 +173,9 @@ async fn add_book(
             book.toc_url = bi.chapters_url.clone();
         }
         dao.upsert(&book)
-            .map_err(|e| ApiError::Database(e.to_string()))?;
-    }
+            .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
 
     Ok(Json(AddBookResponse {
         book_id,
@@ -180,13 +187,15 @@ async fn delete_book(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let conn = util::pooled_conn(&state)?;
-    let dao = core_storage::book_dao::BookDao::new(&conn);
-    dao.get_by_id(&book_id)
-        .map_err(|e| ApiError::Database(e.to_string()))?
-        .ok_or_else(|| ApiError::NotFound(format!("书籍不存在: {}", book_id)))?;
-    dao.delete(&book_id)
-        .map_err(|e| ApiError::Database(e.to_string()))?;
+    db_blocking(&state, move |conn| {
+        let dao = core_storage::book_dao::BookDao::new(conn);
+        dao.get_by_id(&book_id)
+            .map_err(|e| ApiError::Database(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("书籍不存在: {}", book_id)))?;
+        dao.delete(&book_id)
+            .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

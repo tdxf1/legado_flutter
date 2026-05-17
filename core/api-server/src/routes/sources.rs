@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ApiError;
 use crate::state::AppState;
-use crate::util::pooled_conn;
+use crate::util::db_blocking;
 
 #[derive(Debug, Deserialize)]
 pub struct CreateSourceRequest {
@@ -31,22 +31,25 @@ pub struct ImportSourcesResponse {
 }
 
 async fn list_sources(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
-    let mut conn = pooled_conn(&state)?;
-    let dao = core_storage::source_dao::SourceDao::new(&mut conn);
-    let sources = dao
-        .get_all()
-        .map_err(|e| ApiError::Database(e.to_string()))?;
+    // R60: synchronous SQLite work runs on the blocking pool so the
+    // tokio async worker stays free to service other requests.
+    let sources = db_blocking(&state, |conn| {
+        let dao = core_storage::source_dao::SourceDao::new(conn);
+        dao.get_all().map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
     Ok(Json(serde_json::to_value(sources)?))
 }
 
 async fn list_enabled_sources(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let mut conn = pooled_conn(&state)?;
-    let dao = core_storage::source_dao::SourceDao::new(&mut conn);
-    let sources = dao
-        .get_enabled()
-        .map_err(|e| ApiError::Database(e.to_string()))?;
+    let sources = db_blocking(&state, |conn| {
+        let dao = core_storage::source_dao::SourceDao::new(conn);
+        dao.get_enabled()
+            .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
     Ok(Json(serde_json::to_value(sources)?))
 }
 
@@ -60,11 +63,12 @@ async fn create_source(
     if req.url.trim().is_empty() {
         return Err(ApiError::BadRequest("书源 URL 不能为空".into()));
     }
-    let mut conn = pooled_conn(&state)?;
-    let dao = core_storage::source_dao::SourceDao::new(&mut conn);
-    let source = dao
-        .create(&req.name, &req.url)
-        .map_err(|e| ApiError::Database(e.to_string()))?;
+    let source = db_blocking(&state, move |conn| {
+        let dao = core_storage::source_dao::SourceDao::new(conn);
+        dao.create(&req.name, &req.url)
+            .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
     Ok(Json(serde_json::to_value(source)?))
 }
 
@@ -72,11 +76,11 @@ async fn import_sources(
     State(state): State<AppState>,
     Json(req): Json<ImportSourcesRequest>,
 ) -> Result<Json<ImportSourcesResponse>, ApiError> {
-    let mut conn = pooled_conn(&state)?;
-    let mut dao = core_storage::source_dao::SourceDao::new(&mut conn);
-    let count = dao
-        .import_from_json(&req.json)
-        .map_err(|e| ApiError::Parse(e))?;
+    let count = db_blocking(&state, move |conn| {
+        let mut dao = core_storage::source_dao::SourceDao::new(conn);
+        dao.import_from_json(&req.json).map_err(ApiError::Parse)
+    })
+    .await?;
     Ok(Json(ImportSourcesResponse {
         count: count as i32,
     }))
@@ -87,19 +91,21 @@ async fn set_source_enabled(
     Path(id): Path<String>,
     Json(req): Json<EnableSourceRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let mut conn = pooled_conn(&state)?;
-    let dao = core_storage::source_dao::SourceDao::new(&mut conn);
     // R59: TOCTOU between `get_by_id` and `set_enabled` is possible if
     // another request deletes the source in between, but the worst-case
     // outcome is that `set_enabled` becomes a silent no-op against an
     // already-deleted row. No data integrity issue — wrapping these in
     // a transaction would protect the contract but adds DB round-trips
     // for no observable user benefit. Leaving as-is.
-    dao.get_by_id(&id)
-        .map_err(|e| ApiError::Database(e.to_string()))?
-        .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", id)))?;
-    dao.set_enabled(&id, req.enabled)
-        .map_err(|e| ApiError::Database(e.to_string()))?;
+    db_blocking(&state, move |conn| {
+        let dao = core_storage::source_dao::SourceDao::new(conn);
+        dao.get_by_id(&id)
+            .map_err(|e| ApiError::Database(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", id)))?;
+        dao.set_enabled(&id, req.enabled)
+            .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -107,26 +113,28 @@ async fn delete_source(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let mut conn = pooled_conn(&state)?;
-    let dao = core_storage::source_dao::SourceDao::new(&mut conn);
     // R59: same TOCTOU note as `set_source_enabled`. A concurrent delete
     // of the same id makes the second caller's `delete` a no-op, which
     // is the desired idempotent outcome anyway.
-    dao.get_by_id(&id)
-        .map_err(|e| ApiError::Database(e.to_string()))?
-        .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", id)))?;
-    dao.delete(&id)
-        .map_err(|e| ApiError::Database(e.to_string()))?;
+    db_blocking(&state, move |conn| {
+        let dao = core_storage::source_dao::SourceDao::new(conn);
+        dao.get_by_id(&id)
+            .map_err(|e| ApiError::Database(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", id)))?;
+        dao.delete(&id)
+            .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 async fn export_legado(State(state): State<AppState>) -> Result<String, ApiError> {
-    let mut conn = pooled_conn(&state)?;
-    let dao = core_storage::source_dao::SourceDao::new(&mut conn);
-    let json = dao
-        .export_legado_json()
-        .map_err(|e| ApiError::Database(e.to_string()))?;
-    Ok(json)
+    db_blocking(&state, |conn| {
+        let dao = core_storage::source_dao::SourceDao::new(conn);
+        dao.export_legado_json()
+            .map_err(|e| ApiError::Database(e.to_string()))
+    })
+    .await
 }
 
 pub fn routes() -> Router<AppState> {

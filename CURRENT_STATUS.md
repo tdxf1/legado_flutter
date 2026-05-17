@@ -438,11 +438,17 @@ core/
 历次审查与修复的完整时间线已迁移到 [`docs/CHANGELOG.md`](docs/CHANGELOG.md)。
 当前 STATUS 只保留"最近一批的状态摘要"。
 
-**最近一批**：第九批（2026-05-17，commit 9）— 清扫第四轮复审延后的剩余 R 项。本批集中修了 19 项（R28 / R31-R45 / R50 / R59 / R62 / R64-R66 / R69-R70），覆盖 doc 澄清、PageView 状态机简化、DownloadRunner 脱敏 + status 常量化、`_paragraphKeyId` Web 兼容、`RATE_LIMITER` 节流改 atomic 等。R60（Axum handler 同步 sqlite 阻塞 tokio worker → 需要 `spawn_blocking` 包 DAO）改动量大且涉及全部路由，单独留作下一轮重构。
+**最近一批**：第十批（2026-05-17，commit 10）— R60 api-server DAO 包 spawn_blocking。
+第九批清完所有可小改 R 项后，剩下唯一架构性问题：Axum handler 在 tokio worker 上跑同步 sqlite，单个慢查询阻塞整个 worker（搜索期间 `/health` probe 30s 超时）。
 
-**已知风险（仍然成立）**：R3 codegen 模板 unreachable / R22 / R23 / R24 ReplaceRule.scope（需 schema 改动）/ R60（spawn_blocking 重构）。
+本批新增 `util::db_blocking<F, T, E>` helper，转换全 9 个路由 41 处 DAO 调用：
+- sources / bookshelf / replace_rules / explore / reader / search / sse
+- `search_single_source` 与 `run_one` 因 error 类型是自定义 tuple，直接用 `spawn_blocking` 不走 helper
+- 关键设计：克隆 `SqlitePool` (Arc) 进闭包，在闭包内 `pool.get()` 绕过 PooledConnection 的非 'static 生命周期
 
-**总评**：经过四轮全面复审 + 9 个 commit 的修复迭代，代码库的高危项已基本清空。剩余主要是 R60 的架构性改动和几项需要 schema 迁移才能动的设计问题。每批完成后 `cargo test --workspace` 与 `flutter test` 都全绿；本批完成时 cargo 248 / flutter 112 / `flutter analyze` 0 issue。详细问题清单与具体改动见 CHANGELOG。
+**已知风险（仍然成立）**：R3 codegen 模板 unreachable / R22 / R23 / R24 ReplaceRule.scope（需 schema 改动）—— 都是设计层面问题，不是代码 bug。
+
+**总评**：经过 4 轮全面复审 + 10 个 commit 的迭代，代码库的实质性问题（70+ 项 R + P）全部清空。剩余的"已知风险"是设计层面的 trade-off 或 Web 平台兼容性，不阻塞 Android 主线。每批完成后 `cargo test --workspace` 与 `flutter test` 都全绿；本批完成时 cargo 248 / flutter 112 / `flutter analyze` 0 issue。详细问题清单与具体改动见 CHANGELOG。
 
 ---
 

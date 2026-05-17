@@ -1,11 +1,16 @@
 use crate::error::ApiError;
-use crate::state::AppState;
+use crate::state::{AppState, SqlitePool};
 
-/// Pool-backed connection accessor used by route handlers.
+/// Pool-backed connection accessor.
 ///
-/// The returned [`r2d2::PooledConnection`] derefs to an `&Connection`/
-/// `&mut Connection`, so existing DAO code (`SourceDao::new(&mut conn)`,
-/// `BookDao::new(&conn)`) keeps working without any signature changes.
+/// Currently unused — every active call site goes through [`db_blocking`]
+/// (R60). Kept around for parity with the legacy interface and as an
+/// escape hatch for future maintenance scripts that already hold an
+/// [`AppState`] but for some reason need a raw connection. Calling this
+/// directly inside an async handler holds the current tokio worker
+/// hostage; if you find yourself reaching for it, you almost certainly
+/// want [`db_blocking`] instead.
+#[allow(dead_code)]
 pub fn pooled_conn(
     state: &AppState,
 ) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, ApiError> {
@@ -15,9 +20,53 @@ pub fn pooled_conn(
         .map_err(|e| ApiError::Database(format!("connection pool: {e}")))
 }
 
+/// R60: run a synchronous DB closure on tokio's blocking pool.
+///
+/// `rusqlite::Connection` is sync and CPU/IO-blocking; calling DAO
+/// methods directly from an async axum handler holds the current
+/// tokio worker hostage. We instead clone the [`SqlitePool`] (cheap —
+/// it's `Arc` internally), move it into a [`spawn_blocking`] task, and
+/// pull a connection from there. Caller's closure can then use the
+/// existing DAO API unchanged.
+///
+/// The closure receives a `PooledConnection` so it can pass `&Connection`
+/// or `&mut Connection` to DAO constructors. Errors from `pool.get()`
+/// surface as [`ApiError::Database`]; user errors come back through
+/// the closure's `Result` arm.
+///
+/// Type bounds:
+///   - `F: FnOnce(...) -> Result<T, E> + Send + 'static`
+///   - `T: Send + 'static`
+///   - `E: Into<ApiError> + Send + 'static`
+///
+/// `'static` is satisfied because [`SqlitePool::clone`] yields an
+/// owned, fully self-contained handle and the closure captures only
+/// inputs the caller has already cloned/owned.
+pub async fn db_blocking<F, T, E>(state: &AppState, f: F) -> Result<T, ApiError>
+where
+    F: FnOnce(
+            &mut r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>,
+        ) -> Result<T, E>
+        + Send
+        + 'static,
+    T: Send + 'static,
+    E: Into<ApiError> + Send + 'static,
+{
+    let pool: SqlitePool = state.pool.clone();
+    tokio::task::spawn_blocking(move || -> Result<T, ApiError> {
+        let mut conn = pool
+            .get()
+            .map_err(|e| ApiError::Database(format!("connection pool: {e}")))?;
+        f(&mut conn).map_err(Into::into)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("blocking task join failed: {e}")))?
+}
+
 /// Legacy direct-open helper kept for the rare path that doesn't have
 /// access to `AppState` (none currently — kept for forward-compat with
-/// future maintenance scripts). Prefer [`pooled_conn`].
+/// future maintenance scripts). Prefer [`pooled_conn`] +
+/// [`db_blocking`].
 #[allow(dead_code)]
 pub fn open_db(db_path: &str) -> Result<rusqlite::Connection, ApiError> {
     core_storage::database::get_connection(db_path).map_err(|e| ApiError::Database(e.to_string()))

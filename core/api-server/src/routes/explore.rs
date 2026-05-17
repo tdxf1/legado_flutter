@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::ApiError;
 use crate::state::AppState;
 use crate::util;
+use crate::util::db_blocking;
 
 #[derive(Debug, Deserialize)]
 pub struct ExploreRequest {
@@ -31,12 +32,15 @@ async fn explore(
     State(state): State<AppState>,
     Json(req): Json<ExploreRequest>,
 ) -> Result<Json<ExploreResponse>, ApiError> {
-    let mut conn = crate::util::pooled_conn(&state)?;
-    let source_dao = core_storage::source_dao::SourceDao::new(&mut conn);
-    let source = source_dao
-        .get_by_id(&req.source_id)
-        .map_err(|e| ApiError::Database(e.to_string()))?
-        .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", req.source_id)))?;
+    let source_id = req.source_id.clone();
+    let source = db_blocking(&state, move |conn| {
+        let source_dao = core_storage::source_dao::SourceDao::new(conn);
+        source_dao
+            .get_by_id(&source_id)
+            .map_err(|e| ApiError::Database(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", source_id)))
+    })
+    .await?;
 
     let core_source = util::storage_to_core_source(&source)?;
     let parser = core_source::parser::BookSourceParser::new();
@@ -61,12 +65,15 @@ async fn list_explore_entries(
     Query(params): Query<ListExploreQuery>,
 ) -> Result<Json<Vec<core_source::parser::ExploreEntry>>, ApiError> {
     let source_id = params.source_id;
-    let mut conn = crate::util::pooled_conn(&state)?;
-    let source_dao = core_storage::source_dao::SourceDao::new(&mut conn);
-    let source = source_dao
-        .get_by_id(&source_id)
-        .map_err(|e| ApiError::Database(e.to_string()))?
-        .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", source_id)))?;
+    let source_id_clone = source_id.clone();
+    let source = db_blocking(&state, move |conn| {
+        let source_dao = core_storage::source_dao::SourceDao::new(conn);
+        source_dao
+            .get_by_id(&source_id_clone)
+            .map_err(|e| ApiError::Database(e.to_string()))?
+            .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", source_id_clone)))
+    })
+    .await?;
 
     let core_source = util::storage_to_core_source(&source)?;
     let entries = core_source::parser::BookSourceParser::get_explore_entries(&core_source);
