@@ -478,11 +478,18 @@ fn migrate_v7(conn: &Connection) -> SqlResult<()> {
 }
 
 /// 版本 8 迁移：为 book_sources 表添加 book_url_pattern 列
+/// 版本 8 迁移：添加 book_url_pattern 列到 book_sources。
+///
+/// R65: the `create_tables(conn)?` call below is intentionally retained
+/// as a "schema baseline" guard — if a previous v8 run aborted partway
+/// (e.g. process killed) it makes sure all tables exist before we
+/// attempt the ALTER. In the normal upgrade path it's a no-op since
+/// every CREATE uses `IF NOT EXISTS`.
 fn migrate_v8(conn: &Connection) -> SqlResult<()> {
     create_tables(conn)?;
     let has_book_url_pattern: bool = conn.query_row(
-        "SELECT COUNT(*) > 0 FROM pragma_table_info('book_sources') WHERE name = 'book_url_pattern'",
-        [],
+        "SELECT COUNT(*) > 0 FROM pragma_table_info('book_sources') WHERE name = ?1",
+        rusqlite::params!["book_url_pattern"],
         |row| row.get(0),
     )?;
     if has_book_url_pattern {
@@ -506,15 +513,19 @@ fn migrate_v9(conn: &Connection) -> SqlResult<()> {
         ("explore_screen", "INTEGER"),
     ];
     for (col, col_type) in &columns {
+        // R64: parameterise the column-name lookup. The values come from
+        // the hard-coded `columns` array above (no untrusted input), so
+        // there's no real injection risk, but using `?1` is the form
+        // future readers expect.
         let has_col: bool = conn.query_row(
-            &format!(
-                "SELECT COUNT(*) > 0 FROM pragma_table_info('book_sources') WHERE name = '{}'",
-                col
-            ),
-            [],
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('book_sources') WHERE name = ?1",
+            rusqlite::params![col],
             |row| row.get(0),
         )?;
         if !has_col {
+            // The DDL itself can't be parameterised (sqlite forbids
+            // binding identifiers); the `col` / `col_type` values are
+            // hard-coded constants so format! is safe here.
             conn.execute(
                 &format!("ALTER TABLE book_sources ADD COLUMN {} {}", col, col_type),
                 [],

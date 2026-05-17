@@ -25,7 +25,6 @@ class PageViewController extends ChangeNotifier {
   ReaderSettings _settings;
   Size _pageSize = Size.zero;
 
-  bool _isMeasuring = false;
   bool _disposed = false;
 
   /// 由 [PageViewWidget] 注入：点击屏幕右 1/3 时调用，让 PageDelegate
@@ -163,20 +162,23 @@ class PageViewController extends ChangeNotifier {
     if (_paragraphs.isEmpty) return;
     if (_pages.isNotEmpty) return;
     if (_pageSize.width <= 0 || _pageSize.height <= 0) return;
-    if (_isMeasuring) return;
     _measureChapter(jumpToLast: jumpToLast);
   }
 
   void _measureChapter({bool jumpToLast = false}) {
-    if (_isMeasuring) return;
-    _isMeasuring = true;
-
+    // R38: removed the previous `_isMeasuring` re-entrancy guard. Layout
+    // is fully synchronous on this code path (PageMeasure.measureChapter
+    // does its work in-thread), so there's no observable window in which
+    // a second caller could see the flag set. The flag was introduced
+    // assuming an async measure that never landed; it only added the
+    // illusion of safety.
+    //
     // Snapshot only chapterIndex — that's the one referenced from the
     // post-frame callback below to detect "user already moved on to a
     // different chapter while we were measuring". Settings/pageSize were
     // historically captured here too but never read again because the
-    // measure call below reads them via fields directly; keeping the dead
-    // snapshots only invited drift bugs.
+    // measure call below reads them via fields directly; keeping the
+    // dead snapshots only invited drift bugs.
     final chapterIndex = _currentChapterIndex;
 
     final measure = PageMeasure(
@@ -186,15 +188,20 @@ class PageViewController extends ChangeNotifier {
     );
     final result = measure.measureChapter(chapterIndex, _paragraphs);
     _pages = result.pages;
-    _isMeasuring = false;
 
     if (jumpToLast && _pages.isNotEmpty) {
       _currentPageIndex = _pages.length - 1;
-      if (!_disposed) notifyListeners();
     }
 
+    // R39: always defer the listener notification to the next frame.
+    // The previous code path notified synchronously when `jumpToLast`
+    // was true, which meant calling `notifyListeners()` mid-build if a
+    // widget triggered loadChapter() during its own build phase
+    // (e.g. via a Riverpod selector firing on first read). Deferring is
+    // free for the common path and removes the "setState during build"
+    // assertion as a possible failure mode.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_disposed && chapterIndex == _currentChapterIndex && !jumpToLast) {
+      if (!_disposed && chapterIndex == _currentChapterIndex) {
         notifyListeners();
       }
     });

@@ -49,21 +49,25 @@ const REQUIRED_WIRE_FN_FRAGMENTS: &[&str] = &[
 ];
 
 const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
-    "42 =>",
-    "43 =>",
-    "44 =>",
-    "45 =>",
-    "46 =>",
-    "47 =>",
-    "48 =>",
-    "49 =>",
-    "50 =>",
-    "51 =>",
-    "52 =>",
-    "54 =>",
-    "55 =>",
-    "56 =>",
-    "57 =>",
+    // R35: leading whitespace makes the token unique against future
+    // higher-numbered funcIds (e.g. without it, `"42 =>"` would also
+    // match `"1042 =>"`). Today this is theoretical — max funcId is 57
+    // — but the precise pattern costs us nothing.
+    "        42 =>",
+    "        43 =>",
+    "        44 =>",
+    "        45 =>",
+    "        46 =>",
+    "        47 =>",
+    "        48 =>",
+    "        49 =>",
+    "        50 =>",
+    "        51 =>",
+    "        52 =>",
+    "        54 =>",
+    "        55 =>",
+    "        56 =>",
+    "        57 =>",
 ];
 
 fn main() {
@@ -110,8 +114,11 @@ fn main() {
         panic!(
             "frb_generated.rs is missing {} hand-edited wire/dispatch fragment(s). \
              A `flutter_rust_bridge_codegen generate` run probably overwrote the manual \
-             patches. See CURRENT_STATUS.md (FRB patch chapter) and re-apply funcId \
-             42-52 / 54-57 (53 is intentionally a hole; do not re-introduce).",
+             patches. This guard only covers the funcIds we know were hand-edited \
+             (currently 42-52 plus 54-57; 53 is intentionally a hole, do not re-introduce). \
+             funcIds outside that range are produced by codegen and are NOT checked here, \
+             so a regression in those needs separate attention. See CURRENT_STATUS.md \
+             (FRB patch chapter) for the full re-apply procedure.",
             missing.len()
         );
     }

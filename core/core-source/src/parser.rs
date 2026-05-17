@@ -40,12 +40,19 @@ const RATE_STATE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
 const RATE_LIMITER_SWEEP_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(30);
 
-/// Last time `evict_stale_rate_states` did real work. Wrapped in `Mutex`
-/// (rather than `AtomicU64`) so it shares the locking story with
-/// `RATE_LIMITER` — both are cheap to acquire and nothing async crosses
-/// the critical section.
-static RATE_LIMITER_LAST_SWEEP: std::sync::LazyLock<Mutex<std::time::Instant>> =
-    std::sync::LazyLock::new(|| Mutex::new(std::time::Instant::now()));
+/// Last time `evict_stale_rate_states` did real work, expressed as
+/// milliseconds since [`RATE_LIMITER_BASELINE`]. Wrapping in `AtomicI64`
+/// (R34) lets `should_run_sweep_now` claim the next sweep window with a
+/// single CAS instead of acquiring a second mutex inside the rate-limit
+/// critical section, which was undermining R5's throttling intent.
+static RATE_LIMITER_LAST_SWEEP_MS: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(0);
+
+/// Process-start anchor used to convert `Instant` into a single i64
+/// stable across calls. We store offsets relative to this anchor in
+/// [`RATE_LIMITER_LAST_SWEEP_MS`].
+static RATE_LIMITER_BASELINE: std::sync::LazyLock<std::time::Instant> =
+    std::sync::LazyLock::new(std::time::Instant::now);
 
 #[derive(Debug, Clone)]
 struct RateLimitState {
@@ -106,20 +113,39 @@ fn evict_stale_rate_states(registry: &mut HashMap<String, RateLimitState>) {
     }
 }
 
-/// R5: throttle `evict_stale_rate_states` so heavy concurrent search bursts
-/// don't pay the O(n) sweep cost on every request. Returns true at most
-/// once per [`RATE_LIMITER_SWEEP_INTERVAL`].
+/// R5/R34: throttle `evict_stale_rate_states` so heavy concurrent search
+/// bursts don't pay the O(n) sweep cost on every request. Returns true
+/// at most once per [`RATE_LIMITER_SWEEP_INTERVAL`].
+///
+/// Implementation uses an `AtomicI64` instead of a second mutex so the
+/// already-mutex-protected hot path doesn't pay an extra lock. Multiple
+/// concurrent callers race to claim the next sweep slot via
+/// `compare_exchange`; exactly one wins, the rest see false and skip
+/// the eviction work.
 fn should_run_sweep_now() -> bool {
-    let mut last = match RATE_LIMITER_LAST_SWEEP.lock() {
-        Ok(g) => g,
-        Err(_) => return false,
-    };
-    let now = std::time::Instant::now();
-    if now.saturating_duration_since(*last) >= RATE_LIMITER_SWEEP_INTERVAL {
-        *last = now;
-        true
-    } else {
-        false
+    use std::sync::atomic::Ordering;
+    let now_ms = std::time::Instant::now()
+        .saturating_duration_since(*RATE_LIMITER_BASELINE)
+        .as_millis() as i64;
+    let interval_ms = RATE_LIMITER_SWEEP_INTERVAL.as_millis() as i64;
+    loop {
+        let last = RATE_LIMITER_LAST_SWEEP_MS.load(Ordering::Relaxed);
+        if now_ms.saturating_sub(last) < interval_ms {
+            return false;
+        }
+        match RATE_LIMITER_LAST_SWEEP_MS.compare_exchange(
+            last,
+            now_ms,
+            Ordering::AcqRel,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return true,
+            // Lost the race; another caller already advanced last. Re-read
+            // and check whether enough time has passed for *us* to sweep
+            // (almost certainly no, but the loop preserves correctness if
+            // the clock moved while we contended).
+            Err(_) => continue,
+        }
     }
 }
 
@@ -1976,10 +2002,10 @@ mod tests {
     use super::*;
     use crate::types::{BookInfoRule, BookSource, ContentRule, SearchRule};
 
-    // P1-3: stable_search_result_id contract — same inputs produce the same
-    // output, different inputs differ, byte-for-byte matches the Dart
-    // _saveResultToBookshelf hash so a Search SR.id can land in storage
-    // without re-hashing.
+    // P1-3: stable_search_result_id contract — same inputs produce the
+    // same output, different inputs differ. Rust is the sole authority
+    // for this hash since R18 deleted the Dart-side fallback; any future
+    // change must come with a `books.id` migration (see R55).
     #[test]
     fn test_stable_search_result_id_is_deterministic() {
         let a = stable_search_result_id("src1", "https://x/book/1", "三体", "刘慈欣");

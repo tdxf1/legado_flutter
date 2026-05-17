@@ -80,6 +80,10 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   bool _isLoadingContent = false;
   List<Map<String, dynamic>>? _cachedChapters;
   int _chapterRequestId = 0;
+  /// R44: ensure the "替换规则执行失败" snackbar appears at most once per
+  /// reader session. Without this guard a chapter that triggers a regex
+  /// engine error would spam the user every time they paginate.
+  bool _replaceRuleErrorShown = false;
   final ScrollController _scrollController = ScrollController();
   bool _progressRestored = false;
   Timer? _scrollDebounceTimer;
@@ -101,7 +105,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   /// fall back to the estimator. The map is keyed by global chapter index
   /// + paragraph index (`(chIndex << 32) | paragraphIndex`) so multiple
   /// loaded chapters don't collide.
-  final Map<int, GlobalKey> _paragraphKeys = {};
+  final Map<String, GlobalKey> _paragraphKeys = {};
   static const int _kParagraphKeyCap = 200;
   double _lastScrollOffset = 0;
   bool _isScrollingBackward = false;
@@ -198,14 +202,23 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   void didUpdateWidget(ReaderPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.bookId != widget.bookId) {
-      _chapterRequestId++;
-      _cachedChapters = null;
-      _chapterContent = '';
-      _loadedChapters = [];
-      _currentIndex = widget.chapterIndex;
-      _isLoadingContent = false;
-      _bookmarks = [];
-      _hasBookmarkForChapter = false;
+      // R66: wrap the reset in setState so the UI flips to the loading
+      // state immediately. Without setState, build() still runs (the
+      // widget rebuilt because props changed) and reads _chapterContent,
+      // but if the framework decides to skip the rebuild — e.g. when
+      // didUpdateWidget is the only change source — we'd render the old
+      // chapter until _loadBookmarks completes asynchronously.
+      setState(() {
+        _chapterRequestId++;
+        _cachedChapters = null;
+        _chapterContent = '';
+        _loadedChapters = [];
+        _currentIndex = widget.chapterIndex;
+        _isLoadingContent = false;
+        _bookmarks = [];
+        _hasBookmarkForChapter = false;
+        _replaceRuleErrorShown = false;
+      });
       _loadBookmarks();
     }
   }
@@ -310,7 +323,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   }
 
   /// P1-7: 单次 FRB 调用代替之前 Dart 主 isolate 的 RegExp 循环。
-  /// 失败时记录日志并退回原始内容（保持向后兼容）。
+  /// 失败时记录日志、提示一次 toast、然后退回原始内容（向后兼容，
+  /// 优先保证用户能继续读，但不再让规则失效悄无声息）。
   Future<String> _applyReplaceRulesViaRust(
       String dbPath, String content) async {
     if (content.isEmpty) return content;
@@ -323,6 +337,19 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       );
     } catch (e) {
       debugPrint('[Reader] applyReplaceRules failed: $e');
+      // R44: surface the failure once so the user knows their replace
+      // rules aren't being applied (e.g. catastrophic-backtracking
+      // regex, panic in core-source, FRB transport error). Subsequent
+      // failures within the same session stay silent to avoid spam.
+      if (mounted && !_replaceRuleErrorShown) {
+        _replaceRuleErrorShown = true;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('替换规则执行失败，已显示原始章节内容'),
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
       return content;
     }
   }
@@ -447,11 +474,20 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     _paragraphKeys.clear();
   }
 
-  /// P2-13 helper: combine global chapter index + paragraph index into one
-  /// integer that fits in a Map key without colliding across chapters.
-  /// Chapter index occupies the high 32 bits, paragraph index the low 32.
-  int _paragraphKeyId(int chapterIndex, int paragraphIndex) {
-    return (chapterIndex << 32) | (paragraphIndex & 0xFFFFFFFF);
+  /// P2-13 helper: combine global chapter index + paragraph index into a
+  /// `Map` key that's collision-free across chapters.
+  ///
+  /// R45: previously this packed both indices into a single 64-bit int
+  /// via `chapterIndex << 32 | paragraphIndex`. That works on the
+  /// Dart VM (native ints) but breaks on dart2js / dart2wasm where Dart
+  /// `int` is a JS double: shifts are taken modulo 32, so for any
+  /// `chapterIndex >= 1` the high bits are silently truncated and
+  /// `(2 << 32) | 0` collapses to `2 | 0 == 2`. Using a string key
+  /// sidesteps the entire 53-bit-mantissa hazard at the cost of one
+  /// allocation per lookup, which is fine here — these keys are only
+  /// minted while building the visible chunk of the scroll view.
+  String _paragraphKeyId(int chapterIndex, int paragraphIndex) {
+    return '$chapterIndex|$paragraphIndex';
   }
 
   Future<void> _appendNextChapter() async {

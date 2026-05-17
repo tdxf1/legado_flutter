@@ -1139,10 +1139,23 @@ fn java_set_cookie(url_str: String, cookie_str: String) -> String {
 
 #[cfg(feature = "js-quickjs")]
 fn java_remove_cookie(url_str: String) -> String {
-    // P2-1: `reqwest::cookie::Jar` doesn't expose a removal API. We fake it
-    // by reading every cookie applicable to `url_str` (via `cookies()`
-    // which returns the `Cookie:` request header) and re-setting each name
-    // with `Max-Age=0; Path=/`, which makes the jar treat it as expired.
+    // P2-1: `reqwest::cookie::Jar` doesn't expose a removal API. We fake
+    // it by reading every cookie applicable to `url_str` (via `cookies()`
+    // which returns the `Cookie:` request header) and re-setting each
+    // name with `Max-Age=0; Path=/`, which makes the jar treat it as
+    // expired.
+    //
+    // R41: known limitation — `cookies()` only gives us the
+    // `Cookie:`-header form, which has dropped every attribute except
+    // name=value. We therefore can't reproduce the original cookie's
+    // `Path` / `Domain` / `Secure` flags, and simply set `Path=/` for
+    // the expiry. If the original cookie was set with a more specific
+    // path (e.g. `Path=/api`) the jar will keep matching it for paths
+    // under `/api` because our `/`-scoped expiry doesn't shadow it.
+    // This is the best we can do without reaching into reqwest
+    // internals; legacy Legado JS that needs precise cookie removal
+    // should be rewritten to scope `removeCookie` calls to the right
+    // path.
     use reqwest::cookie::CookieStore;
     use reqwest::header::HeaderValue;
 
@@ -1167,7 +1180,10 @@ fn java_remove_cookie(url_str: String) -> String {
         }
         let expire = format!("{name}=; Max-Age=0; Path=/");
         if let Ok(hv) = HeaderValue::from_str(&expire) {
-            jar.set_cookies(&mut [hv].iter(), &url);
+            // R42: `std::iter::once` is the idiomatic way to feed a
+            // single header into the `CookieStore::set_cookies` slot
+            // (which takes `&mut dyn Iterator<Item = &HeaderValue>`).
+            jar.set_cookies(&mut std::iter::once(&hv), &url);
         }
     }
     String::new()

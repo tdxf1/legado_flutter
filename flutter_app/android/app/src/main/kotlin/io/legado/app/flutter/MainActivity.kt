@@ -132,7 +132,8 @@ class MainActivity : FlutterActivity() {
         }
 
         /**
-         * R9 — DNS-rebinding hardening.
+         * R9 / R28 — DNS-rebinding hardening (best-effort, with a known
+         * TOCTOU gap — see "Limitations" below).
          *
          * `isAllowedWebViewUrl` rejects URLs whose **host string** is a
          * private IP literal. That doesn't catch a malicious `attacker.com`
@@ -140,15 +141,23 @@ class MainActivity : FlutterActivity() {
          * CGNAT). Once we're about to actually fetch the URL we resolve all
          * A/AAAA records and bail if any of them is private.
          *
-         * Best-effort only:
-         *  - `getAllByName` may consult OS cache; the *next* request might
-         *    resolve differently. For a single bridge call this is good
-         *    enough — repeated calls would all go through this check.
-         *  - Debug builds skip the check (same policy as the first layer).
+         * Limitations (R28):
+         *  - **TOCTOU**: this function does one DNS lookup, then the caller
+         *    invokes `URL(url).openConnection()` which performs its own
+         *    independent lookup. An attacker who controls DNS can return
+         *    public addresses to this lookup and a private one to the
+         *    second. A robust fix would resolve once here and then connect
+         *    to the literal IP with a `Host:` header — that's a larger
+         *    refactor; we accept the gap for now.
+         *  - **OS cache**: the next call might resolve differently because
+         *    we hit the cache. Acceptable for a per-call defence.
+         *  - **Debug builds skip the check** (same policy as the first
+         *    layer) so devs can use `flutter run --debug` against
+         *    localhost services without bypass flags.
          *
-         * Returns true when the host resolves to *only* public addresses (or
-         * resolution fails, in which case let the URL connection itself raise
-         * the IOException).
+         * Returns true when the host resolves to *only* public addresses
+         * (or resolution fails, in which case let the URL connection itself
+         * raise the IOException).
          */
         fun isResolvedHostPublic(host: String): Boolean {
             if (BuildConfig.DEBUG) return true

@@ -145,6 +145,17 @@ final allReplaceRulesProvider = FutureProvider<List<Map<String, dynamic>>>((ref)
 /// 每次 ReplaceRule CRUD 后调用 `bumpReplaceRuleGeneration(ref)` 让 Rust
 /// 侧的 enabled-rule 缓存失效；阅读器在切章节时把当前 generation 透传给
 /// `apply_replace_rules`，缓存命中即不再走 DAO。
+///
+/// R43 — 多 isolate 场景的隐患：本 provider 是 Dart 进程内 StateProvider，
+/// 每个 isolate 各自从 0 计数。Rust 侧 `apply_replace_rules` 的缓存是
+/// `OnceLock` 全局且 key 包含 db_path（commit 8 的 R48 加固后），所以
+/// 单 db_path + 多 isolate 各自 bump 时仍可能撞车（两个 isolate 都从 0
+/// 开始，各自 bump 到 1 但规则集不同，Rust 缓存命中错误的版本）。
+///
+/// 当前没有跨 isolate 写规则的路径——`replace_rule_page.dart` 只在 UI
+/// isolate 用——所以风险隐藏。如果以后引入 download isolate 写规则，
+/// 这个 provider 需要改成 `StateProvider<(String, int)>` 把进程级随机
+/// salt 也带进去，避免不同 isolate 的 generation 撞值。
 final replaceRuleGenerationProvider = StateProvider<int>((ref) => 0);
 
 void bumpReplaceRuleGeneration(WidgetRef ref) {
@@ -557,6 +568,16 @@ class ReaderSettings {
 
   /// 当前是否为"滚动模式"（即原 `ReaderPageMode.continuousScroll`）。
   /// 等价于 `renderMode == ReaderRenderMode.continuous`，保留为快捷别名。
+  ///
+  /// R37: this alias is the recommended call-site form for the binary
+  /// "scroll vs paged" branch (it reads naturally and has the same
+  /// compile-time safety as the enum because both routes through the
+  /// same `renderMode` getter). When/if a third mode is added, switch
+  /// the call-sites that need ternary handling to `switch (renderMode)`
+  /// and tighten this alias's doc-comment to call out the boolean
+  /// projection's loss of fidelity. For now keeping ~16 boolean checks
+  /// is preferable to expanding them into `renderMode ==
+  /// ReaderRenderMode.continuous` everywhere.
   bool get isScrollMode => renderMode == ReaderRenderMode.continuous;
 
   ReaderSettings copyWith({

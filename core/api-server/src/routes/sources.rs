@@ -89,6 +89,12 @@ async fn set_source_enabled(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let mut conn = pooled_conn(&state)?;
     let dao = core_storage::source_dao::SourceDao::new(&mut conn);
+    // R59: TOCTOU between `get_by_id` and `set_enabled` is possible if
+    // another request deletes the source in between, but the worst-case
+    // outcome is that `set_enabled` becomes a silent no-op against an
+    // already-deleted row. No data integrity issue — wrapping these in
+    // a transaction would protect the contract but adds DB round-trips
+    // for no observable user benefit. Leaving as-is.
     dao.get_by_id(&id)
         .map_err(|e| ApiError::Database(e.to_string()))?
         .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", id)))?;
@@ -103,6 +109,9 @@ async fn delete_source(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let mut conn = pooled_conn(&state)?;
     let dao = core_storage::source_dao::SourceDao::new(&mut conn);
+    // R59: same TOCTOU note as `set_source_enabled`. A concurrent delete
+    // of the same id makes the second caller's `delete` a no-op, which
+    // is the desired idempotent outcome anyway.
     dao.get_by_id(&id)
         .map_err(|e| ApiError::Database(e.to_string()))?
         .ok_or_else(|| ApiError::NotFound(format!("书源不存在: {}", id)))?;

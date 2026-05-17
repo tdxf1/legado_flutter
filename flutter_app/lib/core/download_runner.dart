@@ -6,6 +6,47 @@ import 'package:flutter/foundation.dart';
 import '../src/rust/api.dart' as rust_api;
 import 'notification_service.dart';
 
+/// R69: download status code constants. The wire-level int values come
+/// from `core-storage::models::DownloadTask` / `DownloadChapter` (Rust):
+///
+/// - **Task**: 0=等待, 1=下载中, 2=暂停, 3=完成, 4=失败
+/// - **Chapter**: 0=等待, 1=下载中, 2=完成, 3=失败
+///
+/// Note the off-by-one: chapter "complete" is 2, task "complete" is 3,
+/// because tasks have an extra "暂停" state. Treating them as a shared
+/// magic-number set has burnt at least one reviewer; keep the two
+/// classes separate so the type system catches mix-ups.
+class DownloadTaskStatus {
+  const DownloadTaskStatus._();
+  static const int pending = 0;
+  static const int running = 1;
+  static const int paused = 2;
+  static const int complete = 3;
+  static const int failed = 4;
+}
+
+class DownloadChapterStatus {
+  const DownloadChapterStatus._();
+  static const int pending = 0;
+  static const int running = 1;
+  static const int complete = 2;
+  static const int failed = 3;
+}
+
+/// R40: scrub a thrown exception's message for the persisted
+/// `errorMessage` field. Strips URL query strings (where auth tokens
+/// and referer params live) and trims to a UI-friendly length.
+String _sanitizeDownloadError(Object e) {
+  var msg = e.toString();
+  // Replace any http(s)://host[:port]/path?query → http(s)://host[:port]/path
+  msg = msg.replaceAllMapped(
+    RegExp(r'(https?://[^\s?]+)\?[^\s]*'),
+    (m) => '${m.group(1)}?<redacted>',
+  );
+  if (msg.length > 200) msg = '${msg.substring(0, 200)}…';
+  return msg;
+}
+
 class _QueuedDownload {
   final String taskId;
   final String bookName;
@@ -25,6 +66,15 @@ class _QueuedDownload {
 }
 
 class DownloadRunner {
+  /// Process-wide singleton.
+  ///
+  /// R70 — known UX limitation: this runner serialises tasks. A user
+  /// who queues 10 books with 100 chapters each waits for all of them
+  /// in turn; there is no concurrency knob. This is intentional for
+  /// the current Phase 4 milestone (avoids fighting per-source rate
+  /// limits in core-source/parser.rs and keeps the notification
+  /// progress bar coherent), but should be reconsidered when we add
+  /// download priorities or per-source parallelism.
   static final DownloadRunner _instance = DownloadRunner._();
   factory DownloadRunner() => _instance;
   DownloadRunner._();
@@ -79,7 +129,7 @@ class DownloadRunner {
         await rust_api.updateDownloadTaskStatus(
           dbPath: task.dbPath,
           taskId: task.taskId,
-          status: 4,
+          status: DownloadTaskStatus.failed,
           errorMessage: '无可下载章节',
         );
       } catch (e) {
@@ -93,7 +143,7 @@ class DownloadRunner {
       await rust_api.updateDownloadTaskStatus(
         dbPath: task.dbPath,
         taskId: task.taskId,
-        status: 1,
+        status: DownloadTaskStatus.running,
       );
     } catch (e) {
       debugPrint('[Download] mark running failed: $e');
@@ -116,7 +166,7 @@ class DownloadRunner {
           await rust_api.updateDownloadChapterStatus(
             dbPath: task.dbPath,
             chapterId: chapterId,
-            status: 3,
+            status: DownloadChapterStatus.failed,
             fileSize: 0,
             errorMessage: '章节链接为空',
           );
@@ -145,16 +195,18 @@ class DownloadRunner {
       } catch (e) {
         debugPrint('[Download] chapter $chapterId failed: $e');
         failCount++;
-        // P3-8: surface the real exception in errorMessage so users (or us)
-        // can tell "网络超时" from "源不支持" without grepping logcat. Trim
-        // long messages because errorMessage is shown in download UI.
-        final msg = e.toString();
-        final shortMsg = msg.length > 200 ? '${msg.substring(0, 200)}…' : msg;
+        // P3-8 + R40: surface the real exception in errorMessage so users
+        // (or us) can tell "网络超时" from "源不支持" without grepping
+        // logcat — but scrub URL query strings first so chapter URLs
+        // with auth tokens / referer params don't end up persisted in
+        // the download_chapters table. Trim long messages because
+        // errorMessage is shown in download UI.
+        final shortMsg = _sanitizeDownloadError(e);
         try {
           await rust_api.updateDownloadChapterStatus(
             dbPath: task.dbPath,
             chapterId: chapterId,
-            status: 3,
+            status: DownloadChapterStatus.failed,
             fileSize: 0,
             errorMessage: '下载失败: $shortMsg',
           );
@@ -176,7 +228,7 @@ class DownloadRunner {
         await rust_api.updateDownloadTaskStatus(
           dbPath: task.dbPath,
           taskId: task.taskId,
-          status: 4,
+          status: DownloadTaskStatus.failed,
           errorMessage:
               '部分章节下载失败 (成功: $successCount, 失败: $failCount, 跳过: $skipCount)',
         );
@@ -188,7 +240,7 @@ class DownloadRunner {
         await rust_api.updateDownloadTaskStatus(
           dbPath: task.dbPath,
           taskId: task.taskId,
-          status: 3,
+          status: DownloadTaskStatus.complete,
         );
       } catch (e) {
         debugPrint('[Download] mark task complete failed: $e');
@@ -215,11 +267,12 @@ class DownloadRunner {
       final json = await rust_api.getDownloadTasks(dbPath: dbPath);
       final List<dynamic> tasks = jsonDecode(json);
       for (final task in tasks) {
-        if (task is Map<String, dynamic> && task['status'] == 1) {
+        if (task is Map<String, dynamic> &&
+            task['status'] == DownloadTaskStatus.running) {
           await rust_api.updateDownloadTaskStatus(
             dbPath: dbPath,
             taskId: task['id'] as String,
-            status: 4,
+            status: DownloadTaskStatus.failed,
             errorMessage: '应用意外关闭，下载中断',
           );
         }

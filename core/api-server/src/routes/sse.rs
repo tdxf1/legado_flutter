@@ -6,7 +6,10 @@
 //!   全部完成后 yield `event: done`。
 //! - `GET /api/logs/sse`
 //!   订阅一个进程内 broadcast 频道，把 Rust 侧 `tracing` 的日志推送到客户端。
-//!   目前内置一条 `event: heartbeat` 心跳证明连通性，调用方可 hook 进 broadcaster 后扩展。
+//!   **当前是占位实现**：只发 `event: heartbeat`，没有真正接进 tracing 层。
+//!   要做真正的日志推送需要：(1) 注册一个 tracing layer 把事件投到
+//!   `tokio::sync::broadcast`，(2) 在这里订阅 receiver 并 yield 出去。
+//!   作为占位保留是为了让前端 SSE 客户端有连通性测试目标 (R62)。
 //!
 //! 协议要点：
 //! - 一条 SSE 消息形如：`event: result\ndata: {...json...}\n\n`

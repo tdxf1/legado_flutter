@@ -962,15 +962,19 @@ impl RegexCache {
     }
 
     fn get_or_compile(&mut self, id: &str, pattern: &str) -> Option<&regex::Regex> {
+        // R50: single hash via `entry` instead of contains_key + insert + get.
+        // Compile failures are stored as `None` so we don't re-warn.
         let key = (id.to_string(), pattern.to_string());
-        if !self.entries.contains_key(&key) {
-            let compiled = regex::Regex::new(pattern);
-            if let Err(ref e) = compiled {
-                tracing::warn!("ReplaceRule {} regex 编译失败: {}", id, e);
-            }
-            self.entries.insert(key.clone(), compiled.ok());
-        }
-        self.entries.get(&key).and_then(|o| o.as_ref())
+        self.entries
+            .entry(key)
+            .or_insert_with(|| {
+                let compiled = regex::Regex::new(pattern);
+                if let Err(ref e) = compiled {
+                    tracing::warn!("ReplaceRule {} regex 编译失败: {}", id, e);
+                }
+                compiled.ok()
+            })
+            .as_ref()
     }
 }
 

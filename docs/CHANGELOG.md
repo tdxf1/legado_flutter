@@ -177,3 +177,38 @@ R52/R53 提醒：审查自己刚写的 stream parser 容易盲，特别是流结
 R56-R58 是个老毛病：api-server 一直按"反正都跑 localhost"假设，但 localhost 不等于 trusted。
 
 **剩余 R 项延后**：R28（DNS TOCTOU）/ R31-R33 / R34（节流锁嵌套）/ R35-R36（build.rs）/ R37（ReaderRenderMode 半成品）/ R38-R39（PageView 状态机）/ R40（脱敏）/ R41-R42（cookie 局限）/ R43（多 isolate 缓存）/ R44（toast）/ R45（Web `<<` modulo-32）/ R50（RegexCache 三次哈希）/ R59（TOCTOU 注释）/ R60（Axum handler 同步阻塞 → spawn_blocking）/ R62（logs_sse 注释误导）/ R64-R65（migration trivial）/ R66（didUpdateWidget setState）/ R69-R70（DownloadRunner status 常量化 / 串行 UX）。
+
+## 第九批（2026-05-17，commit 9）— 清扫剩余 R 项
+
+第八批落地后，把第四轮复审里延后的剩余 R 项里能修的全部清掉。R60（Axum handler 同步阻塞 → spawn_blocking）改动量大且与 r2d2 + DAO 签名耦合，单独留作下一轮重构话题。
+
+| 项 | 严重度 | 摘要 |
+|----|--------|------|
+| R39 | 高危 | `PageViewController._measureChapter` 移除 jumpToLast 路径下的同步 `notifyListeners()`：改为统一在 post-frame 回调里通知，避免 build 阶段调用 listener 抛 "setState during build" 断言 |
+| R38 | 高危 | 删除 `_isMeasuring` 死标志：`_measureChapter` 是同步函数，set/clear 中间没有 await，外部线程不可能看到 true，标志只是误导 |
+| R44 | 高危 | `_applyReplaceRulesViaRust` 失败时新增一次性 toast：之前 catch 直接 `return content`，规则全部失效用户无感知。新增 `_replaceRuleErrorShown` session 级 guard 限制只提示一次 |
+| R66 | 高危 | `didUpdateWidget` bookId 变化路径包 `setState`：先前裸赋值依赖 widget 重建触发 build，但 `_loadBookmarks()` 是 async 期间 UI 显示旧 chapterContent，setState 让 loading 状态立即生效 |
+| R40 | 高危 | DownloadRunner errorMessage 脱敏：抽 `_sanitizeDownloadError` 用 regex 把 `https?://...?query` 替换为 `?<redacted>`，避免 URL token 进 download_chapters 表持久化 |
+| R45 | 高危 | `_paragraphKeyId` 改 String key：之前 `chapterIndex << 32` 在 dart2js / dart2wasm 上 `<<` 是 modulo-32，跨章节 100% 碰撞。`Map<int>` → `Map<String>`，key 形如 `"chIdx|pIdx"` |
+| R34 | 中等 | `RATE_LIMITER_LAST_SWEEP` 由 `Mutex<Instant>` 改 `AtomicI64`：之前在 `RATE_LIMITER` 锁内嵌套获取第二把锁，部分抵消 R5 节流的 perf 收益。新实现用 `compare_exchange` 单 CAS 抢 sweep 槽 |
+| R69 | 中等 | DownloadRunner status 常量化：抽 `DownloadTaskStatus` / `DownloadChapterStatus` 两个 class，注释明确 task `complete=3` vs chapter `complete=2` 的差异。8 处 magic number 全部替换 |
+| R37 | 建议 | `ReaderRenderMode` enum 设计澄清：先前批被列为"半成品"，复看后发现 `isScrollMode` 是有意保留的 boolean 别名（≈16 处布尔分支用 alias 比展开 enum 比较更易读）。providers.dart 加详细注释说明判断标准与未来扩展时机 |
+| R50 | 建议 | `RegexCache.get_or_compile` 改 `entry().or_insert_with`：从 contains_key + insert + get（三次哈希 + 一次 clone）变成 entry 单次哈希 |
+| R28 | 建议 | DNS rebinding TOCTOU 文档：`isResolvedHostPublic` 注释强调已知缺陷（两次 DNS lookup 之间 DNS 可重绑定），引用 R28 编号方便后续根治时定位 |
+| R31-R33 | 建议 | doc 修复：`stable_search_result_id` 测试模块注释去掉过时的 "byte-for-byte matches Dart" 描述（R18 已删 Dart fallback）；`page_view.shouldRepaint` 删除冗余的 `oldDelegate.isRunning != isRunning`（被 `isRunning ||` 覆盖） |
+| R35 | 建议 | `bridge/build.rs` 防覆盖断言更精确：`"42 =>"` → `"        42 =>"`（带 8 空格前缀），避免未来万一出现的 `1042 =>` 误命中 |
+| R36 | 建议 | `bridge/build.rs` panic 文案明确范围："this guard only covers funcIds we know were hand-edited" |
+| R41/R42 | 建议 | `java_remove_cookie` 注释明确 Path 限制（reqwest jar 不暴露 cookie attributes，无法重现原 Path 范围导致非根路径 cookie 实际未删除）；slice iter 改 `std::iter::once` |
+| R43 | 建议 | `replaceRuleGenerationProvider` 多 isolate 撞车风险加注释 |
+| R59 | 建议 | api-server `set_source_enabled` / `delete_source` TOCTOU 注释：注明并发 delete 时第二个调用变 no-op 是预期幂等行为 |
+| R62 | 建议 | `routes/sse.rs` mod-doc 修正：之前暗示 logs_sse 已支持 tracing 接入，实际只发 heartbeat；现在标明"占位实现"并写明真实接入需要的步骤 |
+| R64 | 建议 | `migrate_v9` 列名查询参数化（`?1` 替换 format!），rusqlite::params 构建；DDL 不能参数化的部分加注释说明 |
+| R65 | 建议 | `migrate_v8` `create_tables` 调用加注释解释"schema baseline guard"用途 |
+| R70 | 建议 | DownloadRunner 单例顶部加 doc-comment 标注串行下载是已知 UX 限制（避免与 per-source rate limit 打架） |
+
+**未在本批修复的项**：
+- **R60** (Axum handler 同步阻塞 sqlite 阻塞 tokio worker)：需把所有 DAO 调用包 `tokio::task::spawn_blocking`，涉及全部 `routes/*.rs` 大改；与 `r2d2::PooledConnection` 的 `Send + 'static` 边界有耦合，单独留作下一轮重构。
+
+**已知风险（更早就延后，仍然成立）**：R3 codegen 模板 unreachable / R22 / R23 / R24 ReplaceRule.scope（需 schema 改动）。
+
+**验证**：`cargo test --workspace` 248 passed；`flutter analyze` 0 issue；`flutter test` 112 passed。

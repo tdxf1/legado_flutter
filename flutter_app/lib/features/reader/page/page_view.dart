@@ -260,10 +260,14 @@ class _PageViewPainter extends CustomPainter {
     // R8: typesetting fields (fontSize / weight / lineHeight / spacing /
     // padding / paragraphIndent / fontFamily) must trigger a repaint even
     // when the page reference happens to be re-used after a re-measure.
+    //
+    // R33: removed the redundant `oldDelegate.isRunning != isRunning`
+    // term — `isRunning ||` already covers the "currently animating"
+    // case, and the transition `true → false` only matters once the
+    // animation framework stops driving frames anyway.
     final oldS = oldDelegate.settings;
     final newS = settings;
     return isRunning ||
-        oldDelegate.isRunning != isRunning ||
         oldDelegate.animProgress != animProgress ||
         oldDelegate.direction != direction ||
         !identical(oldDelegate.currentPage, currentPage) ||
