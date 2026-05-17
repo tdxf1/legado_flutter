@@ -14,7 +14,7 @@
      in base-config; that was a regression introduced by the SSRF hardening
      batch and is corrected by R2.
    - Debug builds also trust user CAs so developers can use Charles / mitmproxy
-     against `flutter run --debug` without rebuilding the app.
+     against debug builds (flutter run with debug flag) without rebuilding.
 
   If/when we want to enforce HTTPS for specific high-trust domains, add
   <domain-config> blocks below.
