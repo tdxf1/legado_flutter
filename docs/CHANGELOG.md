@@ -321,3 +321,46 @@ add_book 流程是「源校验 → 初始 book upsert（占位）→ 网络拉 c
 - cargo test --workspace: 248 passed
 - flutter analyze: 0 issue
 - flutter test: 112 passed
+
+## 第十三批（2026-05-17，commit 13）— R82 设计层重构: ParserError 替代静默 Vec
+
+R87 在 commit 12 给 add_book / refresh_chapters 加了 API 层兜底，避免静默写空 chapters 表。但根因 — `parser.search()` / `get_chapters()` / `explore()` / `get_book_info()` / `get_chapter_content()` 用 `Vec<>` / `Option<>` 返回类型把"配置缺失 / 网络失败 / 解析失败 / 真的 0 结果"全塌陷成空 — 还在 core-source。本批做设计层修复。
+
+| 项 | 严重度 | 摘要 |
+|----|--------|------|
+| R82 | 高危 | 新增 `core_source::ParserError` 枚举：`RuleConfig` / `Network` / `Parse` / `Empty` 四个 variant，区分配置错 / 网络错 / 规则跑炸 / 真 0 结果。`Display` impl 给中文用户提示，`Serialize`+`Deserialize` 让错误能进 JSON 响应。所有 5 个公共 entry point 签名改 `Result<T, ParserError>`。同步更新 `bridge/api.rs` 9 处 caller、api-server 6 个路由、parser.rs 内部 18 个测试。原"smuggled `[ERR]` SearchResult"hack 删除（错误信息塞 `name` 字段后被前端当书名渲染过，丑陋且不可靠） |
+
+**调用方迁移策略**：
+- **`bridge/api.rs`**（FRB wire fns）：`Empty` → 返回 `[]` / `null`（保持 Dart 侧空集合契约）；其他 ParserError → `Err(String)` 让 Dart 侧 catch 并 toast
+- **`bridge::search_with_source_from_db_v2`**（诊断 wrapper）：把所有 ParserError variant 都包成 `[{ok:false, error, source_name, search_url}]` 信封，UI 侧 source-validation 页面能精确显示原因
+- **`bridge::download_and_save_chapter`**：`Empty` 维持"章节内容为空"状态码 3；其他错误把真实 reason（trim 200 字）写进 download_chapters.error_message，方便用户看到"网络超时"/"源不支持"等
+- **api-server `routes/search.rs` + `sse.rs`**：`Empty` → 空 Vec（合法 0 结果，进 items）；其他 → 进 `failed_sources`，前端 SSE 客户端能展示精确错误
+- **api-server `routes/bookshelf.rs::add_book`**：`get_book_info` 失败容忍（用 `.ok()`，metadata 是锦上添花）；`get_chapters` 失败 fail-fast 返回 BadRequest，原 R87 兜底逻辑被替换成精确的 ParserError 分支
+- **api-server `routes/reader.rs`**：`get_chapter_content` 的 Empty → 404，其他 → 400 含错误详情；`refresh_chapters` 同样精确分支
+- **api-server `routes/explore.rs`**：Empty → 空数组（合法），其他 → BadRequest
+
+**实现要点**：
+1. **不引入 thiserror 依赖**：手写 `Display` + `std::error::Error` impl，避免 core-source 加新 dep
+2. **`#[serde(tag = "kind", content = "message")]`**：JSON 形如 `{"kind":"Network","message":"timeout"}` / `{"kind":"Empty"}`，前端可按 kind 做精细分支
+3. **测试更新**：18 个 mock-server 测试加 `.expect("...")` 解 Result；2 个旧"assert is_empty"测试改为 `assert!(matches!(_, Err(RuleConfig)))`，意图比"空 Vec"清晰得多
+4. **新增 2 个 ParserError 单测**：`test_parser_error_serialization`（JSON 往返）+ `test_parser_error_display`（Chinese 用户消息）
+
+**对 R87 的影响**：commit 12 在 API 层加的 `chapters.is_empty()` 兜底现在被替换成 `match Result<...> { Err(Empty) => ..., Err(e) => format!(..., e), Ok(c) => ... }` 的更精确分支。用户错误提示从笼统的"未能获取章节列表（书源解析或网络失败），请稍后重试"变成具体的"未能获取章节列表（网络请求失败: connection refused），原章节列表已保留"等。
+
+**对 caller 的破坏性改动汇总**：
+- `parser.search`: `Vec<SearchResult>` → `Result<Vec<SearchResult>, ParserError>`
+- `parser.explore`: 同上
+- `parser.get_chapters`: `Vec<ChapterInfo>` → `Result<Vec<ChapterInfo>, ParserError>`
+- `parser.get_book_info`: `Option<BookDetail>` → `Result<BookDetail, ParserError>`
+- `parser.get_chapter_content`: `Option<ChapterContent>` → `Result<ChapterContent, ParserError>`
+- `parser::search_book` 便捷 fn：跟着改
+
+**已知风险（仍然成立）**：R3 codegen 模板 unreachable / R22 / R23 / R24 ReplaceRule.scope（需 schema 改动）。R82 完成后这是真正剩下的 backlog。
+
+**总评**：经过 7 轮全面复审 + 13 个 commit，所有列出的 R 问题（R1-R92）已全部清理或显式延后。剩余 4 个 design-level item 都需要 schema 或 FRB codegen 改动，独立批次处理。
+
+**验证**：
+- cargo check --workspace: clean
+- cargo test --workspace: 250 passed (+2 ParserError 单测)
+- flutter analyze: 0 issue
+- flutter test: 112 passed

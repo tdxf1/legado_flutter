@@ -154,8 +154,15 @@ async fn search_single_source(
     let source = util::storage_to_core_source(&storage_source)
         .map_err(|e| (source_id.to_string(), source_name.clone(), e.to_string()))?;
     let parser = core_source::parser::BookSourceParser::new();
-    let results = parser.search(&source, keyword).await;
-    Ok(results)
+    // R82: parser.search now returns Result. Empty (no matches) is
+    // converted to an empty Vec for the SearchResponse — this is a
+    // legitimate "0 results" signal, distinct from the failed_sources
+    // list which captures Network / RuleConfig / Parse errors.
+    match parser.search(&source, keyword).await {
+        Ok(results) => Ok(results),
+        Err(core_source::ParserError::Empty) => Ok(Vec::new()),
+        Err(e) => Err((source_id.to_string(), source_name.clone(), e.to_string())),
+    }
 }
 
 pub fn routes() -> Router<AppState> {

@@ -45,9 +45,17 @@ async fn explore(
     let core_source = util::storage_to_core_source(&source)?;
     let parser = core_source::parser::BookSourceParser::new();
 
-    let results = parser
+    // R82: explore returns Result. Empty becomes empty Vec (legitimate
+    // "no entries on this page"); other variants surface as ApiError
+    // so the explore page can show why nothing loaded.
+    let results = match parser
         .explore(&core_source, &req.explore_url, req.page)
-        .await;
+        .await
+    {
+        Ok(items) => items,
+        Err(core_source::ParserError::Empty) => Vec::new(),
+        Err(e) => return Err(ApiError::BadRequest(format!("发现请求失败: {}", e))),
+    };
 
     Ok(Json(ExploreResponse {
         items: results,

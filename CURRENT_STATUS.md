@@ -438,18 +438,14 @@ core/
 历次审查与修复的完整时间线已迁移到 [`docs/CHANGELOG.md`](docs/CHANGELOG.md)。
 当前 STATUS 只保留"最近一批的状态摘要"。
 
-**最近一批**：第十二批（2026-05-17，commit 12）— R86 / R87 / R89 收尾。
-第六轮全面复审在 commit 11 后捞出 9 项（R84-R92），本批做最高 ROI 的 3 项：
+**最近一批**：第十三批（2026-05-17，commit 13）— R82 设计层重构: ParserError 替代静默 Vec。
+新增 `core_source::ParserError` 枚举（`RuleConfig` / `Network` / `Parse` / `Empty`）替换原来用 `Vec<>` / `Option<>` 静默吞失败的设计。所有 5 个 parser 公共 entry 签名改 `Result<T, ParserError>`，9 处 bridge wire fn / 6 个 api-server 路由 / 18 个 mock 测试同步更新。
 
-- 高危：R87 `add_book` / `refresh_chapters` 在 chapters 拉取失败（空 Vec）时返回 ApiError::BadRequest 而非静默写空 chapters 表 + book.chapter_count=0
-- 中等：R89 `core-net::downloader` 增加 `file.sync_all()` 防止崩溃/掉电时落空文件
-- 低：R86 `db_transaction` doc-comment 增加 panic 安全说明
+**调用方迁移**：bridge 把 Empty 转空集合（保持 Dart 契约）、其他 ParserError 转 `Err(String)`；api-server 把 Empty 当合法 0 结果、其他变 BadRequest；download_runner 把真实错误（trim 200 字）写进 download_chapters.error_message。删除了原"smuggled [ERR] SearchResult.name"的 hack。
 
-**剩余 R 项（第六轮）**：R84（delete_book 错误吞）/ R85（StorageManager API 不一致）/ R88（downloader 同 path 并发竞态）/ R90（download_dao raw BEGIN）/ R91（api-server CatchPanicLayer）/ R92（无 TLS）。都是 perf nano / 部署 / 当前生产路径不可达。
+**已知风险（仍然成立）**：R3 codegen 模板 unreachable / R22 / R23 / R24 ReplaceRule.scope（需 schema 改动）。R82 完成后这是真正剩下的 backlog。
 
-**已知风险（仍然成立）**：R3 codegen 模板 unreachable / R22 / R23 / R24 ReplaceRule.scope（需 schema 改动）/ R82 (parser.get_chapters 静默失败设计层重构 — 但 R87 已在 API 层兜底)。
-
-**总评**：经过 6 轮全面复审 + 12 个 commit 的迭代，所有真实可见的 user-facing 正确性问题全部清空。剩余项是 perf 优化、deployment、或者生产路径不可达的设计 hazard。每批完成后 `cargo test --workspace` 与 `flutter test` 都全绿；本批完成时 cargo 248 / flutter 112 / `flutter analyze` 0 issue。详细问题清单与具体改动见 CHANGELOG。
+**总评**：经过 7 轮全面复审 + 13 个 commit，所有列出的 R 问题（R1-R92）已全部清理或显式延后。剩余 4 个 design-level item 都需要 schema 或 FRB codegen 改动，独立批次处理。每批完成后 `cargo test --workspace` 与 `flutter test` 都全绿；本批完成时 cargo 250 (+2 ParserError 单测) / flutter 112 / `flutter analyze` 0 issue。详细问题清单与具体改动见 CHANGELOG。
 
 ---
 

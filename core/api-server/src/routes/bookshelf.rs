@@ -112,25 +112,34 @@ async fn add_book(
     })
     .await?;
 
-    // Fetch book info for toc_url and metadata (network IO — stays async)
+    // Fetch book info for toc_url and metadata (network IO — stays async).
+    // R82: get_book_info now returns Result<BookDetail, ParserError>.
+    // We treat any failure as "no metadata available" rather than aborting
+    // — book_info enriches the record (intro, kind, cover) but isn't
+    // required for the basic add-to-shelf flow. The chapter list is the
+    // critical path; that one we *do* fail-fast on.
     let parser = core_source::parser::BookSourceParser::new();
-    let book_info = parser.get_book_info(&source, &req.book_url).await;
+    let book_info = parser.get_book_info(&source, &req.book_url).await.ok();
     let toc_url = book_info.as_ref().and_then(|bi| bi.chapters_url.clone());
     let chapters_url = toc_url.as_deref().unwrap_or(&req.book_url);
-    let chapters = parser.get_chapters(&source, chapters_url).await;
-
-    // R87: parser.get_chapters returns Vec::new() on network failure
-    // (legacy R82 — silent-failure design). Without this guard the next
-    // db_transaction would happily DELETE every cached chapter and
-    // commit chapter_count=0, leaving the user staring at an "empty
-    // book" with no error feedback. Refuse to write empty chapter
-    // sets; the initial book row stays as a placeholder so a retry
-    // (same book_id) can still complete the import.
-    if chapters.is_empty() {
-        return Err(ApiError::BadRequest(
-            "未能获取章节列表（书源解析或网络失败），请稍后重试".into(),
-        ));
-    }
+    let chapters = match parser.get_chapters(&source, chapters_url).await {
+        Ok(c) => c,
+        Err(core_source::ParserError::Empty) => {
+            // R87: still refuse to commit an empty TOC even though it
+            // semantically "succeeded" — the user clicked add-book and
+            // expects readable chapters. Empty TOC nearly always means
+            // the rule_toc didn't match, not "this book has 0 chapters".
+            return Err(ApiError::BadRequest(
+                "未能获取章节列表（书源规则未匹配到任何章节）".into(),
+            ));
+        }
+        Err(e) => {
+            return Err(ApiError::BadRequest(format!(
+                "未能获取章节列表: {}",
+                e
+            )));
+        }
+    };
 
     let chapter_count = chapters.len();
     let storage_chapters: Vec<_> = chapters

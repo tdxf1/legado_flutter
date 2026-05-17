@@ -308,12 +308,18 @@ pub fn delete_bookmark(db_path: String, bookmark_id: String) -> Result<(), Strin
 // ============================================================
 
 /// 搜索在线书籍（source_json 为 core_source::BookSource 的 JSON），返回搜索结果 JSON 数组
+///
+/// R82: 区分 ParserError::Empty（成功 0 结果，返回 `[]`）与其他失败（Network /
+/// RuleConfig / Parse，作为 Err(String) 返回让 Dart 侧能 toast 出来）。
 pub async fn search_books_online(source_json: String, keyword: String) -> Result<String, String> {
     let source: core_source::types::BookSource =
         serde_json::from_str(&source_json).map_err(|e| format!("解析书源失败: {}", e))?;
     let parser = core_source::parser::BookSourceParser::new();
-    let results = parser.search(&source, &keyword).await;
-    serde_json::to_string(&results).map_err(|e| format!("序列化失败: {}", e))
+    match parser.search(&source, &keyword).await {
+        Ok(results) => serde_json::to_string(&results).map_err(|e| format!("序列化失败: {}", e)),
+        Err(core_source::ParserError::Empty) => Ok("[]".to_string()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// 获取在线书籍详情，返回 JSON 或 null
@@ -321,8 +327,11 @@ pub async fn get_book_info_online(source_json: String, book_url: String) -> Resu
     let source: core_source::types::BookSource =
         serde_json::from_str(&source_json).map_err(|e| format!("解析书源失败: {}", e))?;
     let parser = core_source::parser::BookSourceParser::new();
-    let detail = parser.get_book_info(&source, &book_url).await;
-    serde_json::to_string(&detail).map_err(|e| format!("序列化失败: {}", e))
+    match parser.get_book_info(&source, &book_url).await {
+        Ok(detail) => serde_json::to_string(&detail).map_err(|e| format!("序列化失败: {}", e)),
+        Err(core_source::ParserError::Empty) => Ok("null".to_string()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// 获取在线章节列表，返回 JSON 数组
@@ -333,8 +342,11 @@ pub async fn get_chapter_list_online(
     let source: core_source::types::BookSource =
         serde_json::from_str(&source_json).map_err(|e| format!("解析书源失败: {}", e))?;
     let parser = core_source::parser::BookSourceParser::new();
-    let chapters = parser.get_chapters(&source, &book_url).await;
-    serde_json::to_string(&chapters).map_err(|e| format!("序列化失败: {}", e))
+    match parser.get_chapters(&source, &book_url).await {
+        Ok(chapters) => serde_json::to_string(&chapters).map_err(|e| format!("序列化失败: {}", e)),
+        Err(core_source::ParserError::Empty) => Ok("[]".to_string()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// 获取在线章节内容，返回 JSON 或 null
@@ -345,8 +357,11 @@ pub async fn get_chapter_content_online(
     let source: core_source::types::BookSource =
         serde_json::from_str(&source_json).map_err(|e| format!("解析书源失败: {}", e))?;
     let parser = core_source::parser::BookSourceParser::new();
-    let content = parser.get_chapter_content(&source, &chapter_url).await;
-    serde_json::to_string(&content).map_err(|e| format!("序列化失败: {}", e))
+    match parser.get_chapter_content(&source, &chapter_url).await {
+        Ok(content) => serde_json::to_string(&content).map_err(|e| format!("序列化失败: {}", e)),
+        Err(core_source::ParserError::Empty) => Ok("null".to_string()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 // ============================================================
@@ -396,13 +411,37 @@ pub async fn search_with_source_from_db_v2(
 
     let parser = core_source::parser::BookSourceParser::new();
     match parser.search(&source, &keyword).await {
-        results if results.is_empty() => {
-            let resp = serde_json::json!({"ok": false, "error": "搜索返回0结果", "source_name": source.name, "search_url": source.rule_search.as_ref().and_then(|r| r.search_url.as_ref().cloned()).unwrap_or_default()});
-            serde_json::to_string(&vec![resp])
-                .map_err(|e| format!("序列化失败: {}", e))
+        Ok(results) => serde_json::to_string(&results).map_err(|e| format!("序列化失败: {}", e)),
+        Err(core_source::ParserError::Empty) => {
+            // R82: explicit "0 results" diagnostic envelope (preserves
+            // the existing v2-wrapper UI contract for source-validation
+            // pages that show why a search came back empty).
+            let resp = serde_json::json!({
+                "ok": false,
+                "error": "搜索返回0结果",
+                "source_name": source.name,
+                "search_url": source
+                    .rule_search
+                    .as_ref()
+                    .and_then(|r| r.search_url.as_ref().cloned())
+                    .unwrap_or_default(),
+            });
+            serde_json::to_string(&vec![resp]).map_err(|e| format!("序列化失败: {}", e))
         }
-        results => {
-            serde_json::to_string(&results).map_err(|e| format!("序列化失败: {}", e))
+        Err(e) => {
+            // Network / RuleConfig / Parse — same envelope shape so the
+            // diagnostic UI doesn't have to special-case error types.
+            let resp = serde_json::json!({
+                "ok": false,
+                "error": e.to_string(),
+                "source_name": source.name,
+                "search_url": source
+                    .rule_search
+                    .as_ref()
+                    .and_then(|r| r.search_url.as_ref().cloned())
+                    .unwrap_or_default(),
+            });
+            serde_json::to_string(&vec![resp]).map_err(|e| format!("序列化失败: {}", e))
         }
     }
 }
@@ -423,8 +462,11 @@ pub async fn search_with_source_from_db(
 
     let source = storage_to_source_book_source(&storage_source)?;
     let parser = core_source::parser::BookSourceParser::new();
-    let results = parser.search(&source, &keyword).await;
-    serde_json::to_string(&results).map_err(|e| format!("序列化失败: {}", e))
+    match parser.search(&source, &keyword).await {
+        Ok(results) => serde_json::to_string(&results).map_err(|e| format!("序列化失败: {}", e)),
+        Err(core_source::ParserError::Empty) => Ok("[]".to_string()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// 从数据库加载书源并获取章节内容（异步），返回 JSON 或 null
@@ -443,8 +485,11 @@ pub async fn get_chapter_content_with_source_from_db(
 
     let source = storage_to_source_book_source(&storage_source)?;
     let parser = core_source::parser::BookSourceParser::new();
-    let content = parser.get_chapter_content(&source, &chapter_url).await;
-    serde_json::to_string(&content).map_err(|e| format!("序列化失败: {}", e))
+    match parser.get_chapter_content(&source, &chapter_url).await {
+        Ok(content) => serde_json::to_string(&content).map_err(|e| format!("序列化失败: {}", e)),
+        Err(core_source::ParserError::Empty) => Ok("null".to_string()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 // ============================================================
@@ -596,9 +641,13 @@ pub async fn download_and_save_chapter(
     let parser = core_source::parser::BookSourceParser::new();
     let content = parser.get_chapter_content(&source, &chapter_url).await;
 
+    // R82: differentiate "got chapter but body empty / parse failed" from
+    // "network or rule error". The former gets logged as "章节内容为空"
+    // (matches legacy behaviour), the latter surfaces the real reason
+    // so the download UI can show what went wrong.
     let text = match &content {
-        Some(c) => c.content.clone(),
-        None => {
+        Ok(c) => c.content.clone(),
+        Err(core_source::ParserError::Empty) => {
             let conn = open_db(&db_path)?;
             let dao = core_storage::download_dao::DownloadDao::new(&conn);
             dao.update_chapter_status(&download_chapter_id, 3, None, 0, Some("章节内容为空"))
@@ -606,6 +655,17 @@ pub async fn download_and_save_chapter(
             recompute_download_task_status(&dao, &task_id)
                 .map_err(|e| format!("更新任务状态失败: {}", e))?;
             return Err("章节内容为空".to_string());
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            let short = if msg.len() > 200 { &msg[..200] } else { &msg };
+            let conn = open_db(&db_path)?;
+            let dao = core_storage::download_dao::DownloadDao::new(&conn);
+            dao.update_chapter_status(&download_chapter_id, 3, None, 0, Some(short))
+                .map_err(|e| format!("更新章节状态失败: {}", e))?;
+            recompute_download_task_status(&dao, &task_id)
+                .map_err(|e| format!("更新任务状态失败: {}", e))?;
+            return Err(msg);
         }
     };
 
@@ -782,9 +842,11 @@ pub fn explore(
         .ok_or_else(|| format!("书源不存在: {}", source_id))?;
     let core_source = storage_to_source_book_source(&source)?;
     let parser = core_source::parser::BookSourceParser::new();
-    let results =
-        block_on_explore(|rt| rt.block_on(parser.explore(&core_source, &explore_url, page)));
-    serde_json::to_string(&results).map_err(|e| format!("序列化失败: {}", e))
+    match block_on_explore(|rt| rt.block_on(parser.explore(&core_source, &explore_url, page))) {
+        Ok(results) => serde_json::to_string(&results).map_err(|e| format!("序列化失败: {}", e)),
+        Err(core_source::ParserError::Empty) => Ok("[]".to_string()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 // ============================================================

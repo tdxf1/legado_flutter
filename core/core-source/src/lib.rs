@@ -12,7 +12,8 @@ pub mod utils;
 
 // 重新导出主要类型
 pub use parser::{
-    BookDetail, BookSourceParser, ChapterContent, ChapterInfo, ExploreEntry, SearchResult,
+    BookDetail, BookSourceParser, ChapterContent, ChapterInfo, ExploreEntry, ParserError,
+    SearchResult,
 };
 pub use rule_engine::{RuleEngine, RuleError, RuleExpression, RuleType};
 pub use types::{BookInfoRule, BookSource, ContentRule, ExtractType, SearchRule, TocRule};

@@ -153,9 +153,18 @@ async fn get_chapter_content(
     let parser = core_source::parser::BookSourceParser::new();
     let content_result = parser.get_chapter_content(&source, &chapter_url).await;
 
+    // R82: precise error mapping. Empty → 404 ("got the page but body
+    // empty / rule didn't match"); Network → 502 surface; RuleConfig /
+    // Parse → 400 (source itself is broken). Today we map them all to
+    // structurally similar ApiError variants but with distinct user
+    // messages, which is enough for the Flutter side to show the right
+    // toast.
     let (content, platform_request) = match content_result {
-        Some(c) => (c.content, c.platform_request),
-        None => return Err(ApiError::NotFound("章节内容为空".into())),
+        Ok(c) => (c.content, c.platform_request),
+        Err(core_source::ParserError::Empty) => {
+            return Err(ApiError::NotFound("章节内容为空".into()))
+        }
+        Err(e) => return Err(ApiError::BadRequest(format!("章节内容获取失败: {}", e))),
     };
 
     if platform_request.is_none() {
@@ -288,19 +297,26 @@ async fn refresh_chapters(
     .await?;
     let source = util::storage_to_core_source(&storage_source)?;
     let parser = core_source::parser::BookSourceParser::new();
-    let chapters = parser.get_chapters(&source, &toc_url).await;
 
-    // R87: refuse to overwrite the chapters table with an empty list
-    // when the parser silently failed (it returns Vec::new() on both
-    // "real 0 chapters" and "network error"). For refresh, that
-    // distinction matters even more than for add_book — the user
-    // already has a populated book and a phantom-empty refresh would
-    // wipe the cached toc.
-    if chapters.is_empty() {
-        return Err(ApiError::BadRequest(
-            "未能获取章节列表（书源解析或网络失败），原章节列表已保留".into(),
-        ));
-    }
+    // R82: get_chapters now returns Result. Refresh is a destructive
+    // operation (replaces the entire chapters table for this book), so
+    // we fail fast on *any* parser error rather than committing an
+    // empty / partial TOC. The error message tells the user the
+    // original chapter list was preserved.
+    let chapters = match parser.get_chapters(&source, &toc_url).await {
+        Ok(c) => c,
+        Err(core_source::ParserError::Empty) => {
+            return Err(ApiError::BadRequest(
+                "未能获取章节列表（书源规则未匹配到章节），原章节列表已保留".into(),
+            ));
+        }
+        Err(e) => {
+            return Err(ApiError::BadRequest(format!(
+                "未能获取章节列表（{}），原章节列表已保留",
+                e
+            )));
+        }
+    };
 
     let now = chrono::Utc::now().timestamp();
     let book_id_for_chapters = book_id.clone();

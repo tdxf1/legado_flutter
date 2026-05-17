@@ -178,8 +178,15 @@ async fn run_one(
     let source = util::storage_to_core_source(&storage_source)
         .map_err(|e| (source_id.to_string(), source_name.clone(), e.to_string()))?;
     let parser = core_source::parser::BookSourceParser::new();
-    let items = parser.search(&source, keyword).await;
-    Ok((source_id.to_string(), items))
+    // R82: precise error mapping — Empty becomes "0 results" (legitimate
+    // success), other ParserError variants surface as the source's
+    // failed_sources entry so the SSE client can show "源 X 失败: 网络
+    // 超时" instead of just "0 results".
+    match parser.search(&source, keyword).await {
+        Ok(items) => Ok((source_id.to_string(), items)),
+        Err(core_source::ParserError::Empty) => Ok((source_id.to_string(), Vec::new())),
+        Err(e) => Err((source_id.to_string(), source_name, e.to_string())),
+    }
 }
 
 /// 日志流：心跳 + 钩子位（后续可扩展为 tracing layer / broadcast）

@@ -375,6 +375,61 @@ impl ParsedChaptersPage {
     }
 }
 
+/// R82 — typed error for parser entry points.
+///
+/// Background: the public methods on [`BookSourceParser`] (`search`,
+/// `get_chapters`, `get_book_info`, `get_chapter_content`, `explore`)
+/// historically returned `Vec<T>` / `Option<T>` and silently collapsed
+/// every failure mode into "empty result". Callers couldn't tell
+/// "this book source has no matches for this keyword" apart from "the
+/// HTTP request timed out" or "the rule_search field isn't even
+/// configured", which led to confusing UX (e.g. R87: a refresh against
+/// a network-failed source would wipe the user's chapter list while
+/// reporting success).
+///
+/// `ParserError` makes those distinctions explicit. The variants are
+/// modeled after the categories the API server / FRB layer needs to
+/// branch on:
+///
+///   - `RuleConfig` — the book source itself is mis-configured (e.g.
+///     no search URL). Surface as 4xx in API server, "源无效" toast in
+///     Flutter. Retrying without changing the source won't help.
+///   - `Network` — outbound HTTP failed. 5xx-equivalent; retry may help.
+///   - `Parse` — rule engine couldn't extract anything. Often means the
+///     source is stale (site changed structure). Distinct from
+///     `RuleConfig` because the source *was* valid syntactically.
+///   - `Empty` — the request succeeded but returned no results. This
+///     is a *successful* response, just with zero rows. Callers
+///     usually want to render "no results" not "error".
+///
+/// We intentionally don't use `thiserror` here to avoid adding a dep
+/// for one type. `Display` is implemented by hand below.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "message")]
+pub enum ParserError {
+    /// 书源规则配置缺失或无效（rule_search / rule_toc 等未配置）
+    RuleConfig(String),
+    /// 网络请求失败（DNS / 连接 / 超时 / 5xx 等）
+    Network(String),
+    /// 规则解析失败（HTML / JSON parse 错误，或 rule engine 跑炸）
+    Parse(String),
+    /// 请求成功但返回 0 结果。语义上是成功响应。
+    Empty,
+}
+
+impl std::fmt::Display for ParserError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParserError::RuleConfig(msg) => write!(f, "书源规则配置错误: {}", msg),
+            ParserError::Network(msg) => write!(f, "网络请求失败: {}", msg),
+            ParserError::Parse(msg) => write!(f, "规则解析失败: {}", msg),
+            ParserError::Empty => write!(f, "无结果"),
+        }
+    }
+}
+
+impl std::error::Error for ParserError {}
+
 /// 书源解析器
 pub struct BookSourceParser {
     rule_engine: RuleEngine,
@@ -444,21 +499,31 @@ impl BookSourceParser {
 
     /// 搜索书籍
     /// 对应原 Legado 的 searchBook 流程
-    pub async fn search(&self, source: &BookSource, keyword: &str) -> Vec<SearchResult> {
+    pub async fn search(
+        &self,
+        source: &BookSource,
+        keyword: &str,
+    ) -> Result<Vec<SearchResult>, ParserError> {
         info!("搜索书籍: {} (书源: {})", keyword, source.name);
 
-        // 1. 构建搜索 URL
+        // 1. 构建搜索 URL — R82: 配置缺失返回 RuleConfig 而非空 Vec
         let search_url = match &source.rule_search {
             Some(search_rule) => match search_rule.search_url.as_ref() {
                 Some(url) => url.clone(),
                 None => {
                     warn!("书源 {} 未配置搜索 URL", source.name);
-                    return vec![];
+                    return Err(ParserError::RuleConfig(format!(
+                        "书源 {} 未配置 search_url",
+                        source.name
+                    )));
                 }
             },
             None => {
                 warn!("书源 {} 未配置搜索规则", source.name);
-                return vec![];
+                return Err(ParserError::RuleConfig(format!(
+                    "书源 {} 未配置 rule_search",
+                    source.name
+                )));
             }
         };
 
@@ -470,21 +535,13 @@ impl BookSourceParser {
             1,
         );
 
-        // 3. 发起 HTTP 请求
+        // 3. 发起 HTTP 请求 — R82: 网络失败返回 Network 错误，不再
+        // 把错误信息塞进 SearchResult.name 字段（[ERR] xxx 那种）。
         let html = match self.fetch_url(source, &search_url, keyword, 1).await {
             Ok(text) => text,
             Err(e) => {
                 warn!("搜索请求失败: {}", e);
-                return vec![SearchResult {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    name: format!("[ERR] {}", if e.len() > 200 { &e[..200] } else { &e }),
-                    author: String::new(),
-                    cover_url: None,
-                    intro: Some(format!("url={}", search_url)),
-                    book_url: String::new(),
-                    source_id: source.id.clone(),
-                    source_name: source.name.clone(),
-                }];
+                return Err(ParserError::Network(e));
             }
         };
         let request_context = rule_context_with_source_headers(
@@ -495,10 +552,9 @@ impl BookSourceParser {
             source,
         );
 
-        // 3. 使用规则解析搜索结果
+        // 4. 使用规则解析搜索结果
         let rules = source.rule_search.as_ref().unwrap();
 
-        // 4. 解析结果
         let mut results = Vec::new();
 
         let contexts = rules
@@ -556,7 +612,13 @@ impl BookSourceParser {
         }
 
         info!("搜索完成，找到 {} 个结果", results.len());
-        results
+        // R82: 0 结果区分于失败的 0 — 用 Empty 变体，让 caller 决定
+        // 显示"无匹配"还是当 success-empty 处理。
+        if results.is_empty() {
+            Err(ParserError::Empty)
+        } else {
+            Ok(results)
+        }
     }
 
     /// 探索/发现书籍
@@ -566,7 +628,7 @@ impl BookSourceParser {
         source: &BookSource,
         explore_url: &str,
         page: i32,
-    ) -> Vec<SearchResult> {
+    ) -> Result<Vec<SearchResult>, ParserError> {
         info!(
             "探索: {} page={} (书源: {})",
             explore_url, page, source.name
@@ -579,7 +641,7 @@ impl BookSourceParser {
             Ok(text) => text,
             Err(e) => {
                 warn!("探索请求失败: {}", e);
-                return vec![];
+                return Err(ParserError::Network(e));
             }
         };
 
@@ -632,7 +694,11 @@ impl BookSourceParser {
                 })
                 .collect();
             info!("探索完成 (JSON)，找到 {} 个结果", results.len());
-            return results;
+            return if results.is_empty() {
+                Err(ParserError::Empty)
+            } else {
+                Ok(results)
+            };
         }
 
         // Try title::url text format
@@ -661,17 +727,31 @@ impl BookSourceParser {
                 })
                 .collect();
             info!("探索完成 (文本)，找到 {} 个结果", results.len());
-            return results;
+            return if results.is_empty() {
+                Err(ParserError::Empty)
+            } else {
+                Ok(results)
+            };
         }
 
         // Use rule_explore (like search rules) to parse HTML
         if let Some(ref explore_rule) = source.rule_explore {
             let results = self.parse_explore_with_rule(&html, explore_rule, source, &full_url);
             info!("探索完成 (规则)，找到 {} 个结果", results.len());
-            return results;
+            return if results.is_empty() {
+                Err(ParserError::Empty)
+            } else {
+                Ok(results)
+            };
         }
 
-        vec![]
+        // R82: 没有任何已知格式能 parse — 算 Parse 错误，而非空结果。
+        // 因为 fetch_url 返回的是非 JSON / 非 ::分隔 / 没 rule_explore 的
+        // 内容，等于"我们看不懂这个响应"。
+        Err(ParserError::Parse(format!(
+            "探索响应格式无法识别（非 JSON / 非 title::url 文本 / 书源未配置 rule_explore），URL: {}",
+            full_url
+        )))
     }
 
     fn parse_explore_with_rule(
@@ -769,7 +849,11 @@ impl BookSourceParser {
 
     /// 获取书籍详情
     /// 对应原 Legado 的 getBookInfo 流程
-    pub async fn get_book_info(&self, source: &BookSource, book_url: &str) -> Option<BookDetail> {
+    pub async fn get_book_info(
+        &self,
+        source: &BookSource,
+        book_url: &str,
+    ) -> Result<BookDetail, ParserError> {
         let book_url = crate::utils::build_full_url(&source.url, book_url);
         info!("获取书籍详情: {} (书源: {})", book_url, source.name);
 
@@ -778,7 +862,7 @@ impl BookSourceParser {
             Ok(text) => text,
             Err(e) => {
                 warn!("请求书籍页面失败: {}", e);
-                return None;
+                return Err(ParserError::Network(e));
             }
         };
         let context = rule_context_with_source_headers(
@@ -787,7 +871,9 @@ impl BookSourceParser {
         );
 
         // 2. 使用规则解析
-        let rules = source.rule_book_info.as_ref()?;
+        let rules = source.rule_book_info.as_ref().ok_or_else(|| {
+            ParserError::RuleConfig(format!("书源 {} 未配置 rule_book_info", source.name))
+        })?;
 
         // Phase 2a: book_info_init - execute init rule and use JSON result if available
         let (working_content, init_context, is_init_json) =
@@ -877,7 +963,7 @@ impl BookSourceParser {
             _ => book_url.clone(),
         };
 
-        Some(BookDetail {
+        Ok(BookDetail {
             id: stable_search_result_id(
                 &source.id,
                 &book_url,
@@ -897,12 +983,19 @@ impl BookSourceParser {
     }
 
     /// 获取章节列表 (supports multi-page catalogs via nextTocUrl)
-    pub async fn get_chapters(&self, source: &BookSource, book_url: &str) -> Vec<ChapterInfo> {
+    pub async fn get_chapters(
+        &self,
+        source: &BookSource,
+        book_url: &str,
+    ) -> Result<Vec<ChapterInfo>, ParserError> {
         let rules = match &source.rule_toc {
             Some(r) => r,
             None => {
                 warn!("书源 {} 未配置章节列表规则", source.name);
-                return vec![];
+                return Err(ParserError::RuleConfig(format!(
+                    "书源 {} 未配置 rule_toc",
+                    source.name
+                )));
             }
         };
 
@@ -974,7 +1067,9 @@ impl BookSourceParser {
                 Err(e) => {
                     if first_page {
                         warn!("请求章节列表失败 (首页): {}", e);
-                        return vec![];
+                        // R82: 首页失败 = 整个 toc 拉不下来，明确网络错。
+                        // 子页失败仍 continue（已抓到的 chapters 算 best-effort）。
+                        return Err(ParserError::Network(e));
                     }
                     warn!("请求章节列表失败: {}", e);
                     continue;
@@ -1087,7 +1182,16 @@ impl BookSourceParser {
             all_chapters.len(),
             seen_urls.len()
         );
-        all_chapters
+        // R82: 0 章节 = Empty（HTTP 成功了但没解析出来）。caller
+        // (e.g. api-server refresh_chapters) 会决定是把这当 4xx 还是
+        // 200 with no rows. R87 的 API 兜底已经把 Empty 也当错误返回
+        // 给用户，这里给 Empty 而不是 Parse 是因为 first_page fetch 已经
+        // 成功 = 网络/解析正常，只是规则没匹配到任何章节。
+        if all_chapters.is_empty() {
+            Err(ParserError::Empty)
+        } else {
+            Ok(all_chapters)
+        }
     }
 
     /// Parse chapters from a single catalog page
@@ -1267,7 +1371,7 @@ impl BookSourceParser {
         &self,
         source: &BookSource,
         chapter_url: &str,
-    ) -> Option<ChapterContent> {
+    ) -> Result<ChapterContent, ParserError> {
         const MAX_CONTENT_PAGES: usize = 50;
 
         let initial_url = crate::utils::build_full_url(&source.url, chapter_url);
@@ -1304,7 +1408,7 @@ impl BookSourceParser {
                                     (r.web_js.clone(), r.source_regex.clone(), r.content.clone())
                                 })
                                 .unwrap_or((None, None, None));
-                            return Some(ChapterContent {
+                            return Ok(ChapterContent {
                                 chapter_id: uuid::Uuid::new_v4().to_string(),
                                 content: String::new(),
                                 next_chapter_url: None,
@@ -1324,7 +1428,7 @@ impl BookSourceParser {
                             });
                         }
                         warn!("请求章节内容失败: {}", e);
-                        return None;
+                        return Err(ParserError::Network(e));
                     }
                     warn!("请求后续内容页失败: {}", e);
                     continue;
@@ -1349,7 +1453,7 @@ impl BookSourceParser {
                         .is_some_and(|s| !s.trim().is_empty())
                 {
                     warn!("正文规则需要平台 WebView/sourceRegex 支持: {}", url);
-                    return Some(ChapterContent {
+                    return Ok(ChapterContent {
                         chapter_id: uuid::Uuid::new_v4().to_string(),
                         content: String::new(),
                         next_chapter_url: None,
@@ -1432,7 +1536,9 @@ impl BookSourceParser {
         }
 
         if all_content.is_empty() {
-            return None;
+            // R82: 拉到了 HTTP 200 但规则没解析出任何正文 — 算 Empty 而非
+            // Network。caller 通常想 retry / fallback 而非显示"网络失败"。
+            return Err(ParserError::Empty);
         }
 
         // Apply replaceRegex (正文替换规则)
@@ -1462,7 +1568,7 @@ impl BookSourceParser {
             all_content
         };
 
-        Some(ChapterContent {
+        Ok(ChapterContent {
             chapter_id: uuid::Uuid::new_v4().to_string(),
             content,
             next_chapter_url: final_next_chapter_url,
@@ -1992,7 +2098,10 @@ fn js_is_vip_to_bool(value: &JsonValue) -> Option<bool> {
 }
 
 /// 便捷函数：快速搜索（使用默认解析器）
-pub async fn search_book(source: &BookSource, keyword: &str) -> Vec<SearchResult> {
+pub async fn search_book(
+    source: &BookSource,
+    keyword: &str,
+) -> Result<Vec<SearchResult>, ParserError> {
     let parser = BookSourceParser::new();
     parser.search(source, keyword).await
 }
@@ -2101,6 +2210,38 @@ mod tests {
         }
     }
 
+    /// R82: ParserError variants are JSON-serializable so callers can
+    /// surface them through API responses without losing the kind.
+    #[test]
+    fn test_parser_error_serialization() {
+        let err = ParserError::Network("timeout".to_string());
+        let json = serde_json::to_string(&err).unwrap();
+        assert_eq!(json, r#"{"kind":"Network","message":"timeout"}"#);
+
+        let parsed: ParserError = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, err);
+
+        // Empty has no payload — serializes as just the tag.
+        let empty = ParserError::Empty;
+        let empty_json = serde_json::to_string(&empty).unwrap();
+        assert_eq!(empty_json, r#"{"kind":"Empty"}"#);
+    }
+
+    /// Display impl produces user-readable Chinese messages — the
+    /// api-server passes these through to BadRequest body.
+    #[test]
+    fn test_parser_error_display() {
+        assert_eq!(
+            ParserError::RuleConfig("rule_search 缺失".to_string()).to_string(),
+            "书源规则配置错误: rule_search 缺失"
+        );
+        assert_eq!(ParserError::Empty.to_string(), "无结果");
+        assert_eq!(
+            ParserError::Network("connection refused".to_string()).to_string(),
+            "网络请求失败: connection refused"
+        );
+    }
+
     #[tokio::test]
     async fn test_search_books() {
         let source = BookSource {
@@ -2136,8 +2277,9 @@ mod tests {
             updated_at: 0,
         };
         let parser = BookSourceParser::new();
-        let results = parser.search(&source, "test").await;
-        assert!(results.is_empty());
+        // R82: rule_search 为 None → RuleConfig 错误
+        let result = parser.search(&source, "test").await;
+        assert!(matches!(result, Err(ParserError::RuleConfig(_))));
     }
 
     #[tokio::test]
@@ -2185,8 +2327,9 @@ mod tests {
             weight: 0,
         };
         let parser = BookSourceParser::new();
-        let results = parser.search(&source, "test").await;
-        assert!(results.is_empty());
+        // R82: rule_search.search_url 为 None → RuleConfig 错误
+        let result = parser.search(&source, "test").await;
+        assert!(matches!(result, Err(ParserError::RuleConfig(_))));
     }
 
     #[test]
@@ -2260,7 +2403,7 @@ mod tests {
 
         let parser = BookSourceParser::new();
         let result = parser.get_chapter_content(&source, "/ch1.html").await;
-        assert!(result.is_some(), "expected chapter content, got None");
+        assert!(result.is_ok(), "expected chapter content, got {:?}", result);
         let chapter = result.unwrap();
         assert!(chapter.content.contains("Chapter text here"));
         assert!(chapter.next_chapter_url.is_some());
@@ -2344,7 +2487,7 @@ mod tests {
         };
 
         let parser = BookSourceParser::new();
-        let results = parser.search(&source, "test").await;
+        let results = parser.search(&source, "test").await.expect("search ok");
 
         assert_eq!(
             results.len(),
@@ -2421,7 +2564,7 @@ mod tests {
         };
 
         let parser = BookSourceParser::new();
-        let results = parser.search(&source, "test").await;
+        let results = parser.search(&source, "test").await.expect("search ok");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "Template Book");
@@ -2489,7 +2632,7 @@ mod tests {
         };
 
         let parser = BookSourceParser::new();
-        let results = parser.search(&source, "test").await;
+        let results = parser.search(&source, "test").await.expect("search ok");
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].name, "One");
@@ -2562,7 +2705,7 @@ mod tests {
 
         let parser = BookSourceParser::new();
         let result = parser.get_book_info(&source, "/book/789").await;
-        assert!(result.is_some(), "expected book detail, got None");
+        assert!(result.is_ok(), "expected book detail, got {:?}", result);
         let detail = result.unwrap();
         assert_eq!(detail.name, "Test Novel");
         assert_eq!(detail.author, "Test Author");
@@ -2638,7 +2781,7 @@ mod tests {
         };
 
         let parser = BookSourceParser::new();
-        let results = parser.search(&source, "test").await;
+        let results = parser.search(&source, "test").await.expect("search ok");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "Changed Book");
@@ -2707,7 +2850,10 @@ mod tests {
         };
 
         let parser = BookSourceParser::new();
-        let chapters = parser.get_chapters(&source, "/book/1").await;
+        let chapters = parser
+            .get_chapters(&source, "/book/1")
+            .await
+            .expect("chapters ok");
 
         assert_eq!(chapters.len(), 2);
         assert_eq!(chapters[0].title, "Chapter A");
@@ -2839,7 +2985,10 @@ mod tests {
         };
 
         let parser = BookSourceParser::new();
-        let chapters = parser.get_chapters(&source, "/read/123/").await;
+        let chapters = parser
+            .get_chapters(&source, "/read/123/")
+            .await
+            .expect("chapters ok");
 
         assert_eq!(chapters.len(), 2);
         assert_eq!(chapters[0].title, "Remote A");
@@ -3357,7 +3506,10 @@ mod tests {
         };
 
         let parser = BookSourceParser::new();
-        let chapters = parser.get_chapters(&source, "/toc/page1").await;
+        let chapters = parser
+            .get_chapters(&source, "/toc/page1")
+            .await
+            .expect("chapters ok");
 
         assert_eq!(chapters.len(), 4, "expected 4 chapters across 2 pages");
         assert_eq!(chapters[0].title, "Ch1");
@@ -3430,7 +3582,7 @@ mod tests {
 
         let parser = BookSourceParser::new();
         let result = parser.get_chapter_content(&source, "/ch/page1").await;
-        assert!(result.is_some(), "expected chapter content, got None");
+        assert!(result.is_ok(), "expected chapter content, got {:?}", result);
         let chapter = result.unwrap();
         assert!(
             chapter.content.contains("Page 1 content"),
@@ -3561,7 +3713,10 @@ mod tests {
         };
 
         let parser = BookSourceParser::new();
-        let results = parser.explore(&source, "/explore/json", 1).await;
+        let results = parser
+            .explore(&source, "/explore/json", 1)
+            .await
+            .expect("explore ok");
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].name, "Book 1");
@@ -3619,7 +3774,10 @@ mod tests {
         };
 
         let parser = BookSourceParser::new();
-        let results = parser.explore(&source, "/explore/text", 1).await;
+        let results = parser
+            .explore(&source, "/explore/text", 1)
+            .await
+            .expect("explore ok");
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].name, "Category A");
@@ -3681,7 +3839,10 @@ mod tests {
         };
 
         let parser = BookSourceParser::new();
-        let results = parser.explore(&source, "/explore/rule", 1).await;
+        let results = parser
+            .explore(&source, "/explore/rule", 1)
+            .await
+            .expect("explore ok");
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].name, "Rule Book 1");
