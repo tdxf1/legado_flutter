@@ -438,19 +438,18 @@ core/
 历次审查与修复的完整时间线已迁移到 [`docs/CHANGELOG.md`](docs/CHANGELOG.md)。
 当前 STATUS 只保留"最近一批的状态摘要"。
 
-**最近一批**：第十一批（2026-05-17，commit 11）— R71-R77: 事务化 + 多步 db_blocking 合并。
-第五轮全面复审在 R60 重构后捞出 13 项（R71-R83），其中 R73 是真实回归（多步 DB 操作失去原子性）。本批一次性修复 5 项最高 ROI 的：
+**最近一批**：第十二批（2026-05-17，commit 12）— R86 / R87 / R89 收尾。
+第六轮全面复审在 commit 11 后捞出 9 项（R84-R92），本批做最高 ROI 的 3 项：
 
-- 高危：R74 新增 `db_transaction` helper / R73 `add_book` + `refresh_chapters` 把 chapter replace + book metadata 合并为单事务（修真实回归）
-- 中等：R72 减少 db_blocking 调用次数 / R71 book+source lookup 合并为单 db_blocking / R77 chapter_dao 改用 `rusqlite::Transaction` RAII（解锁 R73 的事务嵌套）
+- 高危：R87 `add_book` / `refresh_chapters` 在 chapters 拉取失败（空 Vec）时返回 ApiError::BadRequest 而非静默写空 chapters 表 + book.chapter_count=0
+- 中等：R89 `core-net::downloader` 增加 `file.sync_all()` 防止崩溃/掉电时落空文件
+- 低：R86 `db_transaction` doc-comment 增加 panic 安全说明
 
-**关键架构改动**：`ChapterDao::new` 由 `&Connection` 改 `&mut Connection`，因为 `Connection::transaction()` 需要可变借用。这是破坏性改动，影响 `core_storage::Storage`、`bridge/api.rs` 6 处 caller、api-server 多处。新增 `replace_by_book_preserving_content_in_tx` 静态函数给已持有事务的 caller 复用 chapter replace 逻辑。
+**剩余 R 项（第六轮）**：R84（delete_book 错误吞）/ R85（StorageManager API 不一致）/ R88（downloader 同 path 并发竞态）/ R90（download_dao raw BEGIN）/ R91（api-server CatchPanicLayer）/ R92（无 TLS）。都是 perf nano / 部署 / 当前生产路径不可达。
 
-**剩余 R 项**：R75 (重复代码) / R76 (fan-out 嵌套 spawn_blocking) / R78 (SourceDao 单条 upsert) / R79 (O(n²) brace scan) / R80 (mounted guard) / R81 (FRB worker pool) / R82 (parser.search Result)。都是 perf nano / 设计层重构 / 生产路径不可达，留作后续。
+**已知风险（仍然成立）**：R3 codegen 模板 unreachable / R22 / R23 / R24 ReplaceRule.scope（需 schema 改动）/ R82 (parser.get_chapters 静默失败设计层重构 — 但 R87 已在 API 层兜底)。
 
-**已知风险（仍然成立）**：R3 codegen 模板 unreachable / R22 / R23 / R24 ReplaceRule.scope（需 schema 改动）。
-
-**总评**：经过 5 轮全面复审 + 11 个 commit 的迭代，所有"真实正确性问题"全部清空。剩余约 7 项 R 都是 perf 优化、命名/注释、或设计层重构话题，不阻塞 Android 主线。每批完成后 `cargo test --workspace` 与 `flutter test` 都全绿；本批完成时 cargo 248 / flutter 112 / `flutter analyze` 0 issue。详细问题清单与具体改动见 CHANGELOG。
+**总评**：经过 6 轮全面复审 + 12 个 commit 的迭代，所有真实可见的 user-facing 正确性问题全部清空。剩余项是 perf 优化、deployment、或者生产路径不可达的设计 hazard。每批完成后 `cargo test --workspace` 与 `flutter test` 都全绿；本批完成时 cargo 248 / flutter 112 / `flutter analyze` 0 issue。详细问题清单与具体改动见 CHANGELOG。
 
 ---
 

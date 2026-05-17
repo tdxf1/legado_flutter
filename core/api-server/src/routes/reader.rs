@@ -290,6 +290,18 @@ async fn refresh_chapters(
     let parser = core_source::parser::BookSourceParser::new();
     let chapters = parser.get_chapters(&source, &toc_url).await;
 
+    // R87: refuse to overwrite the chapters table with an empty list
+    // when the parser silently failed (it returns Vec::new() on both
+    // "real 0 chapters" and "network error"). For refresh, that
+    // distinction matters even more than for add_book — the user
+    // already has a populated book and a phantom-empty refresh would
+    // wipe the cached toc.
+    if chapters.is_empty() {
+        return Err(ApiError::BadRequest(
+            "未能获取章节列表（书源解析或网络失败），原章节列表已保留".into(),
+        ));
+    }
+
     let now = chrono::Utc::now().timestamp();
     let book_id_for_chapters = book_id.clone();
     let storage_chapters: Vec<_> = chapters

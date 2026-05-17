@@ -39,6 +39,19 @@ pub async fn download_to_file(
         }
         total += len;
     }
+
+    // R89: flush + fsync the temp file before rename. Tokio's File::drop
+    // does NOT guarantee that buffered writes hit the disk; rename only
+    // operates on directory metadata, so a power loss between write_all
+    // and rename can leave a 0-byte (or partial) file even though the
+    // rename appears to have "succeeded". `sync_all` flushes both file
+    // contents and metadata. The cost is one fsync per download, which
+    // is fine for the chapter-sized payloads we deal with here.
+    if result.is_ok() {
+        if let Err(e) = file.sync_all().await {
+            result = Err(e.into());
+        }
+    }
     drop(file);
     if let Err(e) = result {
         let _ = tokio::fs::remove_file(&tmp_path).await;

@@ -119,6 +119,19 @@ async fn add_book(
     let chapters_url = toc_url.as_deref().unwrap_or(&req.book_url);
     let chapters = parser.get_chapters(&source, chapters_url).await;
 
+    // R87: parser.get_chapters returns Vec::new() on network failure
+    // (legacy R82 — silent-failure design). Without this guard the next
+    // db_transaction would happily DELETE every cached chapter and
+    // commit chapter_count=0, leaving the user staring at an "empty
+    // book" with no error feedback. Refuse to write empty chapter
+    // sets; the initial book row stays as a placeholder so a retry
+    // (same book_id) can still complete the import.
+    if chapters.is_empty() {
+        return Err(ApiError::BadRequest(
+            "未能获取章节列表（书源解析或网络失败），请稍后重试".into(),
+        ));
+    }
+
     let chapter_count = chapters.len();
     let storage_chapters: Vec<_> = chapters
         .iter()

@@ -293,3 +293,31 @@ add_book 流程是「源校验 → 初始 book upsert（占位）→ 网络拉 c
 - cargo test --workspace: 248 passed
 - flutter analyze: 0 issue
 - flutter test: 112 passed
+
+## 第十二批（2026-05-17，commit 12）— R86 / R87 / R89 收尾
+
+第六轮全面复审在 commit 11 后再扫一遍，捞出 9 项（R84-R92）。其中 R87 是真实可见的用户体验回归（add_book / refresh_chapters 在 chapters 拉取失败时静默写空），R89 是数据持久化安全（fsync 缺失），R86 是 panic 安全的文档遗漏。本批一次性把这三项做完；R84/R85/R88/R90-R92 是 perf nano / 设计层 / 部署层问题，留作 backlog。
+
+| 项 | 严重度 | 摘要 |
+|----|--------|------|
+| R87 | 高危 | `add_book` / `refresh_chapters` 在 `parser.get_chapters()` 返回空 Vec 时（网络失败 / 解析失败的静默 fallback），过去会 DELETE 全部 chapters → INSERT 0 行 → `book.chapter_count = 0`。用户毫无错误反馈、看到一本"空书"。修复：检测 `chapters.is_empty()` 时直接返回 `ApiError::BadRequest` 含中文用户提示，事务不开始（refresh 路径明确说明"原章节列表已保留"）。底层 `parser.get_chapters` 静默失败的设计层重构（R82）继续延后 |
+| R89 | 中等 | `core-net::downloader` 在 `tokio::fs::File::drop` 之前增加 `file.sync_all().await?`。`File::drop` 不保证 buffered writes 落盘，rename 只动元数据；崩溃 / 掉电时会在已经"成功"的下载里看到 0 字节或截断文件。每次下载多一次 fsync 开销可接受 |
+| R86 | 低 | `db_transaction` doc-comment 增加 panic 安全说明：`spawn_blocking` 捕获 panic 走 JoinError → ApiError::Internal，`Transaction::Drop` 自动 rollback，pool slot 经 `PooledConnection::Drop` 归还。无需 caller 处理。一段注释 |
+
+**未在本批修复的 R 项（来自第六轮）**：
+- R84（`delete_book` 用 `let _` 吞 chapter/progress 删除错误）— 可能留孤儿但 FK CASCADE 兜底
+- R85（`StorageManager` API `&self` / `&mut self` 不一致）— StorageManager 当前没 caller
+- R88（downloader 同 path 并发竞态）— DownloadRunner 当前串行执行，不可达
+- R90（`download_dao::create_task_with_chapters` raw BEGIN/COMMIT）— 跟 R77 同款，没 caller 在事务里调
+- R91（api-server 没装 `CatchPanicLayer`）— panic 仍会被 axum 默认转 500，只是没 tracing
+- R92（axum::serve plain TCP 无 TLS）— 是 deployment 问题，靠 reverse proxy 终结
+
+**已知风险（仍然成立）**：R3 codegen 模板 unreachable / R22 / R23 / R24 ReplaceRule.scope（需 schema 改动）/ R82 (`parser.get_chapters` 静默失败的设计层重构)。R87 修复后 R82 的实际危害大大减弱（API 层兜底了），但根因还在 core-source。
+
+**总评**：经过 6 轮全面复审 + 12 个 commit 的迭代，剩余问题全部是 perf 优化、deployment、或者生产路径不可达的设计 hazard。Android 主线没有可见的 user-facing bug。
+
+**验证**：
+- cargo check --workspace: clean
+- cargo test --workspace: 248 passed
+- flutter analyze: 0 issue
+- flutter test: 112 passed

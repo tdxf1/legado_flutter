@@ -89,6 +89,15 @@ where
 /// still work because `Transaction` derefs to `Connection`. Pass
 /// `&*tx` or `tx.deref_mut()` if a constructor needs the explicit
 /// reference type.
+///
+/// **Panic safety (R86)**: a panic inside the closure is caught by the
+/// underlying [`tokio::task::spawn_blocking`] and surfaces as
+/// [`ApiError::Internal`] via the join error path. The
+/// [`rusqlite::Transaction`] is dropped during unwinding without
+/// calling `.commit()`, which triggers `ROLLBACK`. The pool slot is
+/// returned via the `PooledConnection`'s own Drop. So a panic leaves
+/// the DB clean and the pool unleaked; no special handling needed in
+/// the caller.
 pub async fn db_transaction<F, T, E>(state: &AppState, f: F) -> Result<T, ApiError>
 where
     F: FnOnce(&mut rusqlite::Transaction<'_>) -> Result<T, E> + Send + 'static,
