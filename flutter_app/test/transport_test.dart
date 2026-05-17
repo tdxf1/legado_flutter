@@ -168,4 +168,53 @@ void main() {
       t.close();
     });
   });
+
+  group('parseSseStream chunk boundary handling (R29)', () {
+    test('splits CRLF across two chunks without producing spurious blocks',
+        () async {
+      // The full payload: two complete SSE events, exactly the same as the
+      // R6 server fixture above. The split point lands *between* '\r' and
+      // '\n' inside one of the CRLFs — the worst case the R29 fix targets.
+      const payload = 'event: result\r\n'
+          'data: {"item":1}\r\n'
+          '\r\n' // <-- the second '\r' here is at index 39
+          'event: done\r\n'
+          'data: {}\r\n\r\n';
+      // Find a '\r' immediately followed by '\n' and split there.
+      final crIdx = payload.indexOf('\r');
+      expect(crIdx, isNot(-1));
+      expect(payload.codeUnitAt(crIdx + 1), 0x0A);
+      final chunk1 = payload.substring(0, crIdx + 1); // ends with '\r'
+      final chunk2 = payload.substring(crIdx + 1); // starts with '\n'
+
+      final events = await parseSseStream(
+        Stream<String>.fromIterable([chunk1, chunk2]),
+      ).toList();
+      expect(events.length, 2);
+      expect(events[0].event, 'result');
+      expect(events[0].data, '{"item":1}');
+      expect(events[1].event, 'done');
+      expect(events[1].data, '{}');
+    });
+
+    test('lone CR at end of chunk normalises to LF without consuming next byte',
+        () async {
+      // First chunk ends with a bare CR (lone CR, NOT the first half of a
+      // CRLF). Second chunk starts with a non-LF, non-CR character. The
+      // fix must:
+      //   (a) emit a single '\n' for the held CR (lone-CR normalisation)
+      //   (b) NOT consume the first character of the next chunk
+      // A buggy implementation that always assumed CRLF would drop 'Y'
+      // and split the stream into two events; the correct implementation
+      // keeps everything in one block.
+      const c1 = 'data: x\r';
+      const c2 = 'Y\ndata: z\n\n';
+      final events = await parseSseStream(
+        Stream<String>.fromIterable([c1, c2]),
+      ).toList();
+      expect(events.length, 1, reason: 'block must not be split prematurely');
+      // 'Y' has no colon so it's ignored as a field; data lines join with \n.
+      expect(events.single.data, 'x\nz');
+    });
+  });
 }

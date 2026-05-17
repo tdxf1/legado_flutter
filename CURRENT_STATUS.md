@@ -438,15 +438,16 @@ core/
 历次审查与修复的完整时间线已迁移到 [`docs/CHANGELOG.md`](docs/CHANGELOG.md)。
 当前 STATUS 只保留"最近一批的状态摘要"。
 
-**最近一批**：第二轮全面复审 — 第六批（2026-05-17，commit 6）。在第一轮 5 批落地后又做了一次端到端复审，捞出 26 项（R1–R26），其中 14 项本批集中修复：
+**最近一批**：第三轮全面复审 — 第七批（2026-05-17，commit 7）。第二轮 14 项落地后再做一次端到端复审，捞出 18 项（R27–R45 / R47），本批先修最高 ROI 的 4 项：
 
-- 高危：apply_replace_rules 持锁跑用户正则（R12）/ release 信任 user CA（R2）/ AndroidManifest cleartext 冲突（R1）/ DNS rebinding（R9）/ search_page Dart fallback hash 漂移（R18）/ updateSettings 漏判 fontFamily（R16）
-- 中等：SSE CRLF（R6）/ shouldRepaint 漏判排版字段（R8）
-- 建议：PageViewController dead snapshot（R14/R15）/ RATE_LIMITER saturating + 30s 节流（R4/R5）/ build.rs 防覆盖断言扩到 funcId 42-50（R20）/ bridge regex 版本对齐（R26）/ reader_page 改用 ReaderRenderMode 枚举分支（R17/R25）/ page_measure.dart 孤立常量清理
+- 高危：R27 `RegexCache` cache key 漏 pattern 导致改规则后命中旧编译（P1-7 引入的真实回归）/ R47 同一处的无界增长，重构 cache 与 `cache_generation` 联动
+- 中等：R29 SSE chunk 边界 CRLF 拆分形成伪块分隔符 / R30 `stable_search_result_id` 空字段塌陷碰撞
 
-**已知风险（延后）**：R3 codegen 模板 unreachable / R22 64-bit 位移 Web 精度 / R23 PlatformInt64 Web 兼容 / R24 ReplaceRule.scope 不区分（需 schema 改动）。
+**剩余 R 项延后**：R28（DNS TOCTOU 文档/命名）/ R31–R33 / R34（节流锁嵌套）/ R35–R36（build.rs）/ R37（ReaderRenderMode 半成品）/ R38–R39（PageView 状态机）/ R40（脱敏）/ R41–R42（cookie 局限）/ R43（多 isolate 缓存）/ R44（toast）/ R45（Web `<<` modulo-32）。
 
-每批完成后 `cargo test --workspace` 与 `flutter test` 都全绿；本批完成时 cargo 245 / flutter 107 / `flutter analyze` 0 issue。详细问题清单与具体改动见 CHANGELOG。
+**已知风险（更早就延后）**：R3 codegen 模板 unreachable / R22 / R23 / R24 ReplaceRule.scope（需 schema 改动）。
+
+每批完成后 `cargo test --workspace` 与 `flutter test` 都全绿；本批完成时 cargo 248 / flutter 109 / `flutter analyze` 0 issue。详细问题清单与具体改动见 CHANGELOG。
 
 ---
 

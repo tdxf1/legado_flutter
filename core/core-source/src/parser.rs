@@ -189,13 +189,21 @@ pub struct SearchResult {
     pub source_name: String,
 }
 
-/// P1-3: Build a stable ID for a SearchResult so the Dart side doesn't have
-/// to reinvent the same hash ([_saveResultToBookshelf] in search_page.dart).
+/// P1-3: Build a stable ID for a SearchResult.
 ///
 /// Inputs are joined with `|`, hashed with SHA256, then base64url-encoded
-/// (no padding) — this matches the Dart side byte-for-byte. If the source
-/// has no book_url (offline / explore), we fall back to `name|author|now`
-/// so two distinct entries still get distinct IDs within the same second.
+/// (no padding). Dart side trusts this id verbatim (R18 deleted the
+/// previous Dart re-hash fallback, so Rust is now the sole authority).
+///
+/// R30: previously we filtered empty components *before* joining, which
+/// collapsed `(src, url, name, "")` and `(src, url, "", name)` to the same
+/// hash. Always preserve all four positions so structurally different
+/// inputs get structurally different ids.
+///
+/// If literally every input is empty (offline / explore corner case) we
+/// fall back to `unknown|<unix_secs>` so two distinct entries within the
+/// same wall-clock second still differ at second granularity. This is
+/// best-effort — callers should pass at least one non-empty component.
 pub(crate) fn stable_search_result_id(
     source_id: &str,
     book_url: &str,
@@ -204,14 +212,9 @@ pub(crate) fn stable_search_result_id(
 ) -> String {
     use base64::Engine;
     use sha2::{Digest, Sha256};
-    let parts = [source_id, book_url, name, author];
-    let joined = parts
-        .iter()
-        .filter(|s| !s.is_empty())
-        .copied()
-        .collect::<Vec<_>>()
-        .join("|");
-    let input = if joined.is_empty() {
+    let all_empty =
+        source_id.is_empty() && book_url.is_empty() && name.is_empty() && author.is_empty();
+    let input = if all_empty {
         format!(
             "unknown|{}",
             std::time::SystemTime::now()
@@ -220,7 +223,7 @@ pub(crate) fn stable_search_result_id(
                 .unwrap_or(0)
         )
     } else {
-        joined
+        format!("{}|{}|{}|{}", source_id, book_url, name, author)
     };
     let digest = Sha256::digest(input.as_bytes());
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
@@ -1980,13 +1983,19 @@ mod tests {
     }
 
     #[test]
-    fn test_stable_search_result_id_skips_empty_components() {
-        // Order matters: ["a", "b"] must hash differently from ["", "a", "b"]
-        // since the Dart side filters out empties before joining with '|'.
-        let with_empty = stable_search_result_id("", "u", "n", "a");
-        let manual = stable_search_result_id("u", "n", "a", "");
-        // Both should reduce to joining "u|n|a" — same hash.
-        assert_eq!(with_empty, manual);
+    fn test_stable_search_result_id_preserves_position() {
+        // R30: previous behaviour filtered empty fields *before* joining,
+        // which collapsed structurally-different inputs into the same
+        // hash. Now empty fields keep their slot in the `|`-joined string,
+        // so identical components in different positions hash distinctly.
+        let a_in_pos0 = stable_search_result_id("a", "", "", "");
+        let a_in_pos1 = stable_search_result_id("", "a", "", "");
+        let a_in_pos2 = stable_search_result_id("", "", "a", "");
+        let a_in_pos3 = stable_search_result_id("", "", "", "a");
+        assert_ne!(a_in_pos0, a_in_pos1);
+        assert_ne!(a_in_pos1, a_in_pos2);
+        assert_ne!(a_in_pos2, a_in_pos3);
+        assert_ne!(a_in_pos0, a_in_pos3);
     }
 
     #[test]

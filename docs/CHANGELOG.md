@@ -126,3 +126,23 @@
 - **R24** `apply_replace_rules` 不区分 `ReplaceRule.scope (0/1/2)`：所有 enabled 规则无差别应用，属 Phase 4 之前就存在的 bug，需 schema 改动后单独处理。
 
 **验证**：`cargo test --workspace` 245 passed；`flutter analyze` 0 issue；`flutter test` 107 passed（新增 SSE CRLF 1 个）。
+
+## 第三轮全面复审 — 第七批（2026-05-17，commit 7）
+
+第二轮结束后再做了一次端到端复审，捞出 18 个新问题（R27–R45 / R47，R46 误报已撤回）。其中 R27 是 P1-7 引入的真实正确性回归，本批先修最高 ROI 的 4 项。
+
+| 项 | 严重度 | 摘要 |
+|----|--------|------|
+| R27 | 高危 | `RegexCache.get_or_compile` 仅以 `rule.id` 作 key，导致用户改了 pattern 后仍命中旧编译。重构为 `(id, pattern)` key + 与 `cache_generation` 联动：`ensure_generation()` 检测到 generation 变更时整体清空，配合 `bumpReplaceRuleGeneration` 形成"CRUD → 失效 → 下次读取重编译"的闭环 |
+| R47 | 高危 | 同一处。重构同时把无界 `HashMap<String, Option<Regex>>` 改为按 generation 重建，自然 bound 在"当前 enabled 规则数"，长期跑不再泄漏 |
+| R29 | 中等 | `transport.dart` SSE 解析 chunk 边界 CRLF：`\r\n` 被分到两个 chunk 时旧实现把第一段的 `\r` 单独 normalize 成 `\n`，跨 chunk 后再撞上 `\n` 形成伪 `\n\n` 块分隔符。新实现用 `pendingCr` 标志暂存 trailing `\r`，下个 chunk 来了再决定 (a) 与 `\n` 配对成单个 `\n`，或 (b) lone CR 单独 normalize。同时把 SSE 解析整段抽成 `parseSseStream(Stream<String>)` top-level 函数（`@visibleForTesting`），方便注入特定 chunk 切分点 |
+| R30 | 中等 | `stable_search_result_id` 修正空字段塌陷：之前 `parts.iter().filter(empty).join("|")` 让 `(src,url,name,"")` 与 `(src,url,"",name)` 哈希相同。新实现 `format!("{}|{}|{}|{}")` 始终保留所有 4 个分隔符位 |
+
+**测试新增**：
+- `cargo test`：3 个 RegexCache 单测（`cache_invalidates_on_generation_bump` / `cache_drops_old_entries_on_generation_bump` / `compile_failures_clear_on_generation_bump`）
+- `cargo test`：替换 `test_stable_search_result_id_skips_empty_components` 为 `test_stable_search_result_id_preserves_position`（断言 4 个位置中"a"在不同位置必须哈希不同）
+- `flutter test`：2 个 `parseSseStream` chunk 边界单测（CRLF 跨 chunk 不应产生伪块分隔 / lone CR 不能吞掉下个 chunk 的首字节）
+
+**验证**：`cargo test --workspace` 248 passed；`flutter analyze` 0 issue；`flutter test` 109 passed。
+
+**剩余 R 项延后**：R28（DNS rebinding TOCTOU 文档/命名）/ R31-R33（doc 与 trivial）/ R34（节流锁嵌套，改 atomic）/ R35-R36（build.rs 改进）/ R37（ReaderRenderMode refactor 半成品）/ R38-R39（PageViewController 同步状态机）/ R40（DownloadRunner errorMessage 脱敏）/ R41-R42（cookie removal 局限）/ R43（多 isolate 缓存撞车）/ R44（替换规则报错 toast）/ R45（_paragraphKeyId Web 兼容）。

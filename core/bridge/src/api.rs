@@ -860,10 +860,18 @@ fn apply_replace_rules_impl(
     // across `replace_all`, serialising every concurrent caller and
     // throwing away the perf wins of moving regex evaluation off the Dart
     // main isolate. `regex::Regex` clones are cheap (Arc internally).
+    //
+    // R27/R47: pin the regex cache to `cache_generation`. When the caller
+    // bumps the generation (rule CRUD), the cache is dropped and rebuilt
+    // — this is what guarantees a freshly-edited pattern actually takes
+    // effect (previously the cache keyed by `id` only and silently served
+    // the old compiled regex). It also bounds memory: cache size never
+    // exceeds the current generation's enabled rule count.
     let compiled: Vec<(Regex, String)> = {
         let mut cache = REGEX_CACHE
             .lock()
             .map_err(|e| format!("regex cache lock poisoned: {e}"))?;
+        cache.ensure_generation(cache_generation);
         rules
             .iter()
             .filter(|r| !r.pattern.is_empty())
@@ -912,28 +920,53 @@ fn load_enabled_replace_rules(
     Ok(arc)
 }
 
-/// Compiled-regex cache keyed by ReplaceRule.id. Compile failures are
-/// remembered so we don't re-warn on every chapter.
+/// Compiled-regex cache.
+///
+/// R27/R47: keyed on `(rule_id, pattern)` and tagged with the caller's
+/// `cache_generation`. When the generation changes (i.e. caller bumped the
+/// counter after a rule CRUD), the entire cache is dropped on the next
+/// `ensure_generation` call — guaranteeing that a freshly-edited pattern
+/// actually compiles fresh, and bounding memory at "current enabled rule
+/// count" rather than growing unbounded across migrations.
+///
+/// Compile failures are remembered as `None` within a single generation so
+/// we don't re-warn on every chapter; a `bumpReplaceRuleGeneration` clears
+/// them too, which is the right thing if the user fixed the bad pattern.
 struct RegexCache {
-    entries: std::collections::HashMap<String, Option<regex::Regex>>,
+    /// `cache_generation` of every entry currently in `entries`. `None` on
+    /// first use (cache empty).
+    generation: Option<i64>,
+    entries: std::collections::HashMap<(String, String), Option<regex::Regex>>,
 }
 
 impl RegexCache {
     fn new() -> Self {
         Self {
+            generation: None,
             entries: std::collections::HashMap::new(),
         }
     }
 
+    /// Drop cached entries when the caller's generation changes. Cheap when
+    /// generation matches (no allocation, no work).
+    fn ensure_generation(&mut self, generation: i64) {
+        if self.generation == Some(generation) {
+            return;
+        }
+        self.entries.clear();
+        self.generation = Some(generation);
+    }
+
     fn get_or_compile(&mut self, id: &str, pattern: &str) -> Option<&regex::Regex> {
-        if !self.entries.contains_key(id) {
+        let key = (id.to_string(), pattern.to_string());
+        if !self.entries.contains_key(&key) {
             let compiled = regex::Regex::new(pattern);
             if let Err(ref e) = compiled {
                 tracing::warn!("ReplaceRule {} regex 编译失败: {}", id, e);
             }
-            self.entries.insert(id.to_string(), compiled.ok());
+            self.entries.insert(key.clone(), compiled.ok());
         }
-        self.entries.get(id).and_then(|o| o.as_ref())
+        self.entries.get(&key).and_then(|o| o.as_ref())
     }
 }
 
@@ -1015,4 +1048,67 @@ fn storage_to_source_book_source(
         created_at: s.created_at,
         updated_at: s.updated_at,
     })
+}
+
+#[cfg(test)]
+mod regex_cache_tests {
+    use super::*;
+
+    /// R27: a freshly-edited pattern under the SAME rule id must produce a
+    /// different compiled Regex once the caller bumps the generation. The
+    /// previous keying-by-id-only kept the stale compile around forever.
+    #[test]
+    fn cache_invalidates_on_generation_bump() {
+        let mut cache = RegexCache::new();
+
+        cache.ensure_generation(1);
+        let r1_addr = cache.get_or_compile("rule-A", "foo").unwrap() as *const _ as usize;
+        // Same pattern within the same generation should hit the cache.
+        let r1_again = cache.get_or_compile("rule-A", "foo").unwrap() as *const _ as usize;
+        assert_eq!(r1_addr, r1_again, "same gen + pattern should reuse compile");
+
+        // Caller edits rule "A" pattern; bumps generation.
+        cache.ensure_generation(2);
+        let r2 = cache.get_or_compile("rule-A", "bar").unwrap();
+        assert!(r2.is_match("bar"));
+        assert!(!r2.is_match("foo"), "old pattern must not still apply");
+    }
+
+    /// R47: cache size never grows beyond the current generation's worth
+    /// of (id, pattern) tuples.
+    #[test]
+    fn cache_drops_old_entries_on_generation_bump() {
+        let mut cache = RegexCache::new();
+        cache.ensure_generation(1);
+        for i in 0..50 {
+            let id = format!("rule-{i}");
+            let pattern = format!("p{i}");
+            cache.get_or_compile(&id, &pattern);
+        }
+        assert_eq!(cache.entries.len(), 50);
+        cache.ensure_generation(2);
+        assert_eq!(
+            cache.entries.len(),
+            0,
+            "generation bump should drop all entries"
+        );
+        cache.get_or_compile("rule-0", "p0");
+        assert_eq!(cache.entries.len(), 1);
+    }
+
+    /// Compile failures still get remembered within a generation but do
+    /// NOT survive a generation bump (so a user fixing a bad pattern sees
+    /// the fix take effect on next chapter).
+    #[test]
+    fn compile_failures_clear_on_generation_bump() {
+        let mut cache = RegexCache::new();
+        cache.ensure_generation(1);
+        // Invalid pattern: unclosed bracket.
+        assert!(cache.get_or_compile("bad-rule", "[").is_none());
+        assert_eq!(cache.entries.len(), 1);
+        cache.ensure_generation(2);
+        // Fixed pattern under same id.
+        let fixed = cache.get_or_compile("bad-rule", "[abc]").unwrap();
+        assert!(fixed.is_match("a"));
+    }
 }

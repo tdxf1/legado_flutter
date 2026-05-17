@@ -149,61 +149,7 @@ class HttpTransport implements Transport {
       throw HttpException('GET $path SSE failed: ${res.statusCode}');
     }
 
-    String currentEvent = 'message';
-    String currentId = '';
-    final dataLines = <String>[];
-    final buffer = StringBuffer();
-
-    await for (final chunk in res.transform(utf8.decoder)) {
-      // R6: SSE allows LF / CR / CRLF as line terminators (per the W3C
-      // spec); some proxies turn LF into CRLF mid-stream. Normalize CRLF
-      // and bare CR to LF so the rest of the parser only deals with one
-      // form. Lone CRs are rare in real traffic but cheap to handle.
-      final normalized = chunk.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
-      buffer.write(normalized);
-      while (true) {
-        final raw = buffer.toString();
-        final sep = raw.indexOf('\n\n');
-        if (sep < 0) break;
-        final block = raw.substring(0, sep);
-        buffer.clear();
-        buffer.write(raw.substring(sep + 2));
-
-        // Parse this block: event/id once, data may span multiple lines.
-        // SSE spec: dispatch a single event per blank-line-terminated block,
-        // joining all data: lines with '\n'.
-        currentEvent = 'message';
-        currentId = '';
-        dataLines.clear();
-        for (final line in block.split('\n')) {
-          if (line.isEmpty) continue;
-          if (line.startsWith(':')) continue; // SSE comment
-          final colonIdx = line.indexOf(':');
-          if (colonIdx < 0) continue;
-          final field = line.substring(0, colonIdx).trim();
-          var value = line.substring(colonIdx + 1);
-          if (value.startsWith(' ')) value = value.substring(1);
-          switch (field) {
-            case 'event':
-              currentEvent = value;
-              break;
-            case 'data':
-              dataLines.add(value);
-              break;
-            case 'id':
-              currentId = value;
-              break;
-          }
-        }
-        if (dataLines.isNotEmpty) {
-          yield TransportEvent(
-            event: currentEvent,
-            data: dataLines.join('\n'),
-            id: currentId.isEmpty ? null : currentId,
-          );
-        }
-      }
-    }
+    yield* parseSseStream(res.transform(utf8.decoder));
   }
 
   @override
@@ -217,6 +163,98 @@ class HttpTransport implements Transport {
     }
     _activeRequests.clear();
     _client.close(force: true);
+  }
+}
+
+/// SSE chunk stream → [TransportEvent] stream.
+///
+/// Pulled out as a top-level function so it's testable with a synthetic
+/// `Stream<String>` (the real wire-level [HttpClientResponse] is hard to
+/// shape into specific chunk boundaries).
+///
+/// Handles:
+/// - LF / CR / CRLF line terminators (R6)
+/// - CRLF that gets split across two chunks: trailing '\r' is held back
+///   until the next chunk so it can be paired or normalised correctly (R29)
+/// - multi-line `data:` joined with '\n' per the SSE spec
+@visibleForTesting
+Stream<TransportEvent> parseSseStream(Stream<String> chunks) async* {
+  String currentEvent = 'message';
+  String currentId = '';
+  final dataLines = <String>[];
+  final buffer = StringBuffer();
+  // R29: if a chunk ends in a bare '\r' it might be the first half of a
+  // CRLF that got split across the HTTP chunk boundary. Hold it back
+  // until the next chunk arrives so we can see whether to drop it
+  // (CRLF -> LF) or convert it (lone CR -> LF). Without this, naive
+  // per-chunk normalization turns the trailing '\r' into '\n', then the
+  // next chunk's leading '\n' stays, producing a spurious '\n\n' block
+  // separator and mis-dispatching the SSE event.
+  bool pendingCr = false;
+
+  await for (final chunk in chunks) {
+    if (chunk.isEmpty) continue;
+    var work = chunk;
+    if (pendingCr) {
+      // Carry-over from previous chunk. If the new chunk starts with
+      // '\n', the held '\r' was the first half of CRLF: emit a single
+      // '\n' for the pair. Otherwise the held '\r' was a lone CR and
+      // should be normalised to '\n' on its own.
+      if (work.startsWith('\n')) {
+        buffer.write('\n');
+        work = work.substring(1);
+      } else {
+        buffer.write('\n');
+      }
+      pendingCr = false;
+    }
+    if (work.endsWith('\r')) {
+      pendingCr = true;
+      work = work.substring(0, work.length - 1);
+    }
+    // R6: SSE allows LF / CR / CRLF as line terminators; normalise both
+    // so the rest of the parser only deals with '\n'.
+    final normalized = work.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    buffer.write(normalized);
+    while (true) {
+      final raw = buffer.toString();
+      final sep = raw.indexOf('\n\n');
+      if (sep < 0) break;
+      final block = raw.substring(0, sep);
+      buffer.clear();
+      buffer.write(raw.substring(sep + 2));
+
+      currentEvent = 'message';
+      currentId = '';
+      dataLines.clear();
+      for (final line in block.split('\n')) {
+        if (line.isEmpty) continue;
+        if (line.startsWith(':')) continue; // SSE comment
+        final colonIdx = line.indexOf(':');
+        if (colonIdx < 0) continue;
+        final field = line.substring(0, colonIdx).trim();
+        var value = line.substring(colonIdx + 1);
+        if (value.startsWith(' ')) value = value.substring(1);
+        switch (field) {
+          case 'event':
+            currentEvent = value;
+            break;
+          case 'data':
+            dataLines.add(value);
+            break;
+          case 'id':
+            currentId = value;
+            break;
+        }
+      }
+      if (dataLines.isNotEmpty) {
+        yield TransportEvent(
+          event: currentEvent,
+          data: dataLines.join('\n'),
+          id: currentId.isEmpty ? null : currentId,
+        );
+      }
+    }
   }
 }
 
