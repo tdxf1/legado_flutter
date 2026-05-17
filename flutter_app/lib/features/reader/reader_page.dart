@@ -337,6 +337,11 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   /// 看到第一章规则没生效但第二章生效。这里用 `bookByIdProvider`
   /// 兜底把 metadata 同步加载好再调 Rust。该 provider 是 FutureProvider
   /// 已做缓存，重复 await 同一 future 不会重复查询数据库。
+  ///
+  /// R115: 回填用 setState 是因为 `_bookName` / `_sourceUrl` 也被
+  /// AppBar 标题、change-source 对话框等读取，需要立即触发 rebuild
+  /// 而不是等下一次自然 setState；否则用户在并发 race 命中时会看到
+  /// AppBar 暂时显示空标题。
   Future<String> _applyReplaceRulesViaRust(
       String dbPath, String content) async {
     if (content.isEmpty) return content;
@@ -345,15 +350,31 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         final book =
             await ref.read(bookByIdProvider(widget.bookId).future);
         if (book != null && mounted) {
-          if (_bookName.isEmpty) {
-            _bookName = book['name'] as String? ?? '';
-          }
-          if (_sourceUrl.isEmpty) {
-            _sourceUrl = book['source_url'] as String? ?? '';
-          }
+          // R115: setState 让 AppBar 标题 / change-source 对话框等
+          // 读取这两个字段的 widget 立即 rebuild。
+          setState(() {
+            if (_bookName.isEmpty) {
+              _bookName = book['name'] as String? ?? '';
+            }
+            if (_sourceUrl.isEmpty) {
+              _sourceUrl = book['source_url'] as String? ?? '';
+            }
+          });
         }
       } catch (e) {
         debugPrint('[Reader] R105 backfill book metadata failed: $e');
+        // R116: 永久性 DB 错误会导致 scope 限定规则始终不生效却没有
+        // 任何 UI 反馈。复用 `_replaceRuleErrorShown` 单次守卫，避免
+        // 与下面 applyReplaceRules 失败 toast 双重弹窗。
+        if (mounted && !_replaceRuleErrorShown) {
+          _replaceRuleErrorShown = true;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('无法读取书籍信息，替换规则可能未按作用范围生效'),
+              duration: Duration(seconds: 4),
+            ),
+          );
+        }
         // Fall through — the rule call will still proceed with whatever
         // is populated (possibly empty), matching pre-R105 behaviour.
       }

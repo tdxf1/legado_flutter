@@ -141,148 +141,23 @@ class _ReplaceRulePageState extends ConsumerState<ReplaceRulePage> {
   /// 原 `_showAddRuleDialog`（生成新 id）；`existing != null` 时预填
   /// 全部字段、保留原 id / sort_number / created_at / enabled，
   /// 通过 `saveReplaceRule` upsert。
+  ///
+  /// R120: 表单 controller 改由 [_RuleEditDialog] 拥有（StatefulWidget
+  /// 的 State 字段），由它的 dispose 释放，避免每次开关 dialog 都泄漏
+  /// 5 个 TextEditingController。
   void _showRuleEditDialog(BuildContext context,
       [Map<String, dynamic>? existing]) {
-    final isEdit = existing != null;
-    final nameCtrl =
-        TextEditingController(text: existing?['name'] as String? ?? '');
-    final patternCtrl = TextEditingController(
-        text: existing?['pattern'] as String? ?? '');
-    final replacementCtrl = TextEditingController(
-        text: existing?['replacement'] as String? ?? '');
-    final scopeCtrl = TextEditingController(
-        text: (existing?['scope'] as String?) ?? '');
-    final excludeCtrl = TextEditingController(
-        text: (existing?['exclude_scope'] as String?) ?? '');
-    // R24 默认值：scope_content=true, scope_title=false。
-    bool scopeContent = existing == null
-        ? true
-        : (existing['scope_content'] != false);
-    bool scopeTitle = existing == null
-        ? false
-        : (existing['scope_title'] == true);
-
     showDialog(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: Text(isEdit ? '编辑替换规则' : '添加替换规则'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextField(
-                  controller: nameCtrl,
-                  decoration: const InputDecoration(labelText: '规则名称'),
-                ),
-                TextField(
-                  controller: patternCtrl,
-                  decoration: const InputDecoration(
-                      labelText: '匹配模式 (正则)'),
-                ),
-                TextField(
-                  controller: replacementCtrl,
-                  decoration:
-                      const InputDecoration(labelText: '替换文本'),
-                ),
-                const SizedBox(height: 8),
-                // R24: scope 改为自由文本，对齐原 Legado UI（"选填
-                // 书名或书源 URL"）。子串匹配，留空 = 全局。
-                TextField(
-                  controller: scopeCtrl,
-                  decoration: const InputDecoration(
-                    labelText: '作用范围',
-                    helperText: '选填书名或书源 URL，留空 = 全局；多个用空格分隔',
-                  ),
-                ),
-                TextField(
-                  controller: excludeCtrl,
-                  decoration: const InputDecoration(
-                    labelText: '排除范围',
-                    helperText: '选填书名或书源 URL，命中即跳过',
-                  ),
-                ),
-                const SizedBox(height: 8),
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  title: const Text('作用于正文'),
-                  value: scopeContent,
-                  onChanged: (v) =>
-                      setDialogState(() => scopeContent = v ?? true),
-                ),
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  title: const Text('作用于章节标题'),
-                  value: scopeTitle,
-                  onChanged: (v) =>
-                      setDialogState(() => scopeTitle = v ?? false),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                final name = nameCtrl.text.trim();
-                final pattern = patternCtrl.text.trim();
-                if (name.isEmpty || pattern.isEmpty) return;
-                try {
-                  await ref.read(dbInitializedProvider.future);
-                  final dbPath = await ref.read(dbPathProvider.future);
-                  final now =
-                      DateTime.now().millisecondsSinceEpoch ~/ 1000;
-                  // R110: edit 模式复用原 id / sort_number / created_at /
-                  // enabled，仅刷新 updated_at；add 模式生成新 id。
-                  final id = isEdit
-                      ? existing['id'] as String
-                      : '${now}_${Random().nextInt(99999)}';
-                  final scopeText = scopeCtrl.text.trim();
-                  final excludeText = excludeCtrl.text.trim();
-                  final ruleJson = jsonEncode({
-                    'id': id,
-                    'name': name,
-                    'pattern': pattern,
-                    'replacement': replacementCtrl.text,
-                    'enabled':
-                        isEdit ? (existing['enabled'] != false) : true,
-                    'scope': scopeText.isEmpty ? null : scopeText,
-                    'scope_title': scopeTitle,
-                    'scope_content': scopeContent,
-                    'exclude_scope':
-                        excludeText.isEmpty ? null : excludeText,
-                    'sort_number': isEdit
-                        ? (existing['sort_number'] as int? ?? 0)
-                        : 0,
-                    'created_at': isEdit
-                        ? (existing['created_at'] as int? ?? now)
-                        : now,
-                    'updated_at': now,
-                  });
-                  await rust_api.saveReplaceRule(
-                      dbPath: dbPath, ruleJson: ruleJson);
-                  bumpReplaceRuleGeneration(ref);
-                  if (ctx.mounted) Navigator.pop(ctx);
-                } catch (e) {
-                  if (ctx.mounted) {
-                    ScaffoldMessenger.of(ctx).showSnackBar(
-                      SnackBar(
-                          content:
-                              Text('${isEdit ? "保存" : "添加"}失败: $e')),
-                    );
-                  }
-                }
-              },
-              child: Text(isEdit ? '保存' : '添加'),
-            ),
-          ],
-        ),
+      builder: (ctx) => _RuleEditDialog(
+        existing: existing,
+        onSave: (ruleJson) async {
+          await ref.read(dbInitializedProvider.future);
+          final dbPath = await ref.read(dbPathProvider.future);
+          await rust_api.saveReplaceRule(
+              dbPath: dbPath, ruleJson: ruleJson);
+          bumpReplaceRuleGeneration(ref);
+        },
       ),
     );
   }
@@ -387,5 +262,178 @@ class _ReplaceRulePageState extends ConsumerState<ReplaceRulePage> {
         );
       }
     }
+  }
+}
+
+/// R120: 替换规则添加 / 编辑对话框。把 5 个 [TextEditingController] 与
+/// 两个 checkbox 状态作为 State 字段持有，并在 [dispose] 释放，避免
+/// 之前在 `_showRuleEditDialog` 函数体里 new 出来后无人 dispose 的
+/// 泄漏。`onSave` 由调用方提供，负责将 ruleJson 写入数据库 + bump
+/// replace-rule generation；本 widget 仅在 onSave 成功后 pop，失败
+/// 弹 SnackBar 留在原位让用户修改。
+class _RuleEditDialog extends StatefulWidget {
+  const _RuleEditDialog({required this.existing, required this.onSave});
+
+  final Map<String, dynamic>? existing;
+
+  /// 调用方负责把序列化后的规则 JSON 写入 DB 并 bump
+  /// replace-rule generation。错误请通过抛异常回报，本 widget
+  /// 会捕获并展示 SnackBar，不 pop。
+  final Future<void> Function(String ruleJson) onSave;
+
+  @override
+  State<_RuleEditDialog> createState() => _RuleEditDialogState();
+}
+
+class _RuleEditDialogState extends State<_RuleEditDialog> {
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _patternCtrl;
+  late final TextEditingController _replacementCtrl;
+  late final TextEditingController _scopeCtrl;
+  late final TextEditingController _excludeCtrl;
+  late bool _scopeContent;
+  late bool _scopeTitle;
+
+  bool get _isEdit => widget.existing != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final e = widget.existing;
+    _nameCtrl = TextEditingController(text: e?['name'] as String? ?? '');
+    _patternCtrl =
+        TextEditingController(text: e?['pattern'] as String? ?? '');
+    _replacementCtrl = TextEditingController(
+        text: e?['replacement'] as String? ?? '');
+    _scopeCtrl =
+        TextEditingController(text: (e?['scope'] as String?) ?? '');
+    _excludeCtrl = TextEditingController(
+        text: (e?['exclude_scope'] as String?) ?? '');
+    // R24 默认值：scope_content=true, scope_title=false。
+    _scopeContent = e == null ? true : (e['scope_content'] != false);
+    _scopeTitle = e == null ? false : (e['scope_title'] == true);
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _patternCtrl.dispose();
+    _replacementCtrl.dispose();
+    _scopeCtrl.dispose();
+    _excludeCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final name = _nameCtrl.text.trim();
+    final pattern = _patternCtrl.text.trim();
+    if (name.isEmpty || pattern.isEmpty) return;
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    // R110: edit 模式复用原 id / sort_number / created_at / enabled，
+    // 仅刷新 updated_at；add 模式生成新 id。
+    final existing = widget.existing;
+    final id = _isEdit
+        ? existing!['id'] as String
+        : '${now}_${Random().nextInt(99999)}';
+    final scopeText = _scopeCtrl.text.trim();
+    final excludeText = _excludeCtrl.text.trim();
+    final ruleJson = jsonEncode({
+      'id': id,
+      'name': name,
+      'pattern': pattern,
+      'replacement': _replacementCtrl.text,
+      'enabled': _isEdit ? (existing!['enabled'] != false) : true,
+      'scope': scopeText.isEmpty ? null : scopeText,
+      'scope_title': _scopeTitle,
+      'scope_content': _scopeContent,
+      'exclude_scope': excludeText.isEmpty ? null : excludeText,
+      'sort_number':
+          _isEdit ? (existing!['sort_number'] as int? ?? 0) : 0,
+      'created_at':
+          _isEdit ? (existing!['created_at'] as int? ?? now) : now,
+      'updated_at': now,
+    });
+    try {
+      await widget.onSave(ruleJson);
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${_isEdit ? "保存" : "添加"}失败: $e')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(_isEdit ? '编辑替换规则' : '添加替换规则'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _nameCtrl,
+              decoration: const InputDecoration(labelText: '规则名称'),
+            ),
+            TextField(
+              controller: _patternCtrl,
+              decoration:
+                  const InputDecoration(labelText: '匹配模式 (正则)'),
+            ),
+            TextField(
+              controller: _replacementCtrl,
+              decoration: const InputDecoration(labelText: '替换文本'),
+            ),
+            const SizedBox(height: 8),
+            // R24: scope 改为自由文本，对齐原 Legado UI（"选填
+            // 书名或书源 URL"）。子串匹配，留空 = 全局。
+            TextField(
+              controller: _scopeCtrl,
+              decoration: const InputDecoration(
+                labelText: '作用范围',
+                helperText: '选填书名或书源 URL，留空 = 全局；多个用空格分隔',
+              ),
+            ),
+            TextField(
+              controller: _excludeCtrl,
+              decoration: const InputDecoration(
+                labelText: '排除范围',
+                helperText: '选填书名或书源 URL，命中即跳过',
+              ),
+            ),
+            const SizedBox(height: 8),
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: const Text('作用于正文'),
+              value: _scopeContent,
+              onChanged: (v) =>
+                  setState(() => _scopeContent = v ?? true),
+            ),
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: const Text('作用于章节标题'),
+              value: _scopeTitle,
+              onChanged: (v) =>
+                  setState(() => _scopeTitle = v ?? false),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: Text(_isEdit ? '保存' : '添加'),
+        ),
+      ],
+    );
   }
 }
