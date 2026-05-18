@@ -209,6 +209,29 @@ abstract class PageDelegate {
     isRunning = false;
   }
 
+  /// 取消当前未完成的 drag 周期，复位 [_direction] / [_dragOffset] /
+  /// [animController.value] 并释放预渲染 picture。
+  ///
+  /// 调用语义对应 Android `MotionEvent.ACTION_CANCEL`：onDragStart 已经被
+  /// widget 层触发（slop 已越过、picture 已分配、animController.value 被
+  /// onDragUpdate 推进），但用户后续的 PointerCancel 中止了手势。
+  /// 如果不复位，下一次 drag 会在 stale `_dragOffset` / `_direction` 上累加，
+  /// 出现"刚 down 就翻半页"的 ghost-progress 现象。
+  ///
+  /// 与 [abortAnim] 的区别：abortAnim 只停 anim、置 isRunning=false，
+  /// **不**复位 direction/offset/picture。cancelDrag 是 Listener 层 cancel
+  /// 路径用的"完整复位"。
+  void cancelDrag() {
+    if (animController.isAnimating) {
+      animController.stop();
+    }
+    _direction = PageDirection.none;
+    _dragOffset = 0;
+    isRunning = false;
+    animController.value = 0;
+    _clearPictures();
+  }
+
   /// 程序化"下一页"触发（按键 / 自动翻页 / 点击翻页）。
   ///
   /// Bug 2.5：cover/slide/fade 的 draw 依赖 onDragStart 内生成的

@@ -626,6 +626,34 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
 
   static double _toDegrees(double radians) => radians * 180 / math.pi;
 
+  // ── visibleForTesting accessors (Task 3) ─────────────────────────
+  //
+  // The corner coordinates and the right-top/left-bottom flag are pure
+  // outputs of `_calcCornerXY(startTouch.dx, startTouch.dy)`. Tests want
+  // to assert that gating slop changes the corner anchor — exposing
+  // these read-only views avoids leaking the private fields.
+
+  @visibleForTesting
+  double get debugCornerX => _cornerX;
+
+  @visibleForTesting
+  double get debugCornerY => _cornerY;
+
+  @visibleForTesting
+  bool get debugIsRtOrLb => _isRtOrLb;
+
+  /// Test-only thin wrapper around the geometry routine. Lets unit tests
+  /// drive `_calcCornerXY` directly without spinning up an animation
+  /// controller / picture pipeline.
+  @visibleForTesting
+  void debugCalcCornerXY(Offset start, Size size) {
+    // We need to also seed `pageSize` so the geometry comparisons inside
+    // `_calcCornerXY` see the right page bounds. `recordTouchStart` does
+    // exactly that and is part of the existing public surface.
+    recordTouchStart(start, size);
+    _calcCornerXY(start.dx, start.dy);
+  }
+
   // 借助 [bezierStart1] / [bezierStart2] 字段去消静态分析未使用警告：
   // 二者的具体值在 _bs1x/y、_bs2x/y 中存放，保留 const 字段是为了让阅读者
   // 直观看到点位组织。

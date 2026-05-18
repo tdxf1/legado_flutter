@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../../../core/providers.dart';
 import 'text_page.dart';
@@ -16,12 +17,22 @@ class PageViewWidget extends StatefulWidget {
   final int pageAnim;
   final ChapterBoundaryCallback? onChapterBoundary;
 
+  /// Test-only sink. Whenever the internal [PageDelegate] is (re)created,
+  /// this callback is invoked with the fresh instance so widget tests can
+  /// observe `startTouch`, `isRunning`, etc. without exposing private state.
+  ///
+  /// Production callers leave this null; the field is annotated with
+  /// [visibleForTesting] to keep static-analysis happy.
+  @visibleForTesting
+  final ValueChanged<PageDelegate>? debugDelegateSink;
+
   const PageViewWidget({
     super.key,
     required this.controller,
     required this.settings,
     this.pageAnim = 0,
     this.onChapterBoundary,
+    this.debugDelegateSink,
   });
 
   @override
@@ -35,6 +46,18 @@ class _PageViewWidgetState extends State<PageViewWidget>
   Size _pageSize = Size.zero;
   SimulationDegradeController? _simDegrade;
   bool _useNativeFallback = false;
+
+  // Slop state machine (Task 3 — slop-startpoint).
+  //
+  // We replaced GestureDetector(onHorizontalDrag*) with a raw Listener so the
+  // delegate's startTouch reflects the *slop-crossed* pointer position, not
+  // the pointer-down position. Mirrors Legado MD3
+  // HorizontalPageDelegate.onTouch's `setStartPoint(event.x, event.y, false)`
+  // when isMoved first flips true.
+  bool _slopExceeded = false;
+  Offset? _pointerDownPos;
+  int? _activePointerId;
+  VelocityTracker? _velocityTracker;
 
   @override
   void initState() {
@@ -152,6 +175,9 @@ class _PageViewWidgetState extends State<PageViewWidget>
     // 点击屏幕左/右 1/3 时通过 delegate 跑动画再切页。
     ctrl.onTapNext = () => _delegate.nextPageByAnim(300);
     ctrl.onTapPrev = () => _delegate.prevPageByAnim(300);
+
+    // Test-only hook — see [PageViewWidget.debugDelegateSink].
+    widget.debugDelegateSink?.call(_delegate);
   }
 
   PageDirection _detectDirection(double velocityX) {
@@ -160,29 +186,100 @@ class _PageViewWidgetState extends State<PageViewWidget>
     return PageDirection.none;
   }
 
-  void _onHorizontalDragStart(DragStartDetails details) {
-    // R4: 动画进行中吞掉新手势，避免 onDragStart 内 _clearPictures
-    // dispose 当前正被 painter 引用的 ui.Picture（page_delegate.dart:75）。
+  // ── Pointer handlers (Task 3) ──────────────────────────────────────
+  //
+  // Why raw Listener instead of GestureDetector.onHorizontalDrag*:
+  //   * `DragStartDetails.localPosition` always reports the pointer-down
+  //     position, not the slop-crossed position. SimulationPageDelegate
+  //     needs the *slop-crossed* position to anchor the page corner under
+  //     the finger; otherwise the curl visibly snaps from the down-frame
+  //     coordinate to the user's actual drag origin.
+  //   * Listener does not participate in the gesture arena, so the outer
+  //     ReaderPage GestureDetector(onTapUp) keeps working untouched.
+  //
+  // Reentrance guard (Task 6 / commit 862d4c8) is preserved: every handler
+  // short-circuits while `_delegate.isRunning` so an in-flight animation's
+  // ui.Picture references are never released by a fresh onDragStart.
+
+  void _onPointerDown(PointerDownEvent e) {
     if (_delegate.isRunning) return;
+    if (_activePointerId != null) return; // multi-touch: track primary only
+    _activePointerId = e.pointer;
+    _slopExceeded = false;
+    _pointerDownPos = e.localPosition;
+    _velocityTracker = VelocityTracker.withKind(e.kind);
+    _velocityTracker!.addPosition(e.timeStamp, e.localPosition);
+  }
+
+  void _onPointerMove(PointerMoveEvent e) {
+    if (_delegate.isRunning) return;
+    if (e.pointer != _activePointerId) return;
     if (_pageSize.isEmpty) return;
-    final ctrl = widget.controller;
-    _delegate.recordTouchStart(details.localPosition, _pageSize);
-    _delegate.onDragStart(_pageSize, ctrl.currentPage, ctrl.nextPage, ctrl.prevPage);
+    _velocityTracker?.addPosition(e.timeStamp, e.localPosition);
+
+    if (!_slopExceeded) {
+      final downPos = _pointerDownPos;
+      if (downPos == null) return;
+      final delta = e.localPosition - downPos;
+      const slop = kTouchSlop;
+      if (delta.distanceSquared > slop * slop) {
+        _slopExceeded = true;
+        // R3.2: pin startTouch to the slop-crossed position, not the
+        // pointer-down position.
+        final ctrl = widget.controller;
+        _delegate.recordTouchStart(e.localPosition, _pageSize);
+        _delegate.onDragStart(
+            _pageSize, ctrl.currentPage, ctrl.nextPage, ctrl.prevPage);
+      } else {
+        return;
+      }
+    }
+
+    _delegate.recordTouchUpdate(e.localPosition);
+    _delegate.onDragUpdate(e.delta.dx);
   }
 
-  void _onHorizontalDragUpdate(DragUpdateDetails details) {
-    // R4: 动画进行中吞掉 update 事件，避免污染 _dragOffset / animController.value。
+  void _onPointerUp(PointerUpEvent e) {
+    if (e.pointer != _activePointerId) return;
+    _activePointerId = null;
+    if (!_slopExceeded) {
+      // R3.4: tap path — let the outer ReaderPage GestureDetector handle it.
+      _slopExceeded = false;
+      _pointerDownPos = null;
+      _velocityTracker = null;
+      return;
+    }
+    _slopExceeded = false;
+    _pointerDownPos = null;
+    final tracker = _velocityTracker;
+    _velocityTracker = null;
+    // R3.6: animation already running — swallow.
     if (_delegate.isRunning) return;
-    _delegate.recordTouchUpdate(details.localPosition);
-    _delegate.onDragUpdate(details.primaryDelta ?? 0);
-  }
-
-  void _onHorizontalDragEnd(DragEndDetails details) {
-    // R4: 动画进行中吞掉 end 事件，避免触发额外 goToNext/goToPrev 翻页。
-    if (_delegate.isRunning) return;
-    final dir = _detectDirection(details.primaryVelocity ?? 0);
-    _delegate.fling(details.primaryVelocity ?? 0);
+    final velocity =
+        tracker?.getVelocity().pixelsPerSecond.dx ?? 0.0;
+    final dir = _detectDirection(velocity);
+    _delegate.fling(velocity);
     _delegate.onDragEnd(dir);
+  }
+
+  void _onPointerCancel(PointerCancelEvent e) {
+    if (e.pointer != _activePointerId) return;
+    _activePointerId = null;
+    final wasSlopExceeded = _slopExceeded;
+    _slopExceeded = false;
+    _pointerDownPos = null;
+    _velocityTracker = null;
+    // R3.5: do not call fling/onDragEnd — avoid spurious page flips.
+    //
+    // BUT: if slop already crossed, `onDragStart` allocated three ui.Pictures
+    // and `onDragUpdate` already mutated `_direction` / `_dragOffset` /
+    // `animController.value`. Without an explicit reset, the next drag would
+    // accumulate onto stale state ("ghost progress" — page appears to jump
+    // half-way on first move). `cancelDrag` releases pictures and zeroes the
+    // delegate; only call it when we know onDragStart actually ran.
+    if (wasSlopExceeded && !_delegate.isRunning) {
+      _delegate.cancelDrag();
+    }
   }
 
   @override
@@ -193,10 +290,15 @@ class _PageViewWidgetState extends State<PageViewWidget>
         _pageSize = size;
         widget.controller.updatePageSize(size);
 
-        return GestureDetector(
-          onHorizontalDragStart: _onHorizontalDragStart,
-          onHorizontalDragUpdate: _onHorizontalDragUpdate,
-          onHorizontalDragEnd: _onHorizontalDragEnd,
+        return Listener(
+          // translucent: don't claim hit-region exclusively, so the outer
+          // ReaderPage GestureDetector(onTapUp) still receives taps that
+          // never crossed the slop threshold (R3.4 / R3.8).
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: _onPointerDown,
+          onPointerMove: _onPointerMove,
+          onPointerUp: _onPointerUp,
+          onPointerCancel: _onPointerCancel,
           child: AnimatedBuilder(
             animation: Listenable.merge([widget.controller, _animController!]),
             builder: (context, child) {
