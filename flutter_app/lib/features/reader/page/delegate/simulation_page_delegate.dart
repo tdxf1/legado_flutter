@@ -74,6 +74,17 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
   final Path _path0 = Path();
   final Path _path1 = Path();
 
+  // ── X1：tap/drag 期间根据动画 progress 自驱动 currentTouch 的 lerp 状态 ──
+  //
+  // 仿真 draw 几何完全由 currentTouch 驱动；tap 路径 currentTouch 在
+  // nextPageByAnim 设过一次后就不变，所以动画期间用户只看到固定折角；drag
+  // 路径 currentTouch 跟手但 painter 重绘节奏跟不上 progress 推进。这里
+  // 引入 lerp：tap 时从虚拟起点 lerp 到 (-w, h)/(w, h)，drag 时从松手位置
+  // lerp 到目标。
+  Offset? _animStartTouch;
+  Offset? _animTargetTouch;
+  double _animStartProgress = 0.0;
+
   // 颜色滤镜：背面页变暗（matrix 单位）
   static final ColorFilter _backFilter = const ColorFilter.matrix(<double>[
     0.85, 0, 0, 0, 0,
@@ -206,6 +217,29 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
 
   // ── 绘制入口 ──────────────────────────────────────────────────────
 
+  /// X1：tap 路径 lerp 起点（虚拟起点）→ 终点（屏幕外侧底部）。
+  /// progress 一定从 0 开始（tap 触发 nextPageByAnim 时 animController.value = 0）。
+  void _setupTapAnim(Offset virtualStart, PageDirection dir) {
+    final size = pageSize.isEmpty ? const Size(400, 600) : pageSize;
+    _animStartTouch = virtualStart;
+    _animStartProgress = 0.0;
+    _animTargetTouch = dir == PageDirection.next
+        ? Offset(-size.width, size.height)
+        : Offset(size.width, size.height);
+  }
+
+  /// X1：drag-end 路径 lerp 起点（用户松手位置）→ 终点。
+  /// progress 起跑值是 animController.value（drag 期间已被 onDragUpdate
+  /// 推进），需要在 onAnimTick 内重新归一化到 [0, 1]。
+  void _setupDragAnim(PageDirection dir) {
+    final size = pageSize.isEmpty ? const Size(400, 600) : pageSize;
+    _animStartTouch = currentTouch;
+    _animStartProgress = animController.value;
+    _animTargetTouch = dir == PageDirection.next
+        ? Offset(-size.width, size.height)
+        : Offset(size.width, size.height);
+  }
+
   /// Task 5 (MD3 体感复刻 Phase A 收尾)：点击翻页（tap）走完整贝塞尔。
   ///
   /// 与 Legado MD3 `HorizontalPageDelegate.nextPageByAnim` 1:1 对齐：
@@ -216,6 +250,10 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
   /// `_calcCornerXY` 仅在 [onDragStart] 路径中被调用——tap 路径没有
   /// drag，因此需要在这里手动计算一次。`_maxLength` 同样需要刷新，因为
   /// `pageSize` 可能在两次 tap 之间变化（旋屏 / 字号更改）。
+  ///
+  /// X1.4：在调 super 之前 `_setupTapAnim`，让 [onAnimTick] 期间根据
+  /// progress 把 currentTouch 从虚拟起点 lerp 到 (-w, h)，让 [_calcPoints]
+  /// 的几何随时间动起来。
   @override
   void nextPageByAnim(int animationSpeed) {
     if (isRunning) return;
@@ -226,6 +264,7 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
       size.width * size.width + size.height * size.height,
     );
     _calcCornerXY(virtualStart.dx, virtualStart.dy);
+    _setupTapAnim(virtualStart, PageDirection.next);
     super.nextPageByAnim(animationSpeed);
   }
 
@@ -243,7 +282,65 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
       size.width * size.width + size.height * size.height,
     );
     _calcCornerXY(virtualStart.dx, virtualStart.dy);
+    _setupTapAnim(virtualStart, PageDirection.prev);
     super.prevPageByAnim(animationSpeed);
+  }
+
+  /// X1.6：drag-end 路径在调 super 之前注入 lerp 状态。
+  /// 注意：tap 路径调用栈是 nextPageByAnim → super.nextPageByAnim → goToNext，
+  /// 此时 _animStartTouch 已被 _setupTapAnim 设过，跳过；只在原始 drag-end
+  /// 路径（_animStartTouch 仍为 null）时主动 setup。
+  @override
+  void goToNext() {
+    if (_animStartTouch == null) {
+      _setupDragAnim(PageDirection.next);
+    }
+    super.goToNext();
+  }
+
+  @override
+  void goToPrev() {
+    if (_animStartTouch == null) {
+      _setupDragAnim(PageDirection.prev);
+    }
+    super.goToPrev();
+  }
+
+  /// X1.7：每帧根据 progress 把 currentTouch 从 _animStartTouch lerp 到
+  /// _animTargetTouch（easeOut 曲线）。tap 路径起点是虚拟起点 (0.9w, 0.9h)，
+  /// drag 路径起点是用户松手位置；均使用 _animStartProgress 把 progress
+  /// 重新归一化到 [0, 1]。
+  @override
+  void onAnimTick(double progress) {
+    final start = _animStartTouch;
+    final target = _animTargetTouch;
+    if (start == null || target == null) return;
+    final denom = 1.0 - _animStartProgress;
+    if (denom <= 0) return;
+    final raw = ((progress - _animStartProgress) / denom).clamp(0.0, 1.0);
+    final t = Curves.easeOut.transform(raw);
+    final lerped = Offset.lerp(start, target, t);
+    if (lerped != null) {
+      recordTouchUpdate(lerped);
+    }
+  }
+
+  /// X1.9：动画完成后清空 lerp 字段，避免下一次 drag 进入时
+  /// `if (_animStartTouch == null)` 误判（tap 路径残留非 null 会跳过 setup）。
+  @override
+  void onAnimEnd() {
+    _animStartTouch = null;
+    _animTargetTouch = null;
+    _animStartProgress = 0.0;
+  }
+
+  /// X1.9：cancel 路径同样清 lerp 字段，避免 cancel 后下一次 drag 错乱。
+  @override
+  void cancelDrag() {
+    _animStartTouch = null;
+    _animTargetTouch = null;
+    _animStartProgress = 0.0;
+    super.cancelDrag();
   }
 
   @override
@@ -605,6 +702,16 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
     recordTouchStart(start, size);
     _calcCornerXY(start.dx, start.dy);
   }
+
+  // ── X1：lerp 状态字段读取（@visibleForTesting）─────────────────
+  @visibleForTesting
+  Offset? get debugAnimStartTouch => _animStartTouch;
+
+  @visibleForTesting
+  Offset? get debugAnimTargetTouch => _animTargetTouch;
+
+  @visibleForTesting
+  double get debugAnimStartProgress => _animStartProgress;
 
   // 借助 [bezierStart1] / [bezierStart2] 字段去消静态分析未使用警告：
   // 二者的具体值在 _bs1x/y、_bs2x/y 中存放，保留 const 字段是为了让阅读者

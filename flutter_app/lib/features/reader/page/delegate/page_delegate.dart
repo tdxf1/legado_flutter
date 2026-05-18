@@ -223,12 +223,27 @@ abstract class PageDelegate {
     onChapterBoundary?.call(PageDirection.prev);
   }
 
+  /// 子类钩子（X1.1）：每帧 progress 变化时调用，让 simulation 等需要根据
+  /// progress 自驱动几何的 delegate 更新内部状态（如 currentTouch lerp）。
+  /// 默认空实现 — cover/slide/fade/noAnim 不需要。
+  void onAnimTick(double progress) {}
+
+  /// 子类钩子（X1.9）：动画 forward 完成 + onComplete + _resetState 之后调用。
+  /// simulation 用它清理 lerp 字段（_animStartTouch 等），避免上次 anim 残留
+  /// 让下一次 drag 路径的 `if (_animStartTouch == null)` guard 误判。
+  /// 默认空实现。
+  void onAnimEnd() {}
+
   void _runAnimation(VoidCallback onComplete) {
     if (isRunning) return;
     isRunning = true;
+    void tick() => onAnimTick(animController.value);
+    animController.addListener(tick);
     animController.forward(from: animController.value).then((_) {
+      animController.removeListener(tick);
       onComplete();
       _resetState();
+      onAnimEnd();
     });
   }
 

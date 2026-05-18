@@ -252,6 +252,12 @@ class _PageViewWidgetState extends State<PageViewWidget>
 
     _delegate.recordTouchUpdate(e.localPosition);
     _delegate.onDragUpdate(e.delta.dx);
+    // X1.12：仿真翻页 draw 几何完全由 currentTouch 驱动，但
+    // _PageViewPainter.shouldRepaint 默认只看 progress / direction 等。
+    // drag 期间用户手指快速推进时 progress 推进节奏跟不上 currentTouch，
+    // 需要主动 setState 让 LayoutBuilder → CustomPaint 重 build → painter
+    // 拿到新 currentTouch 触发 shouldRepaint。
+    if (mounted) setState(() {});
   }
 
   void _onPointerUp(PointerUpEvent e) {
@@ -329,6 +335,7 @@ class _PageViewWidgetState extends State<PageViewWidget>
                   direction: _delegate.direction,
                   isRunning: _delegate.isRunning,
                   totalPages: widget.controller.totalPagesInChapter,
+                  currentTouch: _delegate.currentTouch,
                 ),
               );
             },
@@ -350,6 +357,12 @@ class _PageViewPainter extends CustomPainter {
   final bool isRunning;
   final int totalPages;
 
+  /// X1.10/X1.11：仿真翻页 draw 几何完全由 [PageDelegate.currentTouch] 驱动，
+  /// painter 必须把 currentTouch 纳入 shouldRepaint 比较，否则 tap 路径
+  /// （progress 推进但 currentTouch 也在 lerp）的几何变化会被 oldDelegate
+  /// 缓存吞掉。其它 delegate 不读 currentTouch，传 Offset.zero 是无害的。
+  final Offset currentTouch;
+
   _PageViewPainter({
     required this.delegate,
     required this.currentPage,
@@ -360,6 +373,7 @@ class _PageViewPainter extends CustomPainter {
     required this.direction,
     required this.isRunning,
     required this.totalPages,
+    required this.currentTouch,
   });
 
   @override
@@ -393,6 +407,7 @@ class _PageViewPainter extends CustomPainter {
     final newS = settings;
     return isRunning ||
         oldDelegate.animProgress != animProgress ||
+        oldDelegate.currentTouch != currentTouch ||
         oldDelegate.direction != direction ||
         !identical(oldDelegate.currentPage, currentPage) ||
         !identical(oldDelegate.nextPage, nextPage) ||
