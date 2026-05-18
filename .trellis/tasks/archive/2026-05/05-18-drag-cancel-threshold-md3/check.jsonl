@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/05-18-drag-cancel-threshold-md3/prd.md", "reason": "AC 对照基准"}
+{"file": ".trellis/tasks/05-18-drag-cancel-threshold-md3/research/md3-drag-cancel.md", "reason": "校验 isCancel 公式与 MD3 一致"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "校验 reverse 路径与 forward 路径状态清理对称"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "lint / 测试基线"}

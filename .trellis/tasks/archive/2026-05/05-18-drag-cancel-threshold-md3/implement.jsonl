@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/05-18-drag-cancel-threshold-md3/prd.md", "reason": "本任务 PRD"}
+{"file": ".trellis/tasks/05-18-drag-cancel-threshold-md3/research/md3-drag-cancel.md", "reason": "MD3 horizontal onScroll / onAnimStart 逐字代码 + 设计语义"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用现有 _direction / _dragOffset / animController 状态机"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "drag → onDragEnd → reverse animation → resetState 数据流闭环"}
