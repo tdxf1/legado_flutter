@@ -161,6 +161,9 @@ class _PageViewWidgetState extends State<PageViewWidget>
   }
 
   void _onHorizontalDragStart(DragStartDetails details) {
+    // R4: 动画进行中吞掉新手势，避免 onDragStart 内 _clearPictures
+    // dispose 当前正被 painter 引用的 ui.Picture（page_delegate.dart:75）。
+    if (_delegate.isRunning) return;
     if (_pageSize.isEmpty) return;
     final ctrl = widget.controller;
     _delegate.recordTouchStart(details.localPosition, _pageSize);
@@ -168,11 +171,15 @@ class _PageViewWidgetState extends State<PageViewWidget>
   }
 
   void _onHorizontalDragUpdate(DragUpdateDetails details) {
+    // R4: 动画进行中吞掉 update 事件，避免污染 _dragOffset / animController.value。
+    if (_delegate.isRunning) return;
     _delegate.recordTouchUpdate(details.localPosition);
     _delegate.onDragUpdate(details.primaryDelta ?? 0);
   }
 
   void _onHorizontalDragEnd(DragEndDetails details) {
+    // R4: 动画进行中吞掉 end 事件，避免触发额外 goToNext/goToPrev 翻页。
+    if (_delegate.isRunning) return;
     final dir = _detectDirection(details.primaryVelocity ?? 0);
     _delegate.fling(details.primaryVelocity ?? 0);
     _delegate.onDragEnd(dir);
