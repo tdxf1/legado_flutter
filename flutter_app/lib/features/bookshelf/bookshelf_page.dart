@@ -352,6 +352,11 @@ class _BookListView extends ConsumerWidget {
               onTap: () => Navigator.pop(ctx, 'move'),
             ),
             ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('编辑信息'),
+              onTap: () => Navigator.pop(ctx, 'edit'),
+            ),
+            ListTile(
               leading: const Icon(Icons.delete_outline, color: Colors.red),
               title: const Text('删除', style: TextStyle(color: Colors.red)),
               onTap: () => Navigator.pop(ctx, 'delete'),
@@ -363,6 +368,14 @@ class _BookListView extends ConsumerWidget {
     if (!context.mounted) return;
     if (action == 'move') {
       await _moveBookToGroup(context, ref, book);
+    } else if (action == 'edit') {
+      final bookId = book['id'] as String?;
+      if (bookId != null && bookId.isNotEmpty) {
+        context.push(
+          Uri(path: '/book-info-edit', queryParameters: {'bookId': bookId})
+              .toString(),
+        );
+      }
     } else if (action == 'delete') {
       await _deleteBook(context, ref, book);
     }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../features/bookshelf/bookshelf_page.dart';
+import '../features/bookshelf/book_info_edit_page.dart';
 import '../features/reader/reader_page.dart';
 import '../features/search/search_page.dart';
 import '../features/settings/settings_page.dart';
@@ -69,6 +70,15 @@ final router = GoRouter(
     GoRoute(
       path: '/replace-rules',
       builder: (context, state) => const ReplaceRulePage(),
+    ),
+    // 批次 9 (05-19): 书信息编辑页。bookId 通过 query param 传入；页面内
+    // 用 [bookByIdProvider] 拉完整 book Map 初始化 5 个 TextField。
+    GoRoute(
+      path: '/book-info-edit',
+      builder: (context, state) {
+        final bookId = state.uri.queryParameters['bookId'] ?? '';
+        return BookInfoEditPage(bookId: bookId);
+      },
     ),
   ],
 );

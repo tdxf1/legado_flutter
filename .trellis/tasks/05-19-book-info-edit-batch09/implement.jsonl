@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/05-19-book-info-edit-batch09/prd.md", "reason": "本任务 PRD"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 save_book / allBooksProvider / 已有 file_picker / GoRouter 注册风格"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Flutter UI ↔ Rust save_book ↔ DB 数据流"}
+{"file": "flutter_app/lib/features/bookshelf/bookshelf_page.dart", "reason": "长按 sheet 入口加项；批次 7/8 现状参考"}
+{"file": "flutter_app/lib/core/providers.dart", "reason": "allBooksProvider / booksByGroupProvider 复用"}
+{"file": "core/bridge/src/api.rs", "reason": "save_book 已存在，无需改，仅参考契约"}
+{"file": "core/core-storage/src/models.rs", "reason": "Book 字段顺序（构造 JSON 时对齐）"}
