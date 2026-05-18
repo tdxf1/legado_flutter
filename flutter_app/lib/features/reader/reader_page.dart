@@ -501,17 +501,17 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       _currentIndex = index;
     });
     try {
-      final dbPath = await ref.read(dbPathProvider.future);
       final content = await _loadChapterContent(index, chapters);
       if (!mounted || requestId != _chapterRequestId) return;
-      await rust_api.saveReadingProgress(
-        dbPath: dbPath,
-        bookId: widget.bookId,
-        chapterIndex: index,
-        paragraphIndex: 0,
-        offset: 0,
-      );
-      if (!mounted || requestId != _chapterRequestId) return;
+      // T1 (05-18) 修复：删除原来此处的 rust_api.saveReadingProgress(offset:0)
+      // 强写。该写入会**覆盖** _restoreProgress 刚 load 出来的 saved offset，
+      // 让 _consumeRestoreCharOffsetIfNeeded 内存里 jumpToPage 到正确页之前
+      // DB 已经被回写成 offset=0；如果 jumpToPage 后的 _onPageChanged save
+      // 没成功跑（用户立刻 kill / listener 顺序异常），重开就只能恢复到章首页。
+      // 进度保存改为完全由 _onPageChanged → _saveCurrentPagePosition 驱动：
+      // 用户首次翻页 / jumpToPage 触发的 page changed listener 会自然写入。
+      // 首次开书未翻页就退出 → DB 无记录，下次仍走 widget.chapterIndex fallback，
+      // 行为等价。
       final title = index < chapters.length
           ? (chapters[index]['title'] as String? ?? '')
           : '';
@@ -1802,14 +1802,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       final content = await _loadChapterContent(targetIndex, chapters);
       if (!mounted) return;
       final title = chapters[targetIndex]['title'] as String? ?? '';
-      final dbPath = await ref.read(dbPathProvider.future);
-      await rust_api.saveReadingProgress(
-        dbPath: dbPath,
-        bookId: widget.bookId,
-        chapterIndex: targetIndex,
-        paragraphIndex: 0,
-        offset: 0,
-      );
+      // T1 (05-18) 修复：同 _openChapter — 删除强写 offset=0，进度保存交给
+      // _onPageChanged → _saveCurrentPagePosition 统一路径（loadChapter +
+      // jumpToLast 完成后会触发 listener 写入实际 page.startCharOffset）。
       setState(() {
         _chapterContent = content;
         _isLoadingContent = false;
@@ -1836,7 +1831,17 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   /// T1 (05-18): 章内翻页保存 — 把当前页 [TextPage.startCharOffset] 当成
   /// `durChapterPos` 写库。fire-and-forget；DB IO 在 Rust 端 spawn_blocking
   /// 跑。失败仅 debugPrint，不阻塞 UI。
+  ///
+  /// 保护窗口：当 [_restoreCharOffset] 仍未被消费时（首章 loadChapter 完成
+  /// 但 postFrameCallback 还没跑到 jumpToPage 的中间帧），此时
+  /// `controller.currentPageIndex == 0` / `currentPage.startCharOffset == 0`，
+  /// 如果保存就把 saved offset 覆盖成 0；让 [_consumeRestoreCharOffsetIfNeeded]
+  /// 之后的 jumpToPage 触发的 listener 来做第一次正确保存。
   void _saveCurrentPagePosition() {
+    if (_restoreCharOffset != null) {
+      // 启动恢复链路尚未完成；跳过本次保存避免覆盖 saved offset
+      return;
+    }
     final ctrl = _pageViewController;
     if (ctrl == null) return;
     final page = ctrl.currentPage;
