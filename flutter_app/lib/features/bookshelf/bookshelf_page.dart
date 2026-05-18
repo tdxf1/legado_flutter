@@ -96,6 +96,9 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                     context: context,
                     builder: (_) => const GroupManageDialog(),
                   );
+                } else if (value == 'backup') {
+                  // 批次 10 (05-19): 备份/恢复页。
+                  if (context.mounted) context.push('/backup');
                 }
               },
               itemBuilder: (context) => const [
@@ -104,6 +107,14 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                   child: ListTile(
                     leading: Icon(Icons.folder_outlined),
                     title: Text('管理分组'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'backup',
+                  child: ListTile(
+                    leading: Icon(Icons.settings_backup_restore),
+                    title: Text('备份/恢复'),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),

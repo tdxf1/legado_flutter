@@ -1,0 +1,9 @@
+{"file": ".trellis/tasks/05-19-local-backup-restore-batch10/prd.md", "reason": "本任务 PRD"}
+{"file": ".trellis/tasks/05-19-local-backup-restore-batch10/research/legado-backup-format.md", "reason": "原 Legado 格式调研（zip 内文件清单 + 字段映射 + 时间戳/bitmask 转换暗坑）"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 BookDao.upsert / SourceDao.upsert / 现有 archive 包风格"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Flutter UI ↔ Rust DAO ↔ zip 文件 ↔ 原 Legado 格式 4 层数据流"}
+{"file": "core/core-storage/src/book_dao.rs", "reason": "导入时 upsert 入口 + BOOK_COLUMNS 字段顺序参考"}
+{"file": "core/core-storage/src/source_dao.rs", "reason": "import_from_json + url-to-id 查找参考"}
+{"file": "core/bridge/src/api.rs", "reason": "新增 4 个 backup API 入口；批次 7/8 的添加风格参考"}
+{"file": "core/core-storage/src/models.rs", "reason": "Book / BookGroup / Bookmark / ReplaceRule / BookSource 字段顺序基准"}
+{"file": "core/core-storage/Cargo.toml", "reason": "加 zip 依赖"}

@@ -54,6 +54,12 @@ const REQUIRED_WIRE_FN_FRAGMENTS: &[&str] = &[
     "wire__crate__api__explore_impl",
     // funcId 57 — apply_replace_rules (P1-7)
     "wire__crate__api__apply_replace_rules_impl",
+    // 批次 10 — funcId 63 — export_backup_zip
+    "wire__crate__api__export_backup_zip_impl",
+    // 批次 10 — funcId 64 — import_backup_zip
+    "wire__crate__api__import_backup_zip_impl",
+    // 批次 10 — funcId 65 — validate_backup_zip
+    "wire__crate__api__validate_backup_zip_impl",
 ];
 
 const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
@@ -76,6 +82,10 @@ const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
     "        55 =>",
     "        56 =>",
     "        57 =>",
+    // 批次 10 (本地备份/恢复) 手动 dispatch 注册
+    "        63 =>",
+    "        64 =>",
+    "        65 =>",
 ];
 
 /// R3: the dispatcher default arms must surface the unknown funcId
@@ -136,7 +146,7 @@ fn main() {
             "frb_generated.rs is missing {} hand-edited wire/dispatch fragment(s). \
              A `flutter_rust_bridge_codegen generate` run probably overwrote the manual \
              patches. This guard only covers the funcIds we know were hand-edited \
-             (currently 42-52 plus 54-57; 53 is intentionally a hole, do not re-introduce), \
+             (currently 42-52 plus 54-57 plus 63-65; 53 is intentionally a hole, do not re-introduce), \
              plus the R3 informative panic in the dispatcher default arms. \
              funcIds outside that range are produced by codegen and are NOT checked here, \
              so a regression in those needs separate attention. See CURRENT_STATUS.md \

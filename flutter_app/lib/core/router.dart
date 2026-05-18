@@ -5,6 +5,7 @@ import '../features/bookshelf/bookshelf_page.dart';
 import '../features/bookshelf/book_info_edit_page.dart';
 import '../features/reader/reader_page.dart';
 import '../features/search/search_page.dart';
+import '../features/settings/backup_page.dart';
 import '../features/settings/settings_page.dart';
 import '../features/source/source_page.dart';
 import '../features/download/download_page.dart';
@@ -79,6 +80,11 @@ final router = GoRouter(
         final bookId = state.uri.queryParameters['bookId'] ?? '';
         return BookInfoEditPage(bookId: bookId);
       },
+    ),
+    // 批次 10 (05-19): 本地备份/恢复页。导出 zip / 选 zip 导入。
+    GoRoute(
+      path: '/backup',
+      builder: (context, state) => const BackupPage(),
     ),
   ],
 );

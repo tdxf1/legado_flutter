@@ -1220,6 +1220,32 @@ static REPLACE_RULES_CACHE: std::sync::LazyLock<std::sync::Mutex<ReplaceRulesCac
     std::sync::LazyLock::new(|| std::sync::Mutex::new(ReplaceRulesCache::new()));
 
 // ============================================================
+// 本地备份 / 恢复 (批次 10)
+// ============================================================
+
+/// 把当前 DB 5 张表（books / book_groups / bookmarks / replace_rules /
+/// book_sources）导出成 Legado 兼容的 zip 备份。文件名由 caller 指定。
+pub fn export_backup_zip(db_path: String, out_zip_path: String) -> Result<(), String> {
+    let conn = open_db(&db_path)?;
+    core_storage::backup_dao::export_to_zip(&conn, &out_zip_path)
+}
+
+/// 解压 zip → 字段映射 → upsert 入库。返回 `ImportSummary` 的 JSON 字符串
+/// （`{books, groups, bookmarks, replace_rules, sources, errors}`）。
+pub fn import_backup_zip(db_path: String, zip_path: String) -> Result<String, String> {
+    let mut conn = open_db(&db_path)?;
+    let summary = core_storage::backup_dao::import_from_zip(&mut conn, &zip_path)?;
+    serde_json::to_string(&summary).map_err(|e| format!("序列化 ImportSummary 失败: {}", e))
+}
+
+/// 列 zip 内**已识别**的 Legado 备份文件名（不解析内容，dry-run 用）。
+/// 返回 JSON 字符串数组。
+pub fn validate_backup_zip(zip_path: String) -> Result<String, String> {
+    let names = core_storage::backup_dao::validate_zip(&zip_path)?;
+    serde_json::to_string(&names).map_err(|e| format!("序列化失败: {}", e))
+}
+
+// ============================================================
 // 内部辅助函数
 // ============================================================
 

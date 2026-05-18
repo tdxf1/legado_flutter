@@ -462,3 +462,26 @@ Future<String> applyReplaceRules(
         bookName: bookName,
         bookOrigin: bookOrigin,
         applyToTitle: applyToTitle);
+
+// ============================================================
+// 本地备份 / 恢复（批次 10）
+// ============================================================
+
+/// 把当前 DB 5 张表（books / book_groups / bookmarks / replace_rules /
+/// book_sources）导出成 Legado 兼容的 zip 备份。
+Future<void> exportBackupZip(
+        {required String dbPath, required String outZipPath}) =>
+    RustLib.instance.api
+        .crateApiExportBackupZip(dbPath: dbPath, outZipPath: outZipPath);
+
+/// 解压 zip → 字段映射 → upsert 入库。返回 `ImportSummary` 的 JSON 字符串
+/// （`{books, groups, bookmarks, replace_rules, sources, errors}`）。
+Future<String> importBackupZip(
+        {required String dbPath, required String zipPath}) =>
+    RustLib.instance.api
+        .crateApiImportBackupZip(dbPath: dbPath, zipPath: zipPath);
+
+/// 列 zip 内**已识别**的 Legado 备份文件名（不解析内容，dry-run 用）。
+/// 返回 JSON 字符串数组。
+Future<String> validateBackupZip({required String zipPath}) =>
+    RustLib.instance.api.crateApiValidateBackupZip(zipPath: zipPath);

@@ -1,0 +1,3 @@
+{"file": ".trellis/tasks/05-19-local-backup-restore-batch10/prd.md", "reason": "AC 对照基准"}
+{"file": ".trellis/tasks/05-19-local-backup-restore-batch10/research/legado-backup-format.md", "reason": "字段映射准确性校验"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "校验 Rust ↔ Flutter ↔ zip 数据流"}

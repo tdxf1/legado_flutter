@@ -3,6 +3,12 @@ core/target/
 *.so
 sy/
 
+# 批次 APK 构建产物：占用磁盘大（每个 ~144MB），不入版本库
+# 用户在本地按需 build，不上传仓库
+dist/
+flutter_app/build/
+flutter_app/.dart_tool/
+
 # Trellis: per-developer workspace (journals, session traces)
 .trellis/workspace/
 

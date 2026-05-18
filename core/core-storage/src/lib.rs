@@ -3,12 +3,14 @@
 //! 负责所有数据持久化操作，对应原Legado的`data/entities/`和`help/storage/`。
 //! 使用SQLite + rusqlite实现轻量级本地数据库，chrono处理时间相关字段。
 
+pub mod backup_dao;
 pub mod book_dao;
 pub mod book_group_dao;
 pub mod cache_dao;
 pub mod chapter_dao;
 pub mod database;
 pub mod download_dao;
+pub mod legado_field_map;
 pub mod models;
 pub mod progress_dao;
 pub mod replace_rule_dao;

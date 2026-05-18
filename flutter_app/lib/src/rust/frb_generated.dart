@@ -307,6 +307,15 @@ abstract class RustLibApi extends BaseApi {
       {required String dbPath, required String sourceId});
 
   Future<String> crateApiValidateSourceRules({required String sourceJson});
+
+  // 批次 10 — 本地备份/恢复
+  Future<void> crateApiExportBackupZip(
+      {required String dbPath, required String outZipPath});
+
+  Future<String> crateApiImportBackupZip(
+      {required String dbPath, required String zipPath});
+
+  Future<String> crateApiValidateBackupZip({required String zipPath});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -2068,6 +2077,86 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(
         debugName: "validate_source_rules",
         argNames: ["sourceJson"],
+      );
+
+  // ============================================================
+  // 批次 10 — 本地备份/恢复 wire fn 实现
+  // ============================================================
+
+  @override
+  Future<void> crateApiExportBackupZip(
+      {required String dbPath, required String outZipPath}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(outZipPath, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 63, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiExportBackupZipConstMeta,
+      argValues: [dbPath, outZipPath],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiExportBackupZipConstMeta => const TaskConstMeta(
+        debugName: "export_backup_zip",
+        argNames: ["dbPath", "outZipPath"],
+      );
+
+  @override
+  Future<String> crateApiImportBackupZip(
+      {required String dbPath, required String zipPath}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(zipPath, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 64, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiImportBackupZipConstMeta,
+      argValues: [dbPath, zipPath],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiImportBackupZipConstMeta => const TaskConstMeta(
+        debugName: "import_backup_zip",
+        argNames: ["dbPath", "zipPath"],
+      );
+
+  @override
+  Future<String> crateApiValidateBackupZip({required String zipPath}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(zipPath, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 65, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiValidateBackupZipConstMeta,
+      argValues: [zipPath],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiValidateBackupZipConstMeta => const TaskConstMeta(
+        debugName: "validate_backup_zip",
+        argNames: ["zipPath"],
       );
 
   @protected

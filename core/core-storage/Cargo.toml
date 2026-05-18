@@ -15,6 +15,8 @@ tracing = "0.1"
 thiserror = "1.0"
 # 时间处理
 chrono = "0.4"
+# 备份 zip 打包/解析（批次 10）。仅需 deflate（不需要 aes/bzip2/lzma 等），关闭默认 features 减小体积。
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3"
