@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:screen_brightness/screen_brightness.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../core/api/dto.dart';
 import '../../core/download_runner.dart';
@@ -210,6 +212,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         setState(() {
           _readerSettingsLoaded = true;
         });
+        // 批次 1 (05-18): 即使磁盘读失败也要应用默认硬件设置（默认开常亮）。
+        _applyHardwareSettings(_settings);
       }
     });
     _loadBookmarks();
@@ -240,6 +244,20 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
 
   @override
   void dispose() {
+    // 批次 1 (05-18): 关键 — reader 退出必复位 wakelock + 应用级亮度，
+    // 避免回到书架后系统仍保持常亮 / 亮度被 reader 设置污染。两个 plugin
+    // 调用都包 try-catch：plugin 在 desktop / 单测环境可能不可用，但不应
+    // 让正常的 super.dispose() 资源释放被打断。
+    try {
+      WakelockPlus.disable();
+    } catch (e) {
+      debugPrint('[Reader] dispose wakelock disable failed: $e');
+    }
+    try {
+      ScreenBrightness().resetApplicationScreenBrightness();
+    } catch (e) {
+      debugPrint('[Reader] dispose reset screen brightness failed: $e');
+    }
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _scrollDebounceTimer?.cancel();
@@ -258,6 +276,41 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       }
     }
     super.dispose();
+  }
+
+  /// 批次 1 (05-18): 把 [ReaderSettings.screenBrightness] /
+  /// [ReaderSettings.keepScreenOn] 同步到原生 plugin。
+  ///
+  /// - `keepScreenOn`：true → [WakelockPlus.enable]，false → disable。
+  /// - `screenBrightness`：>= 0 → [ScreenBrightness.setApplicationScreenBrightness]
+  ///   （应用级亮度，仅在前台时影响显示，退出 reader 由 [dispose] 调
+  ///   [ScreenBrightness.resetApplicationScreenBrightness] 复位）；
+  ///   < 0（哨兵值 -1.0）→ 主动 reset，让系统亮度接管。
+  ///
+  /// 整个方法包 try-catch：在 Linux / 单测环境 plugin 没有 native impl，
+  /// 调用会抛 [MissingPluginException]，但 reader 不应因此崩溃。
+  Future<void> _applyHardwareSettings(ReaderSettings s) async {
+    try {
+      if (s.keepScreenOn) {
+        await WakelockPlus.enable();
+      } else {
+        await WakelockPlus.disable();
+      }
+    } catch (e) {
+      debugPrint('[Reader] wakelock toggle failed: $e');
+    }
+    try {
+      if (s.screenBrightness >= 0) {
+        // 钳到 [0, 1]：UI Slider 给的是 0..100 整数除 100，已经在范围内；
+        // 多一道防御避免错误持久化把异常值推到 plugin 引发 RangeError。
+        final v = s.screenBrightness.clamp(0.0, 1.0);
+        await ScreenBrightness().setApplicationScreenBrightness(v);
+      } else {
+        await ScreenBrightness().resetApplicationScreenBrightness();
+      }
+    } catch (e) {
+      debugPrint('[Reader] screen brightness apply failed: $e');
+    }
   }
 
   @override
@@ -603,6 +656,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       {bool persist = false, bool markLoaded = false}) {
     final wasScroll = _settings.isScrollMode;
     final isNowScroll = settings.isScrollMode;
+    // 批次 1 (05-18): 比对硬件相关字段的旧/新值，只有变化时（或首次
+    // markLoaded 灌盘上设置时）才调 plugin，避免每次字号微调都重复 enable
+    // wakelock。
+    final hardwareChanged =
+        _settings.screenBrightness != settings.screenBrightness ||
+            _settings.keepScreenOn != settings.keepScreenOn;
     setState(() {
       if (markLoaded) {
         _readerSettingsLoaded = true;
@@ -630,6 +689,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     }
     if (persist) {
       saveReaderSettingsToDisk(settings);
+    }
+    // 批次 1 (05-18): markLoaded 时一定要 apply（即便与 default 相同——
+    // 用户期望默认进 reader 即开常亮）；后续 setting 变化只在硬件字段
+    // 变化时 apply。
+    if (hardwareChanged || markLoaded) {
+      _applyHardwareSettings(settings);
     }
   }
 

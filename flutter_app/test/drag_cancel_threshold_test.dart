@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:legado_flutter/core/providers.dart';
 import 'package:legado_flutter/features/reader/page/delegate/no_anim_page_delegate.dart';
-import 'package:legado_flutter/features/reader/page/delegate/page_delegate.dart';
 import 'package:legado_flutter/features/reader/page/page_view_controller.dart';
 
 /// T4 (05-18) — drag 拖拽回滚阈值（last-frame 微动方向）回归测试。

@@ -263,6 +263,51 @@ class _ReaderSettingsSheetState extends State<ReaderSettingsSheet> {
                 onChanged: (v) =>
                     _update(_s.copyWith(pageAnimDurationMs: v.round())),
               ),
+              const SizedBox(height: 12),
+              // 批次 1 (05-18): 屏幕亮度 + 屏幕常亮。亮度 -1.0 = 跟随系统
+              // （不主动调节）；勾选"跟随系统"时把值还原到 -1.0；不勾选
+              // 时显示 0..100 滑杆，对应 0.0..1.0 给 ScreenBrightness。
+              Text('屏幕', style: label),
+              const SizedBox(height: 4),
+              SwitchListTile(
+                title: Text('跟随系统亮度', style: label),
+                value: _s.screenBrightness < 0,
+                dense: true,
+                onChanged: (v) {
+                  if (v) {
+                    _update(_s.copyWith(screenBrightness: -1.0));
+                  } else {
+                    // 取消跟随系统时给一个合理的默认值（70%），避免刚关掉
+                    // 就跳到 0% 整个屏幕全黑。
+                    _update(_s.copyWith(screenBrightness: 0.7));
+                  }
+                },
+              ),
+              if (_s.screenBrightness >= 0) ...[
+                Text(
+                  '屏幕亮度: ${(_s.screenBrightness * 100).round()}%',
+                  style: label,
+                ),
+                Slider(
+                  value: (_s.screenBrightness * 100).clamp(0.0, 100.0),
+                  min: 0,
+                  max: 100,
+                  divisions: 100,
+                  label: '${(_s.screenBrightness * 100).round()}%',
+                  onChanged: (v) =>
+                      _update(_s.copyWith(screenBrightness: v / 100.0)),
+                ),
+              ],
+              SwitchListTile(
+                title: Text('屏幕常亮', style: label),
+                subtitle: Text(
+                  '阅读时不熄屏（退出阅读器恢复系统超时）',
+                  style: TextStyle(color: fg.withValues(alpha: 0.6), fontSize: 12),
+                ),
+                value: _s.keepScreenOn,
+                dense: true,
+                onChanged: (v) => _update(_s.copyWith(keepScreenOn: v)),
+              ),
             ]),
       ),
     );

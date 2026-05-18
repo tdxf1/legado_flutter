@@ -548,8 +548,10 @@ int overlayPageModeOnAnim({
 /// - 2：pageAnim Legado MD3 (0=cover...5=noAnim) + PageMode 仍含 tapChapter
 /// - 3：删除 PageAnim.scroll，删除 PageMode.tapChapter（PageMode 仍存在）
 /// - 4：合并 PageMode 进 PageAnim（scroll = 原 continuousScroll）
-/// - 5：新增 `pageAnimDurationMs`（int，默认 300）—— 翻页动画时长可配（当前版本）
-const int kReaderSettingsCurrentVersion = 5;
+/// - 5：新增 `pageAnimDurationMs`（int，默认 300）—— 翻页动画时长可配
+/// - 6：新增 `screenBrightness`（double，-1.0 = 跟随系统）+ `keepScreenOn`
+///   （bool，默认 true）—— 屏幕亮度调节 + 屏幕常亮（当前版本）。
+const int kReaderSettingsCurrentVersion = 6;
 
 class ReaderSettings {
   final double fontSize;
@@ -580,6 +582,23 @@ class ReaderSettings {
   /// 默认 300ms（对齐 Legado MD3 原版体感），UI Slider 提供 200..1000ms 范围。
   final int pageAnimDurationMs;
 
+  /// 批次 1 (05-18): 屏幕亮度 0.0..1.0；-1.0 表示"跟随系统"（不主动调节）。
+  ///
+  /// 进 reader 时由 [_ReaderPageState._applyHardwareSettings] 同步给
+  /// [ScreenBrightness.setApplicationScreenBrightness]；退出 reader（dispose）
+  /// 时调用 [ScreenBrightness.resetApplicationScreenBrightness] 复位，避免
+  /// reader 设置的亮度污染书架等其它页面（应用级亮度，不影响系统亮度本身）。
+  ///
+  /// 用 `-1.0` 哨兵值代替 nullable，简化 JSON 序列化路径。
+  final double screenBrightness;
+
+  /// 批次 1 (05-18): 进 reader 时是否启用 [WakelockPlus] 防止系统超时锁屏。
+  ///
+  /// 默认 true，对齐原 Legado `BaseReadBookActivity.keepScreenOn` 默认行为
+  /// （阅读时主流期望）。dispose 时一定调 [WakelockPlus.disable]。
+
+  final bool keepScreenOn;
+
   const ReaderSettings({
     this.fontSize = 18.0,
     this.fontWeightIndex = 1,
@@ -603,6 +622,8 @@ class ReaderSettings {
     this.showProgress = true,
     this.ttsSpeed = 0.5,
     this.pageAnimDurationMs = 300,
+    this.screenBrightness = -1.0,
+    this.keepScreenOn = true,
   });
 
   static const List<int> fontWeightValues = [400, 700, 900];
@@ -664,6 +685,8 @@ class ReaderSettings {
     bool? showProgress,
     double? ttsSpeed,
     int? pageAnimDurationMs,
+    double? screenBrightness,
+    bool? keepScreenOn,
   }) {
     return ReaderSettings(
       fontSize: fontSize ?? this.fontSize,
@@ -688,6 +711,8 @@ class ReaderSettings {
       showProgress: showProgress ?? this.showProgress,
       ttsSpeed: ttsSpeed ?? this.ttsSpeed,
       pageAnimDurationMs: pageAnimDurationMs ?? this.pageAnimDurationMs,
+      screenBrightness: screenBrightness ?? this.screenBrightness,
+      keepScreenOn: keepScreenOn ?? this.keepScreenOn,
     );
   }
 
@@ -720,6 +745,8 @@ class ReaderSettings {
         'showProgress': showProgress,
         'ttsSpeed': ttsSpeed,
         'pageAnimDurationMs': pageAnimDurationMs,
+        'screenBrightness': screenBrightness,
+        'keepScreenOn': keepScreenOn,
       };
 
   factory ReaderSettings.fromJson(Map<String, dynamic> json) {
@@ -774,6 +801,10 @@ class ReaderSettings {
       ttsSpeed: (json['ttsSpeed'] as num?)?.toDouble() ?? 0.5,
       // v5 新字段；v ≤ 4 旧 JSON 缺省 fallback 到 300ms（与默认值一致）。
       pageAnimDurationMs: (json['pageAnimDurationMs'] as int?) ?? 300,
+      // v6 新字段；v ≤ 5 旧 JSON 缺省时 fallback 到默认值（-1.0 = 跟随系统 / true）。
+      screenBrightness:
+          (json['screenBrightness'] as num?)?.toDouble() ?? -1.0,
+      keepScreenOn: json['keepScreenOn'] as bool? ?? true,
     );
   }
 }

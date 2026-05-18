@@ -44,10 +44,12 @@ void main() {
   });
 
   group('ReaderSettings JSON 序列化 (R4.2 / R4.3 / R4.7)', () {
-    test('toJson 写入 pageAnimDurationMs + settingsVersion=5', () {
+    test('toJson 写入 pageAnimDurationMs + settingsVersion 是当前版本', () {
       const s = ReaderSettings(pageAnimDurationMs: 600);
       final j = s.toJson();
-      expect(j['settingsVersion'], 5);
+      // 批次 1 (05-18): kReaderSettingsCurrentVersion 升到 6 后，老 v5 测试
+      // 改为依赖常量值，避免今后每升一版都得回来改这里。
+      expect(j['settingsVersion'], kReaderSettingsCurrentVersion);
       expect(j['pageAnimDurationMs'], 600);
     });
 
@@ -78,8 +80,11 @@ void main() {
       }
     });
 
-    test('kReaderSettingsCurrentVersion == 5', () {
-      expect(kReaderSettingsCurrentVersion, 5);
+    test('kReaderSettingsCurrentVersion >= 5 (pageAnimDurationMs 引入版本 / 之后)', () {
+      // 批次 1 (05-18): v5 引入 pageAnimDurationMs；v6 继续递增。这里只断
+      // 言"≥ 5"避免与未来更高版本耦合。具体当前版本由 reader_settings_v6_test
+      // 单独验证。
+      expect(kReaderSettingsCurrentVersion, greaterThanOrEqualTo(5));
     });
   });
 

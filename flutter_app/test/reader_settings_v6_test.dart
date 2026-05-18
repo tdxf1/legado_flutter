@@ -1,0 +1,139 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:legado_flutter/core/providers.dart';
+
+/// 批次 1 (05-18) — `ReaderSettings` v6 schema 升级测试。
+///
+/// 覆盖：
+/// 1. 默认值（screenBrightness = -1.0 跟随系统；keepScreenOn = true）
+/// 2. 构造透传 / copyWith
+/// 3. toJson 写出含 settingsVersion=6 + 两新字段
+/// 4. round-trip toJson → fromJson 字段保持
+/// 5. 旧 v5 JSON 缺新字段时回退默认值（不破坏老用户）
+/// 6. 旧 v ≤ 4 JSON 也回退到默认值（兼容性）
+void main() {
+  group('ReaderSettings v6 — defaults', () {
+    test('默认 screenBrightness = -1.0（跟随系统）', () {
+      const s = ReaderSettings();
+      expect(s.screenBrightness, -1.0);
+    });
+
+    test('默认 keepScreenOn = true（对齐原 Legado 默认）', () {
+      const s = ReaderSettings();
+      expect(s.keepScreenOn, true);
+    });
+
+    test('显式构造可覆盖默认值', () {
+      const s = ReaderSettings(screenBrightness: 0.7, keepScreenOn: false);
+      expect(s.screenBrightness, 0.7);
+      expect(s.keepScreenOn, false);
+    });
+  });
+
+  group('ReaderSettings v6 — copyWith', () {
+    test('copyWith 单独修改 screenBrightness', () {
+      const base = ReaderSettings();
+      final s = base.copyWith(screenBrightness: 0.55);
+      expect(s.screenBrightness, 0.55);
+      // 其它字段未变。
+      expect(s.keepScreenOn, base.keepScreenOn);
+      expect(s.fontSize, base.fontSize);
+    });
+
+    test('copyWith 单独修改 keepScreenOn', () {
+      const base = ReaderSettings();
+      final s = base.copyWith(keepScreenOn: false);
+      expect(s.keepScreenOn, false);
+      expect(s.screenBrightness, base.screenBrightness);
+    });
+
+    test('copyWith 不传新字段时保持原值', () {
+      const base = ReaderSettings(screenBrightness: 0.3, keepScreenOn: false);
+      final s = base.copyWith(fontSize: 22);
+      expect(s.screenBrightness, 0.3);
+      expect(s.keepScreenOn, false);
+      expect(s.fontSize, 22);
+    });
+  });
+
+  group('ReaderSettings v6 — JSON 序列化', () {
+    test('settingsVersion 写出 == 6', () {
+      const s = ReaderSettings();
+      final j = s.toJson();
+      expect(j['settingsVersion'], 6);
+      expect(kReaderSettingsCurrentVersion, 6);
+    });
+
+    test('toJson 写入 screenBrightness + keepScreenOn', () {
+      const s = ReaderSettings(screenBrightness: 0.42, keepScreenOn: false);
+      final j = s.toJson();
+      expect(j['screenBrightness'], 0.42);
+      expect(j['keepScreenOn'], false);
+    });
+
+    test('round-trip：toJson → fromJson 字段值保持（含两新字段）', () {
+      const s = ReaderSettings(
+        screenBrightness: 0.7,
+        keepScreenOn: false,
+        pageAnimDurationMs: 450,
+      );
+      final s2 = ReaderSettings.fromJson(s.toJson());
+      expect(s2.screenBrightness, 0.7);
+      expect(s2.keepScreenOn, false);
+      expect(s2.pageAnimDurationMs, 450);
+    });
+
+    test('round-trip：默认值（-1.0 / true）也能保持', () {
+      const s = ReaderSettings();
+      final s2 = ReaderSettings.fromJson(s.toJson());
+      expect(s2.screenBrightness, -1.0);
+      expect(s2.keepScreenOn, true);
+    });
+
+    test('v5 旧 JSON 缺 screenBrightness / keepScreenOn → fallback 默认值', () {
+      // 模拟 v5 时期写入的 JSON：含 pageAnimDurationMs 但没有 v6 两个字段。
+      final s = ReaderSettings.fromJson({
+        'settingsVersion': 5,
+        'pageAnim': ReaderPageAnim.scroll,
+        'pageAnimDurationMs': 350,
+        'fontSize': 18.0,
+      });
+      expect(s.screenBrightness, -1.0,
+          reason: 'v5 旧 JSON 缺 screenBrightness 应 fallback 到 -1.0');
+      expect(s.keepScreenOn, true,
+          reason: 'v5 旧 JSON 缺 keepScreenOn 应 fallback 到 true');
+      // v5 已有的字段保持。
+      expect(s.pageAnimDurationMs, 350);
+    });
+
+    test('v ≤ 4 旧 JSON 也回退到默认值', () {
+      for (final v in [1, 2, 3, 4]) {
+        final s = ReaderSettings.fromJson({
+          'settingsVersion': v,
+          'pageAnim': 0,
+        });
+        expect(s.screenBrightness, -1.0,
+            reason: 'v$v 旧 JSON 应 fallback 到 -1.0');
+        expect(s.keepScreenOn, true,
+            reason: 'v$v 旧 JSON 应 fallback 到 true');
+      }
+    });
+
+    test('JSON 中 screenBrightness 为 num（int / double）都能还原', () {
+      // 防御性测试：JSON 数字解析得到的可能是 int（例如 0 或 1）。
+      final s1 = ReaderSettings.fromJson({
+        'settingsVersion': 6,
+        'screenBrightness': 1, // int
+        'keepScreenOn': true,
+      });
+      expect(s1.screenBrightness, 1.0);
+
+      final s2 = ReaderSettings.fromJson({
+        'settingsVersion': 6,
+        'screenBrightness': 0.5, // double
+        'keepScreenOn': false,
+      });
+      expect(s2.screenBrightness, 0.5);
+      expect(s2.keepScreenOn, false);
+    });
+  });
+}
