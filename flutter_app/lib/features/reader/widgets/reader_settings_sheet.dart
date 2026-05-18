@@ -400,6 +400,24 @@ class _ReaderSettingsSheetState extends State<ReaderSettingsSheet> {
                 onChanged: (v) => _update(
                     _s.copyWith(autoPageIntervalSeconds: v.round())),
               ),
+              const SizedBox(height: 16),
+              // 批次 5 (05-18): 长按文字菜单开关。MVP 整页粒度，
+              // 提供复制 / 分享 / 朗读三个动作。
+              Text('长按菜单', style: label),
+              const SizedBox(height: 4),
+              SwitchListTile(
+                title: Text('启用长按菜单', style: label),
+                subtitle: Text(
+                  '长按阅读区弹复制 / 分享 / 朗读，关闭后避免长按误触',
+                  style: TextStyle(
+                      color: fg.withValues(alpha: 0.6), fontSize: 12),
+                ),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                value: _s.enableLongPressMenu,
+                onChanged: (v) =>
+                    _update(_s.copyWith(enableLongPressMenu: v)),
+              ),
             ]),
       ),
     );

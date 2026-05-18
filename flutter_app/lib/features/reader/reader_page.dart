@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:screen_brightness/screen_brightness.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../core/api/dto.dart';
@@ -24,12 +25,14 @@ import 'services/reader_progress_service.dart';
 import 'services/reader_bookmark_service.dart';
 import 'services/reader_key_handler.dart';
 import 'services/tap_zone_resolver.dart';
+import 'services/long_press_action_handler.dart';
 import 'state/reader_search_controller.dart' as rsc;
 import 'widgets/reader_settings_sheet.dart';
 import 'widgets/reader_search_bar.dart';
 import 'widgets/reader_tts_bar.dart';
 import 'widgets/reader_top_bar.dart';
 import 'widgets/reader_bottom_bar.dart';
+import 'widgets/long_press_action_sheet.dart';
 
 class _LoadedChapter {
   final int index;
@@ -1845,6 +1848,15 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                               break;
                           }
                         },
+                        // 批次 5 (05-18): 长按文字菜单 MVP — 整页粒度
+                        // （不动 ContentPagePainter Canvas 渲染，避免破坏
+                        // simulation 翻页 ui.Picture 预渲染）。控件可见时
+                        // 不响应避免与设置 sheet 冲突。
+                        onLongPressStart: (details) {
+                          if (!_settings.enableLongPressMenu) return;
+                          if (_controlsVisible) return;
+                          _showLongPressActionSheet();
+                        },
                         child: NotificationListener<OverscrollNotification>(
                           onNotification:
                               isContinuous ? (_) => true : _onOverscroll,
@@ -2455,6 +2467,50 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   /// （onPageTick 触发翻页）。
   void _toggleAutoScroll() =>
       _autoScroller.toggle(scroll: _settings.isScrollMode);
+
+  /// 批次 5 (05-18): 长按文字菜单 MVP — 弹底部 sheet 让用户选复制 /
+  /// 分享 / 朗读。整页粒度，不做字符级选区（避免破坏 ContentPagePainter
+  /// 的 ui.Picture 仿真翻页预渲染机制）。
+  Future<void> _showLongPressActionSheet() async {
+    final pageText = getCurrentPageText(_pageViewController, _settings);
+    if (pageText.isEmpty) return;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (_) => LongPressActionSheet(pageText: pageText),
+    );
+    if (action == null || !mounted) return;
+    switch (action) {
+      case 'copy':
+        await Clipboard.setData(ClipboardData(text: pageText));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('已复制当前页'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+        break;
+      case 'share':
+        try {
+          await SharePlus.instance.share(
+            ShareParams(
+              text: pageText,
+              subject: _bookName.isNotEmpty ? _bookName : '阅读分享',
+            ),
+          );
+        } catch (e) {
+          debugPrint('[Reader] SharePlus.share failed: $e');
+        }
+        break;
+      case 'aloud':
+        // 复用现有 TTS 链路：把当前页设为朗读内容，然后 start。
+        // 这与从顶部菜单点"朗读"的路径一致。
+        _tts.setChapterContent(pageText);
+        await _tts.start();
+        break;
+    }
+  }
 
   // TTS API kept as thin wrappers around [_tts] so existing UI builders
   // continue to work without churn. The actual logic lives in

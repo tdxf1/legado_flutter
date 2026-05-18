@@ -648,6 +648,11 @@ class ReaderSettings {
   /// 实际间隔 = autoPageIntervalSeconds × 1000ms 传给 ReaderAutoScroller.pageIntervalMs。
   final int autoPageIntervalSeconds;
 
+  /// 批次 5 (05-18): 启用长按文字菜单。默认 true。长按 reader 弹底部 sheet
+  /// 提供复制 / 分享 / 朗读三个动作（整页粒度，MVP 阶段不做字符级选区）。
+  /// 用户可关闭以避免长按误触。
+  final bool enableLongPressMenu;
+
   const ReaderSettings({
     this.fontSize = 18.0,
     this.fontWeightIndex = 1,
@@ -678,6 +683,7 @@ class ReaderSettings {
     this.tapZones = tapZonesDefault,
     this.autoScrollSpeed = 1,
     this.autoPageIntervalSeconds = 10,
+    this.enableLongPressMenu = true,
   });
 
   static const List<int> fontWeightValues = [400, 700, 900];
@@ -746,6 +752,7 @@ class ReaderSettings {
     List<int>? tapZones,
     int? autoScrollSpeed,
     int? autoPageIntervalSeconds,
+    bool? enableLongPressMenu,
   }) {
     return ReaderSettings(
       fontSize: fontSize ?? this.fontSize,
@@ -778,6 +785,7 @@ class ReaderSettings {
       autoScrollSpeed: autoScrollSpeed ?? this.autoScrollSpeed,
       autoPageIntervalSeconds:
           autoPageIntervalSeconds ?? this.autoPageIntervalSeconds,
+      enableLongPressMenu: enableLongPressMenu ?? this.enableLongPressMenu,
     );
   }
 
@@ -817,6 +825,7 @@ class ReaderSettings {
         'tapZones': tapZones,
         'autoScrollSpeed': autoScrollSpeed,
         'autoPageIntervalSeconds': autoPageIntervalSeconds,
+        'enableLongPressMenu': enableLongPressMenu,
       };
 
   factory ReaderSettings.fromJson(Map<String, dynamic> json) {
@@ -889,6 +898,8 @@ class ReaderSettings {
       autoPageIntervalSeconds:
           ((json['autoPageIntervalSeconds'] as num?)?.toInt() ?? 10)
               .clamp(1, 30),
+      // 批次 5 (05-18): 长按文字菜单开关。缺字段 fallback true（默认开启）。
+      enableLongPressMenu: json['enableLongPressMenu'] as bool? ?? true,
     );
   }
 }

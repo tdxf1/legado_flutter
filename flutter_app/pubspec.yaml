@@ -37,6 +37,10 @@ dependencies:
   file_picker: ^11.0.2
   flutter_tts: ^4.2.2
 
+  # 系统分享 - share_plus 调用 Android/iOS 原生 share intent，
+  # 用于长按菜单的"分享当前页"动作（批次 5）
+  share_plus: ^11.1.0
+
   # 高刷模式 - 在支持 120Hz 屏的安卓机型上启用高刷新率，仿真翻页等动画更跟手
   flutter_displaymode: ^0.6.0
 

@@ -385,4 +385,30 @@ void main() {
           reason: 'interval 999 clamp 到 30');
     });
   });
+
+  // 批次 5 (05-18): enableLongPressMenu
+  group('ReaderSettings — 批次 5 长按菜单字段', () {
+    test('默认值: enableLongPressMenu = true', () {
+      const s = ReaderSettings();
+      expect(s.enableLongPressMenu, true);
+    });
+
+    test('copyWith 修改字段', () {
+      const a = ReaderSettings();
+      final b = a.copyWith(enableLongPressMenu: false);
+      expect(b.enableLongPressMenu, false);
+      expect(a.enableLongPressMenu, true, reason: '原对象不变');
+    });
+
+    test('toJson / fromJson round-trip', () {
+      const s = ReaderSettings(enableLongPressMenu: false);
+      final r = ReaderSettings.fromJson(s.toJson());
+      expect(r.enableLongPressMenu, false);
+    });
+
+    test('fromJson 缺字段 fallback true', () {
+      final s = ReaderSettings.fromJson({'settingsVersion': 6});
+      expect(s.enableLongPressMenu, true);
+    });
+  });
 }
