@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Quality gate"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse existing _preloadAdjacentContent string fetch + PageMeasure; do not duplicate chapter-content loading logic"}
+{"file": ".trellis/tasks/05-18-prefetch-feed/prd.md", "reason": "B.x requirements + ReaderPage._measureAdjacentChapters design"}
+{"file": ".trellis/tasks/05-18-cross-chapter-animation/prd.md", "reason": "Parent task with full architecture, ChapterWindow contract spec'd by Subtask A"}

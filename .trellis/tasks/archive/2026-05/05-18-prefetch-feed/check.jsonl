@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Quality gate"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify ReaderPage → PageViewController data flow without breaking existing _preloadAdjacentContent string fetch"}
+{"file": ".trellis/tasks/05-18-prefetch-feed/prd.md", "reason": "B.x requirements + measureAdjacentChapters design + ChapterWindow feed contract"}
+{"file": ".trellis/tasks/05-18-cross-chapter-animation/prd.md", "reason": "Parent task architecture - subtask B is the bridge between A's controller window and C's delegate animation"}
