@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/05-18-volume-key-page-turn/prd.md", "reason": "本任务 PRD"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 ReaderSettings.fromJson fallback / PageViewController.onTapNext/Prev 已有接口"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "ReaderSettings → Focus.onKeyEvent → PageViewController 三层"}
+{"file": ".trellis/tasks/05-18-drag-cancel-threshold-md3-followup/research/feature-gap-reader-bookshelf-source.md", "reason": "§1.8 MD3 onKeyDown 完整对照"}
