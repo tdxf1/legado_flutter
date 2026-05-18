@@ -60,6 +60,16 @@ const REQUIRED_WIRE_FN_FRAGMENTS: &[&str] = &[
     "wire__crate__api__import_backup_zip_impl",
     // 批次 10 — funcId 65 — validate_backup_zip
     "wire__crate__api__validate_backup_zip_impl",
+    // 批次 11 — funcId 66 — webdav_check
+    "wire__crate__api__webdav_check_impl",
+    // 批次 11 — funcId 67 — webdav_list_backups
+    "wire__crate__api__webdav_list_backups_impl",
+    // 批次 11 — funcId 68 — webdav_upload_backup
+    "wire__crate__api__webdav_upload_backup_impl",
+    // 批次 11 — funcId 69 — webdav_download_backup
+    "wire__crate__api__webdav_download_backup_impl",
+    // 批次 11 — funcId 70 — webdav_delete_backup
+    "wire__crate__api__webdav_delete_backup_impl",
 ];
 
 const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
@@ -86,6 +96,12 @@ const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
     "        63 =>",
     "        64 =>",
     "        65 =>",
+    // 批次 11 (WebDAV 同步) 手动 dispatch 注册
+    "        66 =>",
+    "        67 =>",
+    "        68 =>",
+    "        69 =>",
+    "        70 =>",
 ];
 
 /// R3: the dispatcher default arms must surface the unknown funcId
@@ -146,7 +162,7 @@ fn main() {
             "frb_generated.rs is missing {} hand-edited wire/dispatch fragment(s). \
              A `flutter_rust_bridge_codegen generate` run probably overwrote the manual \
              patches. This guard only covers the funcIds we know were hand-edited \
-             (currently 42-52 plus 54-57 plus 63-65; 53 is intentionally a hole, do not re-introduce), \
+             (currently 42-52 plus 54-57 plus 63-65 plus 66-70; 53 is intentionally a hole, do not re-introduce), \
              plus the R3 informative panic in the dispatcher default arms. \
              funcIds outside that range are produced by codegen and are NOT checked here, \
              so a regression in those needs separate attention. See CURRENT_STATUS.md \

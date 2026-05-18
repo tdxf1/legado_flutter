@@ -1246,6 +1246,120 @@ pub fn validate_backup_zip(zip_path: String) -> Result<String, String> {
 }
 
 // ============================================================
+// WebDAV 同步 (批次 11)
+// ============================================================
+
+/// 探活 — 用 PROPFIND Depth=0 验证 url + 凭据是否能访问。
+/// 设置页"测试连接"按钮调用。成功返回 ()，失败返回错误描述。
+pub async fn webdav_check(
+    url: String,
+    user: String,
+    password: String,
+) -> Result<(), String> {
+    let client = core_net::webdav::WebDavClient::new(url, user, password);
+    client.check().await
+}
+
+/// 列远端 base_url 下的 backup*.zip 文件名（已过滤非 backup 前缀的项）。
+/// 返回 JSON 字符串数组。Flutter 侧用于"从 WebDAV 恢复" 的下拉单选。
+pub async fn webdav_list_backups(
+    url: String,
+    user: String,
+    password: String,
+) -> Result<String, String> {
+    let client = core_net::webdav::WebDavClient::new(url, user, password);
+    let names = client.list_files().await?;
+    serde_json::to_string(&names).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// 本地 export → 临时 zip → PUT 到 WebDAV。
+///
+/// 实现：用 [`tempfile::NamedTempFile`] 创建一次性 zip，调
+/// [`core_storage::backup_dao::export_to_zip`] 写入，然后 `std::fs::read`
+/// 整体读出 PUT 上去。`NamedTempFile` 会在 fn 返回时自动清理。
+///
+/// 不需要事先 MKCOL：调用方应自行保证 `url` 指向已存在的 collection,
+/// 否则 PUT 一般会 404 / 409。如未来需要"首次同步建目录"，可在 UI 端
+/// 单独调 `webdav_check` 失败时回退尝试 mkcol。
+pub async fn webdav_upload_backup(
+    db_path: String,
+    url: String,
+    user: String,
+    password: String,
+    file_name: String,
+) -> Result<(), String> {
+    // 1. export 到本地临时 zip
+    let tmp = tempfile::Builder::new()
+        .prefix("legado-backup-")
+        .suffix(".zip")
+        .tempfile()
+        .map_err(|e| format!("创建临时文件失败: {}", e))?;
+    let tmp_path = tmp
+        .path()
+        .to_str()
+        .ok_or_else(|| "临时文件路径无效".to_string())?
+        .to_string();
+    {
+        let conn = open_db(&db_path)?;
+        core_storage::backup_dao::export_to_zip(&conn, &tmp_path)?;
+    }
+    // 2. 读 bytes
+    let bytes = std::fs::read(&tmp_path).map_err(|e| format!("读取临时 zip 失败: {}", e))?;
+    // 3. PUT
+    let client = core_net::webdav::WebDavClient::new(url, user, password);
+    client.upload(&file_name, bytes).await?;
+    // tmp 在此处 drop,自动清理
+    drop(tmp);
+    Ok(())
+}
+
+/// GET 远端 zip → 写到临时文件 → import → 返回 ImportSummary JSON。
+///
+/// 与 [`import_backup_zip`] 行为完全一致，区别是 zip 来源是远端 GET
+/// 而非本地路径。失败时临时文件依然由 `NamedTempFile` 自动清理。
+pub async fn webdav_download_backup(
+    db_path: String,
+    url: String,
+    user: String,
+    password: String,
+    file_name: String,
+) -> Result<String, String> {
+    // 1. GET
+    let client = core_net::webdav::WebDavClient::new(url, user, password);
+    let bytes = client.download(&file_name).await?;
+    // 2. 写到临时 zip
+    let tmp = tempfile::Builder::new()
+        .prefix("legado-restore-")
+        .suffix(".zip")
+        .tempfile()
+        .map_err(|e| format!("创建临时文件失败: {}", e))?;
+    let tmp_path = tmp
+        .path()
+        .to_str()
+        .ok_or_else(|| "临时文件路径无效".to_string())?
+        .to_string();
+    std::fs::write(&tmp_path, &bytes).map_err(|e| format!("写入临时 zip 失败: {}", e))?;
+    // 3. import
+    let summary = {
+        let mut conn = open_db(&db_path)?;
+        core_storage::backup_dao::import_from_zip(&mut conn, &tmp_path)?
+    };
+    drop(tmp);
+    serde_json::to_string(&summary).map_err(|e| format!("序列化 ImportSummary 失败: {}", e))
+}
+
+/// 删除远端 backup zip（用户在恢复对话框里也可"清理远端旧备份"）。
+pub async fn webdav_delete_backup(
+    url: String,
+    user: String,
+    password: String,
+    file_name: String,
+) -> Result<(), String> {
+    let client = core_net::webdav::WebDavClient::new(url, user, password);
+    client.delete(&file_name).await
+}
+
+// ============================================================
 // 内部辅助函数
 // ============================================================
 

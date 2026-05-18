@@ -316,6 +316,37 @@ abstract class RustLibApi extends BaseApi {
       {required String dbPath, required String zipPath});
 
   Future<String> crateApiValidateBackupZip({required String zipPath});
+
+  // 批次 11 — WebDAV 同步
+  Future<void> crateApiWebdavCheck(
+      {required String url,
+      required String user,
+      required String password});
+
+  Future<String> crateApiWebdavListBackups(
+      {required String url,
+      required String user,
+      required String password});
+
+  Future<void> crateApiWebdavUploadBackup(
+      {required String dbPath,
+      required String url,
+      required String user,
+      required String password,
+      required String fileName});
+
+  Future<String> crateApiWebdavDownloadBackup(
+      {required String dbPath,
+      required String url,
+      required String user,
+      required String password,
+      required String fileName});
+
+  Future<void> crateApiWebdavDeleteBackup(
+      {required String url,
+      required String user,
+      required String password,
+      required String fileName});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -2157,6 +2188,169 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiValidateBackupZipConstMeta => const TaskConstMeta(
         debugName: "validate_backup_zip",
         argNames: ["zipPath"],
+      );
+
+  // ============================================================
+  // 批次 11 — WebDAV 同步 wire fn 实现
+  // ============================================================
+
+  @override
+  Future<void> crateApiWebdavCheck(
+      {required String url,
+      required String user,
+      required String password}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(url, serializer);
+        sse_encode_String(user, serializer);
+        sse_encode_String(password, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 66, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiWebdavCheckConstMeta,
+      argValues: [url, user, password],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiWebdavCheckConstMeta => const TaskConstMeta(
+        debugName: "webdav_check",
+        argNames: ["url", "user", "password"],
+      );
+
+  @override
+  Future<String> crateApiWebdavListBackups(
+      {required String url,
+      required String user,
+      required String password}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(url, serializer);
+        sse_encode_String(user, serializer);
+        sse_encode_String(password, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 67, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiWebdavListBackupsConstMeta,
+      argValues: [url, user, password],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiWebdavListBackupsConstMeta =>
+      const TaskConstMeta(
+        debugName: "webdav_list_backups",
+        argNames: ["url", "user", "password"],
+      );
+
+  @override
+  Future<void> crateApiWebdavUploadBackup(
+      {required String dbPath,
+      required String url,
+      required String user,
+      required String password,
+      required String fileName}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(url, serializer);
+        sse_encode_String(user, serializer);
+        sse_encode_String(password, serializer);
+        sse_encode_String(fileName, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 68, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiWebdavUploadBackupConstMeta,
+      argValues: [dbPath, url, user, password, fileName],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiWebdavUploadBackupConstMeta =>
+      const TaskConstMeta(
+        debugName: "webdav_upload_backup",
+        argNames: ["dbPath", "url", "user", "password", "fileName"],
+      );
+
+  @override
+  Future<String> crateApiWebdavDownloadBackup(
+      {required String dbPath,
+      required String url,
+      required String user,
+      required String password,
+      required String fileName}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(url, serializer);
+        sse_encode_String(user, serializer);
+        sse_encode_String(password, serializer);
+        sse_encode_String(fileName, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 69, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiWebdavDownloadBackupConstMeta,
+      argValues: [dbPath, url, user, password, fileName],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiWebdavDownloadBackupConstMeta =>
+      const TaskConstMeta(
+        debugName: "webdav_download_backup",
+        argNames: ["dbPath", "url", "user", "password", "fileName"],
+      );
+
+  @override
+  Future<void> crateApiWebdavDeleteBackup(
+      {required String url,
+      required String user,
+      required String password,
+      required String fileName}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(url, serializer);
+        sse_encode_String(user, serializer);
+        sse_encode_String(password, serializer);
+        sse_encode_String(fileName, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 70, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiWebdavDeleteBackupConstMeta,
+      argValues: [url, user, password, fileName],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiWebdavDeleteBackupConstMeta =>
+      const TaskConstMeta(
+        debugName: "webdav_delete_backup",
+        argNames: ["url", "user", "password", "fileName"],
       );
 
   @protected

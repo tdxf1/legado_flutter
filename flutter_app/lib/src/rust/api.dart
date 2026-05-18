@@ -485,3 +485,60 @@ Future<String> importBackupZip(
 /// 返回 JSON 字符串数组。
 Future<String> validateBackupZip({required String zipPath}) =>
     RustLib.instance.api.crateApiValidateBackupZip(zipPath: zipPath);
+
+// ============================================================
+// WebDAV 同步（批次 11）
+// ============================================================
+
+/// 探活 — 验证 WebDAV URL + 凭据。失败抛 String 错误。
+Future<void> webdavCheck(
+        {required String url,
+        required String user,
+        required String password}) =>
+    RustLib.instance.api
+        .crateApiWebdavCheck(url: url, user: user, password: password);
+
+/// 列远端 base_url 下的 backup*.zip 文件名。返回 JSON 字符串数组。
+Future<String> webdavListBackups(
+        {required String url,
+        required String user,
+        required String password}) =>
+    RustLib.instance.api
+        .crateApiWebdavListBackups(url: url, user: user, password: password);
+
+/// 本地 export → 临时 zip → PUT 到 WebDAV。
+Future<void> webdavUploadBackup(
+        {required String dbPath,
+        required String url,
+        required String user,
+        required String password,
+        required String fileName}) =>
+    RustLib.instance.api.crateApiWebdavUploadBackup(
+        dbPath: dbPath,
+        url: url,
+        user: user,
+        password: password,
+        fileName: fileName);
+
+/// GET 远端 zip → 写到临时文件 → import → 返回 ImportSummary JSON。
+Future<String> webdavDownloadBackup(
+        {required String dbPath,
+        required String url,
+        required String user,
+        required String password,
+        required String fileName}) =>
+    RustLib.instance.api.crateApiWebdavDownloadBackup(
+        dbPath: dbPath,
+        url: url,
+        user: user,
+        password: password,
+        fileName: fileName);
+
+/// 删除远端 backup zip。
+Future<void> webdavDeleteBackup(
+        {required String url,
+        required String user,
+        required String password,
+        required String fileName}) =>
+    RustLib.instance.api.crateApiWebdavDeleteBackup(
+        url: url, user: user, password: password, fileName: fileName);

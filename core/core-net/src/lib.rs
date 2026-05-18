@@ -10,6 +10,7 @@ pub mod downloader;
 pub mod encoding;
 pub mod proxy;
 pub mod retry;
+pub mod webdav;
 
 // 重新导出主要类型，方便上层调用
 pub use client::{HttpClient, HttpClientConfig};

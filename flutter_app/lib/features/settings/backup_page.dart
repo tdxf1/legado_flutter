@@ -1,8 +1,11 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/providers.dart';
 import '../../src/rust/api.dart' as rust_api;
@@ -45,6 +48,36 @@ class BackupPage extends ConsumerStatefulWidget {
   /// 测试钩子：注入假 validateBackupZip，返回识别到的文件名列表。
   final Future<List<String>> Function(String zipPath)? validateZipOverride;
 
+  // ---- 批次 11 / WebDAV ----
+
+  /// 测试钩子：注入假 documents 目录路径（用来读 webdav.json）。
+  final String? webdavConfigDirOverride;
+
+  /// 测试钩子：注入假 webdavUploadBackup。
+  final Future<void> Function({
+    required String dbPath,
+    required String url,
+    required String user,
+    required String password,
+    required String fileName,
+  })? webdavUploadOverride;
+
+  /// 测试钩子：注入假 webdavListBackups,返回 JSON 字符串数组。
+  final Future<String> Function({
+    required String url,
+    required String user,
+    required String password,
+  })? webdavListOverride;
+
+  /// 测试钩子：注入假 webdavDownloadBackup,返回 ImportSummary JSON。
+  final Future<String> Function({
+    required String dbPath,
+    required String url,
+    required String user,
+    required String password,
+    required String fileName,
+  })? webdavDownloadOverride;
+
   const BackupPage({
     super.key,
     this.dbPathOverride,
@@ -53,6 +86,10 @@ class BackupPage extends ConsumerStatefulWidget {
     this.exportBackupOverride,
     this.importBackupOverride,
     this.validateZipOverride,
+    this.webdavConfigDirOverride,
+    this.webdavUploadOverride,
+    this.webdavListOverride,
+    this.webdavDownloadOverride,
   });
 
   @override
@@ -75,13 +112,24 @@ class _BackupPageState extends ConsumerState<BackupPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('备份/恢复')),
+      appBar: AppBar(
+        title: const Text('备份/恢复'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'WebDAV 配置',
+            onPressed: () => context.push('/webdav-config'),
+          ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           _buildExportCard(context),
           const SizedBox(height: 16),
           _buildImportCard(context),
+          const SizedBox(height: 16),
+          _buildWebDavCard(context),
         ],
       ),
     );
@@ -356,6 +404,262 @@ class _BackupPageState extends ConsumerState<BackupPage> {
       );
     } finally {
       if (mounted) setState(() => _importing = false);
+    }
+  }
+
+  // ============================================================
+  // 批次 11 — WebDAV 同步 UI + handlers
+  // ============================================================
+
+  /// 处理 WebDAV 同步进行中（上传 / 下载 / 列表）。共享一个 flag 让按钮
+  /// 全部 disable 防并发误触。
+  bool _webdavBusy = false;
+
+  Widget _buildWebDavCard(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const ListTile(
+              leading: Icon(Icons.cloud),
+              title: Text('WebDAV 同步'),
+              subtitle: Text('与远端备份目录上传 / 下载 zip'),
+            ),
+            if (_webdavBusy) const LinearProgressIndicator(),
+            Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      icon: const Icon(Icons.cloud_upload),
+                      label: const Text('上传到 WebDAV'),
+                      onPressed: (_exporting || _importing || _webdavBusy)
+                          ? null
+                          : _onWebDavUpload,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton.tonalIcon(
+                      icon: const Icon(Icons.cloud_download),
+                      label: const Text('从 WebDAV 恢复'),
+                      onPressed: (_exporting || _importing || _webdavBusy)
+                          ? null
+                          : _onWebDavRestore,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Text(
+                '配置入口在右上角齿轮图标。',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 读 `<documentsDir>/webdav.json`。返回 `null` 表示未配置（让 caller
+  /// 提示"先去配置"）。
+  Future<Map<String, String>?> _loadWebDavConfig() async {
+    try {
+      final dir = widget.webdavConfigDirOverride ??
+          (await getApplicationDocumentsDirectory()).path;
+      final f = File('$dir/webdav.json');
+      if (!await f.exists()) return null;
+      final text = await f.readAsString();
+      final Map<String, dynamic> map =
+          jsonDecode(text) as Map<String, dynamic>;
+      final url = (map['url'] as String?)?.trim() ?? '';
+      if (url.isEmpty) return null;
+      return {
+        'url': url,
+        'user': (map['user'] as String?) ?? '',
+        'password': (map['password'] as String?) ?? '',
+        'deviceName': (map['deviceName'] as String?) ?? '',
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 拼接远端 backup 文件名。优先用 `deviceName-` 后缀，否则用 `legado_flutter`
+  /// 当 fallback,避免与原 Legado 设备同名冲突。日期 yyyy-MM-dd,与原版
+  /// `Backup.getNowZipFileName` 一致。
+  String _buildRemoteBackupFileName(String? deviceName) {
+    final now = DateTime.now();
+    String two(int n) => n.toString().padLeft(2, '0');
+    final date = '${now.year}-${two(now.month)}-${two(now.day)}';
+    final dev = (deviceName ?? '').trim();
+    return dev.isNotEmpty ? 'backup$date-$dev.zip' : 'backup$date.zip';
+  }
+
+  Future<void> _onWebDavUpload() async {
+    if (_webdavBusy) return;
+    final cfg = await _loadWebDavConfig();
+    if (!mounted) return;
+    if (cfg == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('先去配置 WebDAV')),
+      );
+      return;
+    }
+    setState(() => _webdavBusy = true);
+    try {
+      final dbPath = await _resolveDbPath();
+      final fileName = _buildRemoteBackupFileName(cfg['deviceName']);
+      final fn = widget.webdavUploadOverride ??
+          ({
+            required String dbPath,
+            required String url,
+            required String user,
+            required String password,
+            required String fileName,
+          }) =>
+              rust_api.webdavUploadBackup(
+                  dbPath: dbPath,
+                  url: url,
+                  user: user,
+                  password: password,
+                  fileName: fileName);
+      await fn(
+        dbPath: dbPath,
+        url: cfg['url']!,
+        user: cfg['user']!,
+        password: cfg['password']!,
+        fileName: fileName,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已上传: $fileName')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('上传失败: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _webdavBusy = false);
+    }
+  }
+
+  Future<void> _onWebDavRestore() async {
+    if (_webdavBusy) return;
+    final cfg = await _loadWebDavConfig();
+    if (!mounted) return;
+    if (cfg == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('先去配置 WebDAV')),
+      );
+      return;
+    }
+    setState(() => _webdavBusy = true);
+    try {
+      final listFn = widget.webdavListOverride ??
+          ({
+            required String url,
+            required String user,
+            required String password,
+          }) =>
+              rust_api.webdavListBackups(
+                  url: url, user: user, password: password);
+      final json = await listFn(
+        url: cfg['url']!,
+        user: cfg['user']!,
+        password: cfg['password']!,
+      );
+      final List<dynamic> raw = jsonDecode(json) as List<dynamic>;
+      final files = raw.cast<String>();
+      if (!mounted) return;
+      if (files.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('远端无可恢复的备份')),
+        );
+        return;
+      }
+      // 单选 dialog
+      final picked = await showDialog<String>(
+        context: context,
+        builder: (ctx) => SimpleDialog(
+          title: const Text('选择要恢复的备份'),
+          children: files
+              .map((f) => SimpleDialogOption(
+                    onPressed: () => Navigator.of(ctx).pop(f),
+                    child: Text(f),
+                  ))
+              .toList(),
+        ),
+      );
+      if (picked == null) return;
+      if (!mounted) return;
+      // 下载 + 导入
+      final dbPath = await _resolveDbPath();
+      final dlFn = widget.webdavDownloadOverride ??
+          ({
+            required String dbPath,
+            required String url,
+            required String user,
+            required String password,
+            required String fileName,
+          }) =>
+              rust_api.webdavDownloadBackup(
+                dbPath: dbPath,
+                url: url,
+                user: user,
+                password: password,
+                fileName: fileName,
+              );
+      final summaryJson = await dlFn(
+        dbPath: dbPath,
+        url: cfg['url']!,
+        user: cfg['user']!,
+        password: cfg['password']!,
+        fileName: picked,
+      );
+      if (!mounted) return;
+      // 解析 ImportSummary
+      String label;
+      try {
+        final Map<String, dynamic> summary =
+            jsonDecode(summaryJson) as Map<String, dynamic>;
+        final books = summary['books'] ?? 0;
+        final groups = summary['groups'] ?? 0;
+        final bookmarks = summary['bookmarks'] ?? 0;
+        final rules = summary['replace_rules'] ?? 0;
+        final sources = summary['sources'] ?? 0;
+        final errors = summary['errors'];
+        final errorCount = (errors is List) ? errors.length : 0;
+        label = '从 WebDAV 恢复: $books 本书 / $groups 个分组 / '
+            '$bookmarks 条书签 / $rules 条替换规则 / $sources 个书源'
+            '${errorCount > 0 ? '（$errorCount 项错误）' : ''}';
+      } catch (_) {
+        label = '从 WebDAV 恢复完成';
+      }
+      ref.invalidate(allBooksProvider);
+      ref.invalidate(booksByGroupProvider);
+      ref.invalidate(bookGroupsProvider);
+      ref.invalidate(allSourcesProvider);
+      ref.invalidate(allReplaceRulesProvider);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(label)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('恢复失败: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _webdavBusy = false);
     }
   }
 }

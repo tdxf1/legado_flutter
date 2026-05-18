@@ -17,6 +17,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 regex = "1.11"
 tracing = "0.1"
+tempfile = "3"
 
 [dev-dependencies]
 tempfile = "3"

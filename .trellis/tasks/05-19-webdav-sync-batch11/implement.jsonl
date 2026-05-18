@@ -1,0 +1,10 @@
+{"file": ".trellis/tasks/05-19-webdav-sync-batch11/prd.md", "reason": "本任务 PRD"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-local-backup-restore-batch10/research/legado-backup-format.md", "reason": "原 Legado WebDav 实现细节 §5（PROPFIND/MKCOL/PUT/GET/DELETE 路径）"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用现有 reqwest 客户端 / batch10 backup_dao"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Rust WebDav ↔ bridge ↔ Flutter UI 数据流"}
+{"file": "core/core-net/Cargo.toml", "reason": "reqwest 已存在，无需新增依赖"}
+{"file": "core/core-net/src/lib.rs", "reason": "看现有 net 模块组织（http_client 已有）"}
+{"file": "core/core-storage/src/backup_dao.rs", "reason": "复用 export_to_zip / import_from_zip"}
+{"file": "core/bridge/src/api.rs", "reason": "新增 5 个 WebDAV pub fn 入口；批次 7/8/10 的添加风格参考"}
+{"file": "flutter_app/lib/features/settings/backup_page.dart", "reason": "加 WebDAV 卡片与齿轮入口"}
+{"file": "flutter_app/lib/features/bookshelf/book_info_edit_page.dart", "reason": "ConsumerStatefulWidget + 测试 hook 模式参考"}

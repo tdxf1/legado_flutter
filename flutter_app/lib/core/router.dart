@@ -7,6 +7,7 @@ import '../features/reader/reader_page.dart';
 import '../features/search/search_page.dart';
 import '../features/settings/backup_page.dart';
 import '../features/settings/settings_page.dart';
+import '../features/settings/webdav_config_page.dart';
 import '../features/source/source_page.dart';
 import '../features/download/download_page.dart';
 import '../features/replace_rule/replace_rule_page.dart';
@@ -85,6 +86,11 @@ final router = GoRouter(
     GoRoute(
       path: '/backup',
       builder: (context, state) => const BackupPage(),
+    ),
+    // 批次 11 (05-19): WebDAV 同步配置页。URL/账号/密码/设备名 4 字段。
+    GoRoute(
+      path: '/webdav-config',
+      builder: (context, state) => const WebDavConfigPage(),
     ),
   ],
 );
