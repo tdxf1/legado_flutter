@@ -634,6 +634,20 @@ class ReaderSettings {
   /// 批次 3 全屏菜单预设：9 格全 showMenu，靠音量键 / 物理键翻页。
   static const List<int> tapZonesFullMenu = [2, 2, 2, 2, 2, 2, 2, 2, 2];
 
+  /// 批次 4 (05-18): 自动滚动速度档位（仅滚动模式）。1..10 整数 → 直接作
+  /// 为每 50ms 推进的像素数（pixelsPerStep）。默认 1（≈ 20 px/s，与原硬
+  /// 编码值一致）。10 档约等于 200 px/s，肉眼明显但仍可读。
+  ///
+  /// 与 [autoPageIntervalSeconds] 互不影响：滚动模式只看本字段，分页模式
+  /// 只看 [autoPageIntervalSeconds]。仍保 schema=v6（fromJson 缺字段 fallback）。
+  final int autoScrollSpeed;
+
+  /// 批次 4 (05-18): 分页模式下两次自动翻页之间的间隔（秒）。1..30 整数。
+  /// 默认 10s（中等阅读速度，约 200 字/页 / 10s = 20 字/s）。
+  ///
+  /// 实际间隔 = autoPageIntervalSeconds × 1000ms 传给 ReaderAutoScroller.pageIntervalMs。
+  final int autoPageIntervalSeconds;
+
   const ReaderSettings({
     this.fontSize = 18.0,
     this.fontWeightIndex = 1,
@@ -662,6 +676,8 @@ class ReaderSettings {
     this.enableVolumeKeyPage = true,
     this.volumeKeyPageOnTts = false,
     this.tapZones = tapZonesDefault,
+    this.autoScrollSpeed = 1,
+    this.autoPageIntervalSeconds = 10,
   });
 
   static const List<int> fontWeightValues = [400, 700, 900];
@@ -728,6 +744,8 @@ class ReaderSettings {
     bool? enableVolumeKeyPage,
     bool? volumeKeyPageOnTts,
     List<int>? tapZones,
+    int? autoScrollSpeed,
+    int? autoPageIntervalSeconds,
   }) {
     return ReaderSettings(
       fontSize: fontSize ?? this.fontSize,
@@ -757,6 +775,9 @@ class ReaderSettings {
       enableVolumeKeyPage: enableVolumeKeyPage ?? this.enableVolumeKeyPage,
       volumeKeyPageOnTts: volumeKeyPageOnTts ?? this.volumeKeyPageOnTts,
       tapZones: tapZones ?? this.tapZones,
+      autoScrollSpeed: autoScrollSpeed ?? this.autoScrollSpeed,
+      autoPageIntervalSeconds:
+          autoPageIntervalSeconds ?? this.autoPageIntervalSeconds,
     );
   }
 
@@ -794,6 +815,8 @@ class ReaderSettings {
         'enableVolumeKeyPage': enableVolumeKeyPage,
         'volumeKeyPageOnTts': volumeKeyPageOnTts,
         'tapZones': tapZones,
+        'autoScrollSpeed': autoScrollSpeed,
+        'autoPageIntervalSeconds': autoPageIntervalSeconds,
       };
 
   factory ReaderSettings.fromJson(Map<String, dynamic> json) {
@@ -859,6 +882,13 @@ class ReaderSettings {
       // 批次 3 (05-18): 3×3 点击区域。缺字段 fallback 默认列表；长度异常
       // 也回退默认（避免老/损坏 JSON 把 9 槽位破成 5/3 长度引发越界）。
       tapZones: _parseTapZones(json['tapZones']),
+      // 批次 4 (05-18): 自动翻页速度 / 间隔。缺字段 fallback 默认；clamp 到
+      // 合法区间避免恶意 JSON 给 0 / 负值 / 超大值。
+      autoScrollSpeed:
+          ((json['autoScrollSpeed'] as num?)?.toInt() ?? 1).clamp(1, 10),
+      autoPageIntervalSeconds:
+          ((json['autoPageIntervalSeconds'] as num?)?.toInt() ?? 10)
+              .clamp(1, 30),
     );
   }
 }

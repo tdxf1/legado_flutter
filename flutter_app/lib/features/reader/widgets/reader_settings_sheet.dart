@@ -362,6 +362,44 @@ class _ReaderSettingsSheetState extends State<ReaderSettingsSheet> {
                   }
                 },
               ),
+              const SizedBox(height: 16),
+              // 批次 4 (05-18): 自动翻页速度 / 间隔。两条滑杆始终可见，
+              // 用户切换 pageAnim 后立即生效（reader_page._toggleAutoScroll
+              // 根据当前 isScrollMode 选 path）。
+              Text('自动翻页', style: label),
+              const SizedBox(height: 4),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Text(
+                  '滚动速度: ${_s.autoScrollSpeed} 档（约 ${_s.autoScrollSpeed * 20} px/s）',
+                  style: label,
+                ),
+              ),
+              Slider(
+                min: 1,
+                max: 10,
+                divisions: 9,
+                value: _s.autoScrollSpeed.toDouble(),
+                label: '${_s.autoScrollSpeed}',
+                onChanged: (v) =>
+                    _update(_s.copyWith(autoScrollSpeed: v.round())),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Text(
+                  '分页间隔: 每 ${_s.autoPageIntervalSeconds} 秒翻一页',
+                  style: label,
+                ),
+              ),
+              Slider(
+                min: 1,
+                max: 30,
+                divisions: 29,
+                value: _s.autoPageIntervalSeconds.toDouble(),
+                label: '${_s.autoPageIntervalSeconds}s',
+                onChanged: (v) => _update(
+                    _s.copyWith(autoPageIntervalSeconds: v.round())),
+              ),
             ]),
       ),
     );

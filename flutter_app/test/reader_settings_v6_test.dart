@@ -324,4 +324,65 @@ void main() {
       expect(() => s.tapZones[0] = 1, returnsNormally);
     });
   });
+
+  // 批次 4 (05-18): autoScrollSpeed / autoPageIntervalSeconds
+  group('ReaderSettings — 批次 4 自动翻页字段', () {
+    test('默认值: autoScrollSpeed=1, autoPageIntervalSeconds=10', () {
+      const s = ReaderSettings();
+      expect(s.autoScrollSpeed, 1);
+      expect(s.autoPageIntervalSeconds, 10);
+    });
+
+    test('copyWith 单独修改两字段', () {
+      const a = ReaderSettings();
+      final b = a.copyWith(autoScrollSpeed: 5);
+      expect(b.autoScrollSpeed, 5);
+      expect(b.autoPageIntervalSeconds, 10);
+
+      final c = a.copyWith(autoPageIntervalSeconds: 20);
+      expect(c.autoScrollSpeed, 1);
+      expect(c.autoPageIntervalSeconds, 20);
+    });
+
+    test('toJson 含两字段', () {
+      const s = ReaderSettings(
+          autoScrollSpeed: 3, autoPageIntervalSeconds: 15);
+      final j = s.toJson();
+      expect(j['autoScrollSpeed'], 3);
+      expect(j['autoPageIntervalSeconds'], 15);
+    });
+
+    test('fromJson round-trip', () {
+      const s = ReaderSettings(
+          autoScrollSpeed: 7, autoPageIntervalSeconds: 25);
+      final r = ReaderSettings.fromJson(s.toJson());
+      expect(r.autoScrollSpeed, 7);
+      expect(r.autoPageIntervalSeconds, 25);
+    });
+
+    test('fromJson 缺字段 → 默认 1 / 10', () {
+      final s = ReaderSettings.fromJson({'settingsVersion': 6});
+      expect(s.autoScrollSpeed, 1);
+      expect(s.autoPageIntervalSeconds, 10);
+    });
+
+    test('fromJson 越界值被 clamp 到合法区间', () {
+      final s1 = ReaderSettings.fromJson({
+        'settingsVersion': 6,
+        'autoScrollSpeed': 0,
+        'autoPageIntervalSeconds': -5,
+      });
+      expect(s1.autoScrollSpeed, 1, reason: 'speed 0 clamp 到 1');
+      expect(s1.autoPageIntervalSeconds, 1, reason: 'interval -5 clamp 到 1');
+
+      final s2 = ReaderSettings.fromJson({
+        'settingsVersion': 6,
+        'autoScrollSpeed': 100,
+        'autoPageIntervalSeconds': 999,
+      });
+      expect(s2.autoScrollSpeed, 10, reason: 'speed 100 clamp 到 10');
+      expect(s2.autoPageIntervalSeconds, 30,
+          reason: 'interval 999 clamp 到 30');
+    });
+  });
 }

@@ -191,6 +191,15 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     onChanged: () {
       if (mounted) setState(() {});
     },
+    // 批次 4 (05-18): 分页模式 tick 回调 — 每 pageIntervalMs 触发一次
+    // 翻下一页（走与 tap-next 相同的 delegate 动画路径，复用批次 3
+    // 的 _doTapNext helper）。pvc 为 null 或到底时 helper 早返回。
+    onPageTick: () {
+      if (!mounted) return;
+      _doTapNext();
+    },
+    pixelsPerStep: _settings.autoScrollSpeed.toDouble(),
+    pageIntervalMs: _settings.autoPageIntervalSeconds * 1000,
   );
   final ReaderProgressService _progressService = ReaderProgressService();
   final ReaderBookmarkService _bookmarkService = ReaderBookmarkService();
@@ -705,6 +714,10 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     if (hardwareChanged || markLoaded) {
       _applyHardwareSettings(settings);
     }
+    // 批次 4 (05-18): 自动翻页速度 / 间隔运行时同步给 ReaderAutoScroller，
+    // 用户从设置里改完滑杆下次启动 / 当前正在跑的任务都用最新参数。
+    _autoScroller.pixelsPerStep = settings.autoScrollSpeed.toDouble();
+    _autoScroller.pageIntervalMs = settings.autoPageIntervalSeconds * 1000;
   }
 
   void _ensureCurrentChapterInContinuous() {
@@ -2437,7 +2450,11 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     );
   }
 
-  void _toggleAutoScroll() => _autoScroller.toggle();
+  /// 批次 4 (05-18): 启停自动翻页。根据当前阅读模式分派到 ReaderAutoScroller
+  /// 的滚动路径（pixelsPerStep 推进 ScrollController）或分页路径
+  /// （onPageTick 触发翻页）。
+  void _toggleAutoScroll() =>
+      _autoScroller.toggle(scroll: _settings.isScrollMode);
 
   // TTS API kept as thin wrappers around [_tts] so existing UI builders
   // continue to work without churn. The actual logic lives in
