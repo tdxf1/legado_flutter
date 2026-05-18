@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Quality gate"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify onAnimTick chain: AnimationController listener → PageDelegate.onAnimTick → SimulationPageDelegate.lerp currentTouch → painter shouldRepaint"}
+{"file": ".trellis/tasks/05-18-simulation-anim-tick/prd.md", "reason": "X1.x scope + lerp 归一化 + drag-end vs tap 路径区分"}
