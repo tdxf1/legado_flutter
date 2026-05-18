@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/05-18-simulation-prev-mirror-md3/prd.md", "reason": "本任务 PRD"}
+{"file": ".trellis/tasks/05-18-simulation-prev-mirror-md3/research/md3-prev-geometry.md", "reason": "MD3 setDirection / prevPageByAnim / onAnimStart 逐字代码 + 几何推导"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 _calcCornerXY / debugCornerXY accessors / _setupTapAnim 状态机"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "tap / drag / 跨章三条触发路径要走同一镜像逻辑"}

@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/05-18-simulation-prev-mirror-md3/prd.md", "reason": "AC 对照基准"}
+{"file": ".trellis/tasks/05-18-simulation-prev-mirror-md3/research/md3-prev-geometry.md", "reason": "校验几何参数与 MD3 一致"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "校验 tap / drag / 跨章三条路径数据流一致"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "lint / 测试基线"}
