@@ -109,6 +109,11 @@ impl<'a> ProgressDao<'a> {
     }
 
     /// 添加书签
+    ///
+    /// 批次 6 (v11): 写入新增字段 book_name / book_author /
+    /// chapter_pos / chapter_name / book_text。这些字段对老 caller
+    /// 的 `create_bookmark` 便捷函数为默认值（None / 0）；新 caller
+    /// 直接构造 Bookmark struct 时可填。
     pub fn add_bookmark(&self, bookmark: &Bookmark) -> SqlResult<()> {
         debug!(
             "添加书签: book_id={}, chapter={}",
@@ -116,14 +121,22 @@ impl<'a> ProgressDao<'a> {
         );
 
         self.conn.execute(
-            "INSERT INTO bookmarks (id, book_id, chapter_index, paragraph_index, content, created_at)
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO bookmarks (
+                id, book_id, chapter_index, paragraph_index, content,
+                book_name, book_author, chapter_pos, chapter_name, book_text,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 bookmark.id,
                 bookmark.book_id,
                 bookmark.chapter_index,
                 bookmark.paragraph_index,
                 bookmark.content,
+                bookmark.book_name,
+                bookmark.book_author,
+                bookmark.chapter_pos,
+                bookmark.chapter_name,
+                bookmark.book_text,
                 bookmark.created_at,
             ],
         )?;
@@ -141,7 +154,9 @@ impl<'a> ProgressDao<'a> {
     /// 获取书籍的所有书签
     pub fn get_bookmarks(&self, book_id: &str) -> SqlResult<Vec<Bookmark>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, book_id, chapter_index, paragraph_index, content, created_at
+            "SELECT id, book_id, chapter_index, paragraph_index, content,
+                    book_name, book_author, chapter_pos, chapter_name, book_text,
+                    created_at
              FROM bookmarks WHERE book_id = ? ORDER BY chapter_index ASC, paragraph_index ASC",
         )?;
 
@@ -164,6 +179,11 @@ impl<'a> ProgressDao<'a> {
             chapter_index,
             paragraph_index,
             content: content.map(|s| s.to_string()),
+            book_name: None,
+            book_author: None,
+            chapter_pos: 0,
+            chapter_name: None,
+            book_text: None,
             created_at: now,
         };
 
@@ -184,7 +204,8 @@ fn progress_from_row(row: &rusqlite::Row) -> SqlResult<BookProgress> {
     })
 }
 
-/// 从数据库行转换到 Bookmark 结构体
+/// 从数据库行转换到 Bookmark 结构体。
+/// 列顺序与 [`ProgressDao::get_bookmarks`] 的 SELECT 严格对齐。
 fn bookmark_from_row(row: &rusqlite::Row) -> SqlResult<Bookmark> {
     Ok(Bookmark {
         id: row.get(0)?,
@@ -192,6 +213,11 @@ fn bookmark_from_row(row: &rusqlite::Row) -> SqlResult<Bookmark> {
         chapter_index: row.get(2)?,
         paragraph_index: row.get(3)?,
         content: row.get(4)?,
-        created_at: row.get(5)?,
+        book_name: row.get(5)?,
+        book_author: row.get(6)?,
+        chapter_pos: row.get(7)?,
+        chapter_name: row.get(8)?,
+        book_text: row.get(9)?,
+        created_at: row.get(10)?,
     })
 }

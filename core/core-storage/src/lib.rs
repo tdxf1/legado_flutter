@@ -19,7 +19,8 @@ pub use cache_dao::CacheDao;
 pub use chapter_dao::ChapterDao;
 pub use download_dao::DownloadDao;
 pub use models::{
-    Book, BookProgress, BookSource, Bookmark, Chapter, DownloadChapter, DownloadTask, ReplaceRule,
+    Book, BookGroup, BookProgress, BookSource, Bookmark, Chapter, Cookie, DownloadChapter,
+    DownloadTask, ReadRecord, ReplaceRule, RuleSub,
 };
 pub use progress_dao::ProgressDao;
 pub use replace_rule_dao::ReplaceRuleDao;

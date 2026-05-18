@@ -81,6 +81,7 @@ async fn add_book(
     ));
 
     // Save the book (initial upsert)
+    // 批次 6 (v11): 新增 dur_chapter_*/group_id 字段，新书初始为默认值（0/None）
     let book_for_save = core_storage::models::Book {
         id: book_id.clone(),
         source_id: req.source_id.clone(),
@@ -102,6 +103,11 @@ async fn add_book(
         latest_chapter_time: None,
         custom_cover_path: None,
         custom_info_json: None,
+        dur_chapter_index: 0,
+        dur_chapter_pos: 0,
+        dur_chapter_title: None,
+        dur_chapter_time: 0,
+        group_id: 0,
         created_at: now,
         updated_at: now,
     };

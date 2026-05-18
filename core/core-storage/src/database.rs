@@ -7,7 +7,7 @@ use rusqlite::{Connection, Result as SqlResult};
 use tracing::{debug, info, warn};
 
 /// 数据库版本（用于迁移，通过 PRAGMA user_version 持久化）
-const DB_VERSION: i32 = 10;
+const DB_VERSION: i32 = 11;
 
 /// 初始化数据库
 /// 创建所有必要的表，如果数据库已存在则检查是否需要迁移
@@ -107,6 +107,9 @@ pub fn create_tables(conn: &Connection) -> SqlResult<()> {
     )?;
 
     // 书籍表 (对应原 Legado 的 Book 实体)
+    // 批次 6 (v11): 加 5 字段对齐原 Legado Book.kt:96-102
+    //   - dur_chapter_index/pos/title/time: 当前阅读章节快照（书架卡片用）
+    //   - group_id: 所属分组 id（0 = 未分组）
     conn.execute(
         "CREATE TABLE IF NOT EXISTS books (
             id TEXT PRIMARY KEY,
@@ -129,6 +132,11 @@ pub fn create_tables(conn: &Connection) -> SqlResult<()> {
             latest_chapter_time INTEGER,
             custom_cover_path TEXT,
             custom_info_json TEXT,
+            dur_chapter_index INTEGER DEFAULT 0,
+            dur_chapter_pos INTEGER DEFAULT 0,
+            dur_chapter_title TEXT,
+            dur_chapter_time INTEGER DEFAULT 0,
+            group_id INTEGER DEFAULT 0,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             FOREIGN KEY (source_id) REFERENCES book_sources(id)
@@ -171,6 +179,11 @@ pub fn create_tables(conn: &Connection) -> SqlResult<()> {
     )?;
 
     // 书签表
+    // 批次 6 (v11): 加 5 字段对齐原 Legado Bookmark.kt
+    //   - book_name/book_author 冗余存（书删了仍保留）
+    //   - chapter_pos: 章内字符级 offset
+    //   - chapter_name: 章节标题
+    //   - book_text: 书签所在位置文本片段（上下文预览）
     conn.execute(
         "CREATE TABLE IF NOT EXISTS bookmarks (
             id TEXT PRIMARY KEY,
@@ -178,6 +191,11 @@ pub fn create_tables(conn: &Connection) -> SqlResult<()> {
             chapter_index INTEGER NOT NULL,
             paragraph_index INTEGER DEFAULT 0,
             content TEXT,
+            book_name TEXT,
+            book_author TEXT,
+            chapter_pos INTEGER DEFAULT 0,
+            chapter_name TEXT,
+            book_text TEXT,
             created_at INTEGER NOT NULL,
             FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
         )",
@@ -270,8 +288,78 @@ pub fn create_tables(conn: &Connection) -> SqlResult<()> {
         [],
     )?;
 
+    // ============================================================
+    // 批次 6 (v11) 新增 4 张表 — 仅 schema，DAO 留批次 7+ 实现
+    // ============================================================
+
+    // 书架分组表（对应原 Legado BookGroup.kt，简化掉 bitmask 设计）
+    // id=0 约定为"未分组"；AUTOINCREMENT 从 1 开始所以不会和 0 冲突
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS book_groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            sort_order INTEGER DEFAULT 0,
+            cover TEXT,
+            show INTEGER DEFAULT 1,
+            book_sort INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )",
+        [],
+    )?;
+
+    // 阅读时长记录表（对应原 Legado ReadRecord.kt）
+    // 原版 (deviceId, bookName) 联合主键 → 改成 UUID PK + book_id FK
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS read_records (
+            id TEXT PRIMARY KEY,
+            book_id TEXT NOT NULL,
+            book_name TEXT NOT NULL,
+            read_time INTEGER NOT NULL DEFAULT 0,
+            last_read_at INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )",
+        [],
+    )?;
+
+    // 持久化 Cookie 表（对应原 Legado Cookie.kt）
+    // (domain, key, path) 三元组 UNIQUE — path 为 NULL 时 SQLite 视为不同行，
+    // DAO 层在 upsert 时需把 NULL path 当成 '/' 或自行处理（留批次实现）
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS cookies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            domain TEXT NOT NULL,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            path TEXT,
+            expires_at INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(domain, key, path)
+        )",
+        [],
+    )?;
+
+    // 订阅源表（对应原 Legado RuleSub.kt）
+    // sub_type: 0=书源 1=RSS 2=替换规则
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS rule_subs (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            url TEXT NOT NULL UNIQUE,
+            sub_type INTEGER DEFAULT 0,
+            custom_order INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )",
+        [],
+    )?;
+
     // 创建索引
     create_indices(conn)?;
+    // 批次 6 (v11) 新表索引（必须在 books 含 group_id + 4 张新表创建后调用）
+    create_v11_indices(conn)?;
 
     info!("数据库表创建完成");
     Ok(())
@@ -295,6 +383,52 @@ fn create_indices(conn: &Connection) -> SqlResult<()> {
         "CREATE INDEX IF NOT EXISTS idx_bookmarks_book_id ON bookmarks(book_id)",
         [],
     )?;
+    // 注意：批次 6 (v11) 新增的 books(group_id) / book_groups(sort_order) /
+    // read_records(book_id) / cookies(domain) 索引刻意 *不* 放在这里。
+    // 因为 create_indices 会被旧版 migrate（v6/v8 的 schema baseline 守护
+    // 调用）触发，而那时 books 表还没 group_id 列、4 张新表也未创建。
+    // 这些索引只在 [`create_v11_indices`] 中按需创建，由 [`create_tables`]
+    // 末尾（fresh install 路径，books 已含新列）和 [`migrate_v11`]
+    // （migration 路径）分别调用。
+    Ok(())
+}
+
+/// 批次 6 (v11) 新增表的索引。
+/// fresh install 走 create_tables → 调一次；migration 走 migrate_v11 → 调一次。
+///
+/// 防御：被 `create_tables` 调用时可能正处于 v6/v8 的"schema baseline
+/// guard"路径（migrate_v6/v8 会调 create_tables 兜底），那时 books 还
+/// 没 group_id 列、4 张新表也未创建。所以每个索引前都检查依赖项。
+fn create_v11_indices(conn: &Connection) -> SqlResult<()> {
+    let books_has_group_id: bool = conn.query_row(
+        "SELECT COUNT(*) > 0 FROM pragma_table_info('books') WHERE name = 'group_id'",
+        [],
+        |row| row.get(0),
+    )?;
+    if books_has_group_id {
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_books_group_id ON books(group_id)",
+            [],
+        )?;
+    }
+    if table_exists(conn, "book_groups")? {
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_book_groups_sort_order ON book_groups(sort_order)",
+            [],
+        )?;
+    }
+    if table_exists(conn, "read_records")? {
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_read_records_book_id ON read_records(book_id)",
+            [],
+        )?;
+    }
+    if table_exists(conn, "cookies")? {
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cookies_domain ON cookies(domain)",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -327,6 +461,7 @@ fn migrate_database(conn: &Connection, from_version: i32, to_version: i32) -> Sq
                 8 => migrate_v8(conn)?,
                 9 => migrate_v9(conn)?,
                 10 => migrate_v10(conn)?,
+                11 => migrate_v11(conn)?,
                 _ => {
                     return Err(rusqlite::Error::SqliteFailure(
                         rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
@@ -619,6 +754,165 @@ fn migrate_v10(conn: &Connection) -> SqlResult<()> {
     )?;
     info!("v10: 迁移 {} 条替换规则", migrated);
     Ok(())
+}
+
+/// 版本 11 迁移：补齐 books / bookmarks 字段 + 新增 4 张表
+///
+/// 批次 6（详见 `.trellis/tasks/05-18-db-schema-migration-batch06/prd.md`）。
+///
+/// 字段差异详见 `feature-gap-reader-bookshelf-source.md` §5。本批次只补
+/// 最高优先级的：
+/// - books +5 字段：dur_chapter_index/pos/title/time + group_id
+/// - bookmarks +5 字段：book_name/book_author/chapter_pos/chapter_name/book_text
+/// - 新表：book_groups / read_records / cookies / rule_subs
+///
+/// 故意不动 dict_rules / http_tts / txt_toc_rules / search_keywords / rss_*
+/// —— 这些等后续依赖批次实现对应功能时再加，避免空表无人用。
+///
+/// 防御性写法：
+/// 1. ALTER 前 `pragma_table_info` 检测列已存在 → 跳过（幂等）
+/// 2. ALTER 前先检测表本身存在 → 不存在直接跳过；测试 fixture 里有些
+///    精简 schema 没有 books/bookmarks 表（例如只测 replace_rules 迁移），
+///    迁移链跑过 v11 时不能因这种缺表崩。
+/// 3. CREATE TABLE 都用 `IF NOT EXISTS`
+/// 4. 整个迁移由 `migrate_database` 包在 BEGIN/COMMIT 事务里，失败回滚
+fn migrate_v11(conn: &Connection) -> SqlResult<()> {
+    info!("v11: 补齐 books/bookmarks 字段 + 新增 4 张表（批次 6 schema）");
+
+    // books 加 5 列（仅当 books 表存在）
+    if table_exists(conn, "books")? {
+        let books_columns = [
+            ("dur_chapter_index", "INTEGER DEFAULT 0"),
+            ("dur_chapter_pos", "INTEGER DEFAULT 0"),
+            ("dur_chapter_title", "TEXT"),
+            ("dur_chapter_time", "INTEGER DEFAULT 0"),
+            ("group_id", "INTEGER DEFAULT 0"),
+        ];
+        for (col, col_type) in &books_columns {
+            let has_col: bool = conn.query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('books') WHERE name = ?1",
+                rusqlite::params![col],
+                |row| row.get(0),
+            )?;
+            if !has_col {
+                // col / col_type 都是硬编码常量，format! 在此安全（SQLite
+                // 禁止用占位符绑定 DDL 标识符）。
+                conn.execute(
+                    &format!("ALTER TABLE books ADD COLUMN {} {}", col, col_type),
+                    [],
+                )?;
+            }
+        }
+    }
+
+    // bookmarks 加 5 列（仅当 bookmarks 表存在）
+    if table_exists(conn, "bookmarks")? {
+        let bookmark_columns = [
+            ("book_name", "TEXT"),
+            ("book_author", "TEXT"),
+            ("chapter_pos", "INTEGER DEFAULT 0"),
+            ("chapter_name", "TEXT"),
+            ("book_text", "TEXT"),
+        ];
+        for (col, col_type) in &bookmark_columns {
+            let has_col: bool = conn.query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('bookmarks') WHERE name = ?1",
+                rusqlite::params![col],
+                |row| row.get(0),
+            )?;
+            if !has_col {
+                conn.execute(
+                    &format!("ALTER TABLE bookmarks ADD COLUMN {} {}", col, col_type),
+                    [],
+                )?;
+            }
+        }
+    }
+
+    // 4 张新表 — `IF NOT EXISTS` 保证幂等
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS book_groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            sort_order INTEGER DEFAULT 0,
+            cover TEXT,
+            show INTEGER DEFAULT 1,
+            book_sort INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS read_records (
+            id TEXT PRIMARY KEY,
+            book_id TEXT NOT NULL,
+            book_name TEXT NOT NULL,
+            read_time INTEGER NOT NULL DEFAULT 0,
+            last_read_at INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS cookies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            domain TEXT NOT NULL,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            path TEXT,
+            expires_at INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(domain, key, path)
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS rule_subs (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            url TEXT NOT NULL UNIQUE,
+            sub_type INTEGER DEFAULT 0,
+            custom_order INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )",
+        [],
+    )?;
+
+    // v11 索引 — 必须在 books 加完 group_id + 4 张新表创建后才能跑
+    if table_exists(conn, "books")? {
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_books_group_id ON books(group_id)",
+            [],
+        )?;
+    }
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_book_groups_sort_order ON book_groups(sort_order)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_read_records_book_id ON read_records(book_id)",
+        [],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cookies_domain ON cookies(domain)",
+        [],
+    )?;
+
+    info!("v11: 迁移完成（批次 6 schema）");
+    Ok(())
+}
+
+/// 检查指定表是否存在。批次 6 v11 迁移防御性使用。
+fn table_exists(conn: &Connection, table: &str) -> SqlResult<bool> {
+    conn.query_row(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name = ?1",
+        rusqlite::params![table],
+        |row| row.get(0),
+    )
 }
 
 /// 获取数据库连接（便捷函数）
@@ -1193,5 +1487,534 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 3, "all 3 rules should be migrated to global");
+    }
+
+    // ============================================================
+    // 批次 6 (v11) 迁移测试 — schema 补齐 + 4 张新表
+    // ============================================================
+
+    /// 构造一个"v10 形态"的数据库（只有 v10 schema，user_version=10）。
+    /// books / bookmarks 没有批次 6 (v11) 新增的字段；book_groups /
+    /// read_records / cookies / rule_subs 都不存在。
+    /// 用于 v11 迁移测试。
+    fn build_v10_schema(db_path: &str) {
+        let conn = Connection::open(db_path).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        // app_settings + book_sources（FK 目标）+ books + bookmarks
+        conn.execute(
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "CREATE TABLE book_sources (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                url TEXT NOT NULL UNIQUE,
+                source_type INTEGER DEFAULT 0,
+                group_name TEXT,
+                enabled INTEGER DEFAULT 1,
+                custom_order INTEGER DEFAULT 0,
+                weight INTEGER DEFAULT 0,
+                rule_search TEXT,
+                rule_book_info TEXT,
+                rule_toc TEXT,
+                rule_content TEXT,
+                login_url TEXT,
+                login_ui TEXT,
+                login_check_js TEXT,
+                header TEXT,
+                js_lib TEXT,
+                cover_decode_js TEXT,
+                book_url_pattern TEXT,
+                rule_explore TEXT,
+                explore_url TEXT,
+                enabled_explore INTEGER DEFAULT 1,
+                last_update_time INTEGER DEFAULT 0,
+                book_source_comment TEXT,
+                concurrent_rate TEXT,
+                variable_comment TEXT,
+                explore_screen INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )",
+            [],
+        )
+        .unwrap();
+        // books v10 schema — 没有 dur_chapter_*/group_id
+        conn.execute(
+            "CREATE TABLE books (
+                id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                source_name TEXT,
+                name TEXT NOT NULL,
+                author TEXT,
+                cover_url TEXT,
+                chapter_count INTEGER DEFAULT 0,
+                latest_chapter_title TEXT,
+                intro TEXT,
+                kind TEXT,
+                book_url TEXT,
+                toc_url TEXT,
+                last_check_time INTEGER,
+                last_check_count INTEGER DEFAULT 0,
+                total_word_count INTEGER DEFAULT 0,
+                can_update INTEGER DEFAULT 1,
+                order_time INTEGER NOT NULL,
+                latest_chapter_time INTEGER,
+                custom_cover_path TEXT,
+                custom_info_json TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                FOREIGN KEY (source_id) REFERENCES book_sources(id)
+            )",
+            [],
+        )
+        .unwrap();
+        // bookmarks v10 schema — 没有 book_name/book_author/chapter_pos/chapter_name/book_text
+        conn.execute(
+            "CREATE TABLE bookmarks (
+                id TEXT PRIMARY KEY,
+                book_id TEXT NOT NULL,
+                chapter_index INTEGER NOT NULL,
+                paragraph_index INTEGER DEFAULT 0,
+                content TEXT,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+            )",
+            [],
+        )
+        .unwrap();
+        // 其他批次没碰的 v10 表 — 测试只关心 books/bookmarks，
+        // 但要保证 init_database 走完整的 migrate 链不会因缺表崩。
+        // 直接创建一个 user_version=10 的最小 schema 即可。
+        conn.pragma_update(None, "user_version", 10_i32).unwrap();
+    }
+
+    /// v10 → v11 迁移：books 表加 5 列（dur_chapter_index/pos/title/time +
+    /// group_id），旧数据保留，新列为默认值。
+    #[test]
+    fn test_migrate_v11_adds_book_columns() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir
+            .path()
+            .join("test_migrate_v11_books.db")
+            .to_string_lossy()
+            .to_string();
+
+        build_v10_schema(&db_path);
+
+        // 在 v10 schema 上插入 1 个书源 + 1 本书
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute(
+                "INSERT INTO book_sources (id, name, url, created_at, updated_at)
+                 VALUES ('src1', 'Test', 'https://t.example', 0, 0)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO books (id, source_id, name, order_time, created_at, updated_at)
+                 VALUES ('book1', 'src1', 'Old Book', 100, 0, 0)",
+                [],
+            )
+            .unwrap();
+        }
+
+        // 跑 v11 迁移
+        let migrated = init_database(&db_path).unwrap();
+        assert_eq!(get_db_version(&migrated).unwrap(), DB_VERSION);
+
+        // 5 个新列都存在
+        for col in &[
+            "dur_chapter_index",
+            "dur_chapter_pos",
+            "dur_chapter_title",
+            "dur_chapter_time",
+            "group_id",
+        ] {
+            let has_col: bool = migrated
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM pragma_table_info('books') WHERE name = ?1",
+                    rusqlite::params![col],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(has_col, "books should have {} column after v11", col);
+        }
+
+        // 旧数据保留 + 新字段为默认值（0 / NULL）
+        let (name, dur_idx, dur_pos, dur_title, dur_time, group_id): (
+            String,
+            i32,
+            i32,
+            Option<String>,
+            i64,
+            i64,
+        ) = migrated
+            .query_row(
+                "SELECT name, dur_chapter_index, dur_chapter_pos, dur_chapter_title,
+                        dur_chapter_time, group_id FROM books WHERE id = 'book1'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(name, "Old Book");
+        assert_eq!(dur_idx, 0);
+        assert_eq!(dur_pos, 0);
+        assert!(dur_title.is_none());
+        assert_eq!(dur_time, 0);
+        assert_eq!(group_id, 0);
+    }
+
+    /// v10 → v11 迁移：bookmarks 表加 5 列。
+    #[test]
+    fn test_migrate_v11_adds_bookmark_columns() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir
+            .path()
+            .join("test_migrate_v11_bookmarks.db")
+            .to_string_lossy()
+            .to_string();
+
+        build_v10_schema(&db_path);
+
+        // 在 v10 schema 上插入 1 个书签
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute(
+                "INSERT INTO book_sources (id, name, url, created_at, updated_at)
+                 VALUES ('src1', 'Test', 'https://t.example', 0, 0)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO books (id, source_id, name, order_time, created_at, updated_at)
+                 VALUES ('book1', 'src1', 'Book', 0, 0, 0)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO bookmarks (id, book_id, chapter_index, content, created_at)
+                 VALUES ('bm1', 'book1', 5, 'note', 0)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let migrated = init_database(&db_path).unwrap();
+        assert_eq!(get_db_version(&migrated).unwrap(), DB_VERSION);
+
+        for col in &[
+            "book_name",
+            "book_author",
+            "chapter_pos",
+            "chapter_name",
+            "book_text",
+        ] {
+            let has_col: bool = migrated
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM pragma_table_info('bookmarks') WHERE name = ?1",
+                    rusqlite::params![col],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(has_col, "bookmarks should have {} column after v11", col);
+        }
+
+        // 旧书签 content 保留，新字段为默认值
+        let (content, chapter_pos, book_name): (Option<String>, i32, Option<String>) = migrated
+            .query_row(
+                "SELECT content, chapter_pos, book_name FROM bookmarks WHERE id = 'bm1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(content.as_deref(), Some("note"));
+        assert_eq!(chapter_pos, 0);
+        assert!(book_name.is_none());
+    }
+
+    /// v10 → v11 迁移：4 张新表必须存在且可读写。
+    #[test]
+    fn test_migrate_v11_creates_new_tables() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir
+            .path()
+            .join("test_migrate_v11_new_tables.db")
+            .to_string_lossy()
+            .to_string();
+
+        build_v10_schema(&db_path);
+
+        let migrated = init_database(&db_path).unwrap();
+        assert_eq!(get_db_version(&migrated).unwrap(), DB_VERSION);
+
+        // 4 张表都在 sqlite_master 里
+        for table in &["book_groups", "read_records", "cookies", "rule_subs"] {
+            let exists: bool = migrated
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    rusqlite::params![table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(exists, "table {} should exist after v11", table);
+        }
+
+        // 每张表都能 INSERT + SELECT（基本 schema 完整性）
+        let now = chrono::Utc::now().timestamp();
+        migrated
+            .execute(
+                "INSERT INTO book_groups (name, sort_order, show, book_sort, created_at, updated_at)
+                 VALUES ('全部', 0, 1, 0, ?1, ?1)",
+                rusqlite::params![now],
+            )
+            .unwrap();
+        let group_count: i64 = migrated
+            .query_row("SELECT COUNT(*) FROM book_groups", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(group_count, 1);
+
+        migrated
+            .execute(
+                "INSERT INTO read_records (id, book_id, book_name, read_time, last_read_at, created_at, updated_at)
+                 VALUES ('r1', 'book1', 'Test', 60, ?1, ?1, ?1)",
+                rusqlite::params![now],
+            )
+            .unwrap();
+        let rr_count: i64 = migrated
+            .query_row("SELECT COUNT(*) FROM read_records", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rr_count, 1);
+
+        migrated
+            .execute(
+                "INSERT INTO cookies (domain, key, value, path, expires_at, created_at, updated_at)
+                 VALUES ('example.com', 'sid', 'abc', '/', NULL, ?1, ?1)",
+                rusqlite::params![now],
+            )
+            .unwrap();
+        let cookie_count: i64 = migrated
+            .query_row("SELECT COUNT(*) FROM cookies", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(cookie_count, 1);
+
+        migrated
+            .execute(
+                "INSERT INTO rule_subs (id, name, url, sub_type, custom_order, created_at, updated_at)
+                 VALUES ('rs1', 'sub', 'https://sub.example', 0, 0, ?1, ?1)",
+                rusqlite::params![now],
+            )
+            .unwrap();
+        let rs_count: i64 = migrated
+            .query_row("SELECT COUNT(*) FROM rule_subs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rs_count, 1);
+    }
+
+    /// v11 迁移幂等：重复 invoke 不报错（pragma_table_info 检测 + IF NOT EXISTS）。
+    /// 模拟：先正常迁移到 v11，然后手动调用 migrate_v11 一次再确认表/列都正常。
+    #[test]
+    fn test_migrate_v11_idempotent() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir
+            .path()
+            .join("test_migrate_v11_idempotent.db")
+            .to_string_lossy()
+            .to_string();
+
+        // 第一次：v10 → v11 迁移
+        build_v10_schema(&db_path);
+        let conn = init_database(&db_path).unwrap();
+        assert_eq!(get_db_version(&conn).unwrap(), DB_VERSION);
+
+        // 直接重跑 migrate_v11 — 不能报错，列/表都还在
+        migrate_v11(&conn).unwrap();
+
+        let has_dur_idx: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('books') WHERE name = 'dur_chapter_index'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_dur_idx);
+
+        let table_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN \
+                 ('book_groups', 'read_records', 'cookies', 'rule_subs')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_count, 4);
+    }
+
+    /// 首装路径：fresh init 直接进 v11，schema 应该完整（包括 books 新字段
+    /// + 4 张新表 + cookies UNIQUE 约束）。
+    #[test]
+    fn test_fresh_install_has_v11_schema() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir
+            .path()
+            .join("test_fresh_v11.db")
+            .to_string_lossy()
+            .to_string();
+
+        let conn = init_database(&db_path).unwrap();
+        assert_eq!(get_db_version(&conn).unwrap(), DB_VERSION);
+
+        // books 新列
+        let has_group_id: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('books') WHERE name = 'group_id'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_group_id, "fresh v11 books should have group_id");
+
+        // 4 张新表
+        for table in &["book_groups", "read_records", "cookies", "rule_subs"] {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name = ?1",
+                    rusqlite::params![table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(exists, "fresh v11 should have {} table", table);
+        }
+
+        // cookies UNIQUE(domain, key, path) 约束生效
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO cookies (domain, key, value, path, created_at, updated_at)
+             VALUES ('a.com', 'k', 'v1', '/', ?1, ?1)",
+            rusqlite::params![now],
+        )
+        .unwrap();
+        let dup = conn.execute(
+            "INSERT INTO cookies (domain, key, value, path, created_at, updated_at)
+             VALUES ('a.com', 'k', 'v2', '/', ?1, ?1)",
+            rusqlite::params![now],
+        );
+        assert!(dup.is_err(), "duplicate (domain,key,path) should fail");
+
+        // rule_subs.url UNIQUE 约束生效
+        conn.execute(
+            "INSERT INTO rule_subs (id, name, url, created_at, updated_at)
+             VALUES ('rs1', 'sub', 'https://s.example', ?1, ?1)",
+            rusqlite::params![now],
+        )
+        .unwrap();
+        let dup = conn.execute(
+            "INSERT INTO rule_subs (id, name, url, created_at, updated_at)
+             VALUES ('rs2', 'sub2', 'https://s.example', ?1, ?1)",
+            rusqlite::params![now],
+        );
+        assert!(dup.is_err(), "duplicate rule_subs.url should fail");
+    }
+
+    /// 通过 BookDao 上层 API 验证新字段读写正常 — 防 SELECT/INSERT 列错位。
+    #[test]
+    fn test_book_dao_persists_v11_fields() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir
+            .path()
+            .join("test_book_dao_v11.db")
+            .to_string_lossy()
+            .to_string();
+        let conn = init_database(&db_path).unwrap();
+        // FK 目标
+        conn.execute(
+            "INSERT INTO book_sources (id, name, url, created_at, updated_at)
+             VALUES ('src', 's', 'https://x', 0, 0)",
+            [],
+        )
+        .unwrap();
+        let dao = crate::book_dao::BookDao::new(&conn);
+        let mut book = dao.create("src", None, "Book", None).unwrap();
+        // 默认值
+        assert_eq!(book.dur_chapter_index, 0);
+        assert_eq!(book.dur_chapter_pos, 0);
+        assert!(book.dur_chapter_title.is_none());
+        assert_eq!(book.dur_chapter_time, 0);
+        assert_eq!(book.group_id, 0);
+
+        // 改并 upsert，再读出来
+        book.dur_chapter_index = 12;
+        book.dur_chapter_pos = 345;
+        book.dur_chapter_title = Some("第 12 章".into());
+        book.dur_chapter_time = 1_700_000_000;
+        book.group_id = 7;
+        dao.upsert(&book).unwrap();
+        let r = dao.get_by_id(&book.id).unwrap().unwrap();
+        assert_eq!(r.dur_chapter_index, 12);
+        assert_eq!(r.dur_chapter_pos, 345);
+        assert_eq!(r.dur_chapter_title.as_deref(), Some("第 12 章"));
+        assert_eq!(r.dur_chapter_time, 1_700_000_000);
+        assert_eq!(r.group_id, 7);
+    }
+
+    /// ProgressDao 写读 Bookmark 新字段 — 防 SELECT/INSERT 列错位。
+    #[test]
+    fn test_bookmark_dao_persists_v11_fields() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir
+            .path()
+            .join("test_bookmark_dao_v11.db")
+            .to_string_lossy()
+            .to_string();
+        let conn = init_database(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO book_sources (id, name, url, created_at, updated_at)
+             VALUES ('s', 's', 'https://x', 0, 0)",
+            [],
+        )
+        .unwrap();
+        let book_dao = crate::book_dao::BookDao::new(&conn);
+        let book = book_dao.create("s", None, "Book", None).unwrap();
+        let dao = crate::progress_dao::ProgressDao::new(&conn);
+
+        // 通过便捷函数创建：新字段默认值
+        let bm = dao.create_bookmark(&book.id, 3, 7, Some("note")).unwrap();
+        assert_eq!(bm.chapter_pos, 0);
+        assert!(bm.book_name.is_none());
+
+        // 直接构造完整 Bookmark 并写入
+        let now = chrono::Utc::now().timestamp();
+        let full = crate::models::Bookmark {
+            id: "bm-full".into(),
+            book_id: book.id.clone(),
+            chapter_index: 4,
+            paragraph_index: 0,
+            content: Some("user note".into()),
+            book_name: Some("Book".into()),
+            book_author: Some("Author".into()),
+            chapter_pos: 1234,
+            chapter_name: Some("第 4 章".into()),
+            book_text: Some("片段".into()),
+            created_at: now,
+        };
+        dao.add_bookmark(&full).unwrap();
+        let all = dao.get_bookmarks(&book.id).unwrap();
+        let got = all.iter().find(|b| b.id == "bm-full").unwrap();
+        assert_eq!(got.chapter_pos, 1234);
+        assert_eq!(got.book_name.as_deref(), Some("Book"));
+        assert_eq!(got.book_author.as_deref(), Some("Author"));
+        assert_eq!(got.chapter_name.as_deref(), Some("第 4 章"));
+        assert_eq!(got.book_text.as_deref(), Some("片段"));
     }
 }
