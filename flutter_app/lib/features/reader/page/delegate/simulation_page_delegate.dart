@@ -290,18 +290,52 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
   /// 注意：tap 路径调用栈是 nextPageByAnim → super.nextPageByAnim → goToNext，
   /// 此时 _animStartTouch 已被 _setupTapAnim 设过，跳过；只在原始 drag-end
   /// 路径（_animStartTouch 仍为 null）时主动 setup。
+  ///
+  /// Bug fix（Task 6）：如果 nextPicture 为 null（因任何原因未成功渲染），
+  /// 跳过动画直接翻页，避免"动画期间画面静止，结束后内容跳变"。
   @override
   void goToNext() {
     if (_animStartTouch == null) {
       _setupDragAnim(PageDirection.next);
     }
+    if (nextPicture == null) {
+      debugPrint('[SimulationDelegate] goToNext: nextPicture=null, skipping animation');
+      if (controller.hasNext) {
+        controller.goToNextPage();
+      } else if (controller.boundaryNextPage != null) {
+        controller.commitToNextChapter();
+        onCrossChapter?.call(PageDirection.next);
+      } else {
+        resetState();
+        onChapterBoundary?.call(PageDirection.next);
+        return;
+      }
+      resetState();
+      return;
+    }
     super.goToNext();
   }
 
+  /// 对称修复：prev 路径同样检查 prevPicture。
   @override
   void goToPrev() {
     if (_animStartTouch == null) {
       _setupDragAnim(PageDirection.prev);
+    }
+    if (prevPicture == null) {
+      debugPrint('[SimulationDelegate] goToPrev: prevPicture=null, skipping animation');
+      if (controller.hasPrev) {
+        controller.goToPrevPage();
+      } else if (controller.boundaryPrevPage != null) {
+        controller.commitToPrevChapter();
+        onCrossChapter?.call(PageDirection.prev);
+      } else {
+        resetState();
+        onChapterBoundary?.call(PageDirection.prev);
+        return;
+      }
+      resetState();
+      return;
     }
     super.goToPrev();
   }
@@ -368,10 +402,22 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
     }
 
     if (direction == PageDirection.next && next == null) {
+      if (nextPage != null) {
+        debugPrint('[SimulationDelegate] draw: nextPicture=null BUT nextPage != null, drawing static next');
+        drawStaticPage(canvas, size, nextPage, totalPages);
+        return;
+      }
+      debugPrint('[SimulationDelegate] draw: nextPicture=null AND nextPage=null, drawing static current');
       drawStaticCurrent(canvas, size, currentPage, totalPages);
       return;
     }
     if (direction == PageDirection.prev && prev == null) {
+      if (prevPage != null) {
+        debugPrint('[SimulationDelegate] draw: prevPicture=null BUT prevPage != null, drawing static prev');
+        drawStaticPage(canvas, size, prevPage, totalPages);
+        return;
+      }
+      debugPrint('[SimulationDelegate] draw: prevPicture=null AND prevPage=null, drawing static current');
       drawStaticCurrent(canvas, size, currentPage, totalPages);
       return;
     }

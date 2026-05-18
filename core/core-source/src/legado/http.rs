@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::url::{
     get_charset_from_option, guess_charset_from_response, parse_headers, parse_proxy, LegadoUrl,
@@ -121,13 +121,33 @@ impl Default for LegadoHttpClient {
     fn default() -> Self { Self::new() }
 }
 
+fn is_valid_header_name(name: &str) -> bool {
+    // RFC 7230 token: any 1+ US-ASCII character
+    // except control chars and separators:
+    //   ( ) < > @ , ; : \ " / [ ] ? = { } SP HT
+    if name.is_empty() { return false; }
+    for b in name.bytes() {
+        if b <= 0x20 || b == 0x7f { return false; }   // control + SP
+        if matches!(b, b'(' | b')' | b'<' | b'>' | b'@' | b',' | b';' | b':' | b'\\' | b'"' | b'/' | b'[' | b']' | b'?' | b'=' | b'{' | b'}') { return false; }
+    }
+    true
+}
+
 fn execute_http(
     agent: &ureq::Agent, method: &str, url: &str,
     body: Option<&str>, headers: &[(String, String)], charset: Option<&str>,
 ) -> Result<String, String> {
+    // Filter out headers with invalid names (e.g. from malformed book source config)
+    // instead of failing the entire request.
+    let valid_headers: Vec<_> = headers.iter().filter(|(k, _)| is_valid_header_name(k)).cloned().collect();
+    let skipped = headers.len() - valid_headers.len();
+    if skipped > 0 {
+        debug!("execute_http: skipped {} header(s) with invalid name(s)", skipped);
+    }
+
     let response = if method == "POST" {
         let mut r = agent.post(url);
-        for (k, v) in headers { r = r.header(k, v); }
+        for (k, v) in &valid_headers { r = r.header(k.as_str(), v.as_str()); }
         let b = body.unwrap_or("");
         if !r.headers_ref().is_some_and(|h| h.contains_key("content-type")) {
             let ct = if b.trim_start().starts_with('{') || b.trim_start().starts_with('[') { "application/json" } else { "application/x-www-form-urlencoded" };
@@ -136,7 +156,7 @@ fn execute_http(
         r.send(b)
     } else {
         let mut r = agent.get(url);
-        for (k, v) in headers { r = r.header(k, v); }
+        for (k, v) in &valid_headers { r = r.header(k.as_str(), v.as_str()); }
         r.call()
     };
 

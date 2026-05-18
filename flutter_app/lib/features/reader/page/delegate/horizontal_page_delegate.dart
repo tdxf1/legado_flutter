@@ -37,8 +37,20 @@ abstract class HorizontalPageDelegate extends PageDelegate {
     TextPage? currentPage,
     int totalPages,
   ) {
+    drawStaticPage(canvas, size, currentPage, totalPages);
+  }
+
+  /// 绘制任意 [TextPage] 的静态快照（不带任何变换）。
+  /// 用于仿真翻页等场景：当 pre-rendered picture 不可用时，至少用 TextPage
+  /// 原本的内容填充动画帧，避免"动画播放但画面静止，动画结束后内容跳变"。
+  void drawStaticPage(
+    Canvas canvas,
+    Size size,
+    TextPage? page,
+    int totalPages,
+  ) {
     final painter = ContentPagePainter(
-      page: currentPage,
+      page: page,
       settings: settings,
       totalPages: totalPages,
     );

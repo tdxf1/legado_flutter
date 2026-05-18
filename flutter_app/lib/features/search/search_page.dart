@@ -89,7 +89,12 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
   void _togglePrecisionMode() {
     setState(() => _precisionMode = !_precisionMode);
-    // fire-and-forget：写盘失败仅打日志，不阻塞 UI
+    if (_precisionMode) {
+      final currentResults = _results.value;
+      if (currentResults.isNotEmpty && _lastSearchKeyword.isNotEmpty) {
+        _results.value = SearchPage.applyPrecisionFilter(currentResults, _lastSearchKeyword);
+      }
+    }
     unawaited(saveSearchPrecisionToDisk(_precisionMode));
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -99,9 +104,6 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         ),
       );
     }
-    // 用记忆 keyword 重跑：即便用户清空了 TextField，也能让 toggle 立即对
-    // 已展示的 _results 重过滤。`_doSearch` 仍读 `_searchCtrl.text.trim()`，
-    // 所以先把记忆 keyword 写回 controller 再触发，保证两条路径取到同一份。
     if (_lastSearchKeyword.isNotEmpty) {
       if (_searchCtrl.text != _lastSearchKeyword) {
         _searchCtrl.text = _lastSearchKeyword;

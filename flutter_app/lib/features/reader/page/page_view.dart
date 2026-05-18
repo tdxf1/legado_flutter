@@ -310,6 +310,12 @@ class _PageViewWidgetState extends State<PageViewWidget>
         final size = Size(constraints.maxWidth, constraints.maxHeight);
         _pageSize = size;
         widget.controller.updatePageSize(size);
+        // 关键修复：同步把 size 灌给 delegate，让 tap / 程序化翻页路径
+        // （不走 onDragStart → recordTouchStart）也能用真实尺寸渲染 picture。
+        // 否则 nextPageByAnim 里 pageSize.isEmpty 走 fallback 400x600 →
+        // 动画期间只在左上角显示下一页内容，剩下空白；动画结束后真实尺寸
+        // 重画 → 用户感知"动画完内容才开始变"。
+        _delegate.updatePageSize(size);
 
         return Listener(
           // translucent: don't claim hit-region exclusively, so the outer

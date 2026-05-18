@@ -25,7 +25,7 @@ abstract class PageDelegate {
   ///
   /// 与 [onChapterBoundary] 的分工：
   ///   - onCrossChapter：邻章已就绪，走完整动画 → controller.commit + 这个回调
-  ///   - onChapterBoundary：邻章未就绪，无动画 → 旧 _resetState + 这个回调
+  ///   - onChapterBoundary：邻章未就绪，无动画 → 旧 resetState + 这个回调
   ChapterBoundaryCallback? onCrossChapter;
 
   bool isRunning = false;
@@ -66,6 +66,18 @@ abstract class PageDelegate {
   void recordTouchStart(Offset start, Size size) {
     _startTouch = start;
     _currentTouch = start;
+    _pageSize = size;
+  }
+
+  /// 由 [PageViewWidget] 的 LayoutBuilder 在尺寸确定后同步给 delegate，
+  /// 让 tap / 程序化翻页路径（不走 drag → recordTouchStart）也能拿到正确
+  /// 的页尺寸渲染 picture。
+  ///
+  /// 修复：tap 翻页时 [_pageSize] 仍是 [Size.zero] → [nextPageByAnim] 内
+  /// 用 fallback 400x600 渲染 nextPicture → 实际屏幕 1080x2400 → 动画期间
+  /// 用户只看到左上角 400x600 的下一页，剩下空白；动画结束后 painter 用真
+  /// 实尺寸重画 → "动画完才内容才开始变"的体感来源。
+  void updatePageSize(Size size) {
     _pageSize = size;
   }
 
@@ -176,7 +188,7 @@ abstract class PageDelegate {
     } else if (_direction == PageDirection.prev) {
       goToPrev();
     } else {
-      _resetState();
+      resetState();
     }
   }
 
@@ -198,7 +210,7 @@ abstract class PageDelegate {
       return;
     }
     // fallback：邻章未就绪，旧 boundary 路径（无动画 setState）。
-    _resetState();
+    resetState();
     onChapterBoundary?.call(PageDirection.next);
   }
 
@@ -219,7 +231,7 @@ abstract class PageDelegate {
       return;
     }
     // fallback
-    _resetState();
+    resetState();
     onChapterBoundary?.call(PageDirection.prev);
   }
 
@@ -228,7 +240,7 @@ abstract class PageDelegate {
   /// 默认空实现 — cover/slide/fade/noAnim 不需要。
   void onAnimTick(double progress) {}
 
-  /// 子类钩子（X1.9）：动画 forward 完成 + onComplete + _resetState 之后调用。
+  /// 子类钩子（X1.9）：动画 forward 完成 + onComplete + resetState 之后调用。
   /// simulation 用它清理 lerp 字段（_animStartTouch 等），避免上次 anim 残留
   /// 让下一次 drag 路径的 `if (_animStartTouch == null)` guard 误判。
   /// 默认空实现。
@@ -242,12 +254,12 @@ abstract class PageDelegate {
     animController.forward(from: animController.value).then((_) {
       animController.removeListener(tick);
       onComplete();
-      _resetState();
+      resetState();
       onAnimEnd();
     });
   }
 
-  void _resetState() {
+  void resetState() {
     _direction = PageDirection.none;
     _dragOffset = 0;
     isRunning = false;
@@ -312,6 +324,7 @@ abstract class PageDelegate {
     if (isRunning) return;
     // fallback：同章无下页 + 邻章未灌入 → 走旧 boundary 路径。
     if (!controller.hasNext && controller.boundaryNextPage == null) {
+      debugPrint('[PageDelegate] nextPageByAnim: fallback boundary (no hasNext + no boundaryNextPage)');
       onChapterBoundary?.call(PageDirection.next);
       return;
     }
@@ -322,6 +335,7 @@ abstract class PageDelegate {
     nextPicture = _renderPage(size, effectiveNext);
     final effectivePrev = controller.prevPage ?? controller.boundaryPrevPage;
     prevPicture = _renderPage(size, effectivePrev);
+    debugPrint('[PageDelegate] nextPageByAnim: hasNext=${controller.hasNext} cur=$curPicture next=$nextPicture prev=$prevPicture');
     goToNext();
   }
 
@@ -331,6 +345,7 @@ abstract class PageDelegate {
   void prevPageByAnim(int animationSpeed) {
     if (isRunning) return;
     if (!controller.hasPrev && controller.boundaryPrevPage == null) {
+      debugPrint('[PageDelegate] prevPageByAnim: fallback boundary (no hasPrev + no boundaryPrevPage)');
       onChapterBoundary?.call(PageDirection.prev);
       return;
     }
@@ -341,6 +356,7 @@ abstract class PageDelegate {
     nextPicture = _renderPage(size, effectiveNext);
     final effectivePrev = controller.prevPage ?? controller.boundaryPrevPage;
     prevPicture = _renderPage(size, effectivePrev);
+    debugPrint('[PageDelegate] prevPageByAnim: hasPrev=${controller.hasPrev} cur=$curPicture next=$nextPicture prev=$prevPicture');
     goToPrev();
   }
 
