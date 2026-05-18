@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../../core/providers.dart';
+import 'tap_zone_config_dialog.dart';
 
 class ReaderSettingsSheet extends StatefulWidget {
   final ReaderSettings initial;
@@ -334,6 +335,32 @@ class _ReaderSettingsSheetState extends State<ReaderSettingsSheet> {
                 value: _s.volumeKeyPageOnTts,
                 dense: true,
                 onChanged: (v) => _update(_s.copyWith(volumeKeyPageOnTts: v)),
+              ),
+              const SizedBox(height: 12),
+              // 批次 3 (05-18): 点击区域 3×3 配置入口。dialog 弹出后用户编辑
+              // 9 个格子的动作，确定时返回 List<int> 写回 settings.tapZones。
+              Text('点击区域', style: label),
+              const SizedBox(height: 4),
+              ListTile(
+                title: Text('自定义点击区域', style: label),
+                subtitle: Text(
+                  '阅读区 9 格各自的点击行为（上一页 / 下一页 / 菜单 / 无）',
+                  style: TextStyle(
+                      color: fg.withValues(alpha: 0.6), fontSize: 12),
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                onTap: () async {
+                  final result = await showDialog<List<int>>(
+                    context: ctx,
+                    builder: (_) =>
+                        TapZoneConfigDialog(initialZones: _s.tapZones),
+                  );
+                  if (result != null) {
+                    _update(_s.copyWith(tapZones: result));
+                  }
+                },
               ),
             ]),
       ),

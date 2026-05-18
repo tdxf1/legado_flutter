@@ -23,6 +23,7 @@ import 'services/reader_auto_scroller.dart';
 import 'services/reader_progress_service.dart';
 import 'services/reader_bookmark_service.dart';
 import 'services/reader_key_handler.dart';
+import 'services/tap_zone_resolver.dart';
 import 'state/reader_search_controller.dart' as rsc;
 import 'widgets/reader_settings_sheet.dart';
 import 'widgets/reader_search_bar.dart';
@@ -1763,22 +1764,10 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         settings: _settings,
         controlsVisible: _controlsVisible,
         ttsSpeaking: _tts.isSpeaking,
-        onPrev: () {
-          final pvc = _pageViewController;
-          if (pvc?.onTapPrev != null) {
-            pvc!.onTapPrev!();
-          } else if (pvc != null && !pvc.goToPrevPage()) {
-            _onPageChapterBoundary(PageDirection.prev);
-          }
-        },
-        onNext: () {
-          final pvc = _pageViewController;
-          if (pvc?.onTapNext != null) {
-            pvc!.onTapNext!();
-          } else if (pvc != null && !pvc.goToNextPage()) {
-            _onPageChapterBoundary(PageDirection.next);
-          }
-        },
+        // 批次 3 (05-18): 复用 _doTapPrev / _doTapNext，与 onTapUp / 物理键
+        // 走同一条翻页 helper，避免两路 fallback 链漂移。
+        onPrev: _doTapPrev,
+        onNext: _doTapNext,
       ),
       child: AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle(
@@ -1808,32 +1797,40 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                       child: GestureDetector(
                         behavior: HitTestBehavior.opaque,
                         onTapUp: (details) {
-                          final width = MediaQuery.of(context).size.width;
-                          if (isPage) {
-                            final pvc = _pageViewController;
-                            if (pvc != null) {
-                              if (details.localPosition.dx < width / 3) {
-                                // Bug 2.5: 优先走 delegate 动画，回退到瞬切
-                                if (pvc.onTapPrev != null) {
-                                  pvc.onTapPrev!();
-                                } else if (!pvc.goToPrevPage()) {
-                                  _onPageChapterBoundary(PageDirection.prev);
-                                }
-                                return;
-                              } else if (details.localPosition.dx >
-                                  width * 2 / 3) {
-                                if (pvc.onTapNext != null) {
-                                  pvc.onTapNext!();
-                                } else if (!pvc.goToNextPage()) {
-                                  _onPageChapterBoundary(PageDirection.next);
-                                }
-                                return;
-                              }
-                            }
+                          // 批次 3 (05-18): 3×3 点击区域配置。
+                          // 滚动模式（!isPage）保持单一中央点击切 menu 的旧行为，
+                          // 因为滚动模式下没有"翻页"语义可分派。
+                          if (!isPage) {
                             _toggleControls();
                             return;
                           }
-                          _toggleControls();
+                          // 用本 GestureDetector 自身的 RenderBox 尺寸（与
+                          // details.localPosition 同坐标系）；理论上不应为 null，
+                          // 兜底到 MediaQuery.size 仍是合理 fallback。
+                          final box = context.findRenderObject() as RenderBox?;
+                          final size =
+                              box?.size ?? MediaQuery.of(context).size;
+                          final idx = tapZoneIndex(
+                            details.localPosition.dx,
+                            details.localPosition.dy,
+                            size.width,
+                            size.height,
+                          );
+                          final action =
+                              resolveTapAction(_settings.tapZones, idx);
+                          switch (action) {
+                            case TapZoneAction.prevPage:
+                              _doTapPrev();
+                              break;
+                            case TapZoneAction.nextPage:
+                              _doTapNext();
+                              break;
+                            case TapZoneAction.showMenu:
+                              _toggleControls();
+                              break;
+                            case TapZoneAction.nothing:
+                              break;
+                          }
                         },
                         child: NotificationListener<OverscrollNotification>(
                           onNotification:
@@ -2129,6 +2126,34 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       _loadPageModeChapter(_currentIndex + 1);
     } else if (dir == PageDirection.prev && _currentIndex > 0) {
       _loadPageModeChapter(_currentIndex - 1);
+    }
+  }
+
+  /// 批次 3 (05-18): 触发"上一页"。
+  /// 优先走 delegate 动画（`onTapPrev`），其次 controller 直跳页；都失败 →
+  /// 走 [_onPageChapterBoundary] 的章节边界 fallback（无动画切上一章）。
+  ///
+  /// 与 [_onPageChapterBoundary] 的区别：本方法是"用户主动 tap / 物理键"
+  /// 入口，会走 controller.onTapPrev 的动画路径；boundary 是动画完成后的
+  /// 跨章 fallback。
+  void _doTapPrev() {
+    final pvc = _pageViewController;
+    if (pvc == null) return;
+    if (pvc.onTapPrev != null) {
+      pvc.onTapPrev!();
+    } else if (!pvc.goToPrevPage()) {
+      _onPageChapterBoundary(PageDirection.prev);
+    }
+  }
+
+  /// 批次 3 (05-18): 触发"下一页"。语义对称 [_doTapPrev]。
+  void _doTapNext() {
+    final pvc = _pageViewController;
+    if (pvc == null) return;
+    if (pvc.onTapNext != null) {
+      pvc.onTapNext!();
+    } else if (!pvc.goToNextPage()) {
+      _onPageChapterBoundary(PageDirection.next);
     }
   }
 

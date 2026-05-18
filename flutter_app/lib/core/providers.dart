@@ -613,6 +613,27 @@ class ReaderSettings {
   /// 朗读中音量键依旧翻页，调音量需要靠系统音量条手动调节。
   final bool volumeKeyPageOnTts;
 
+  /// 批次 3 (05-18): 阅读器 3×3 点击区域配置。9 个槽位，索引顺序：
+  /// `[0=左上, 1=上, 2=右上, 3=左, 4=中, 5=右, 6=左下, 7=下, 8=右下]`。
+  /// 每个值：0=prevPage / 1=nextPage / 2=showMenu / 3=nothing。
+  ///
+  /// 默认 [tapZonesDefault] = `[2,2,2,2,2,2,0,1,1]`：上半屏 + 中排全菜单、
+  /// 左下 prev、下中 + 右下 next（移动端单手习惯：下排操作翻页、上排出菜单）。
+  ///
+  /// 仍保 schema=v6（与 batch01/02 同模式：fromJson 缺字段 fallback 默认列表，
+  /// 不强升 settingsVersion）。
+  final List<int> tapZones;
+
+  /// 批次 3 默认预设：左下 prev、下中 next、右下 next、其余 menu（单手翻页）。
+  static const List<int> tapZonesDefault = [2, 2, 2, 2, 2, 2, 0, 1, 1];
+
+  /// 批次 3 经典预设：上半屏左 prev / 上半屏右 next / 中间 menu / 下半屏左 next /
+  /// 下半屏右 next。`[0,0,0,0,2,1,1,1,1]` — 经典 GPS 类阅读器布局。
+  static const List<int> tapZonesClassic = [0, 0, 0, 0, 2, 1, 1, 1, 1];
+
+  /// 批次 3 全屏菜单预设：9 格全 showMenu，靠音量键 / 物理键翻页。
+  static const List<int> tapZonesFullMenu = [2, 2, 2, 2, 2, 2, 2, 2, 2];
+
   const ReaderSettings({
     this.fontSize = 18.0,
     this.fontWeightIndex = 1,
@@ -640,6 +661,7 @@ class ReaderSettings {
     this.keepScreenOn = true,
     this.enableVolumeKeyPage = true,
     this.volumeKeyPageOnTts = false,
+    this.tapZones = tapZonesDefault,
   });
 
   static const List<int> fontWeightValues = [400, 700, 900];
@@ -705,6 +727,7 @@ class ReaderSettings {
     bool? keepScreenOn,
     bool? enableVolumeKeyPage,
     bool? volumeKeyPageOnTts,
+    List<int>? tapZones,
   }) {
     return ReaderSettings(
       fontSize: fontSize ?? this.fontSize,
@@ -733,6 +756,7 @@ class ReaderSettings {
       keepScreenOn: keepScreenOn ?? this.keepScreenOn,
       enableVolumeKeyPage: enableVolumeKeyPage ?? this.enableVolumeKeyPage,
       volumeKeyPageOnTts: volumeKeyPageOnTts ?? this.volumeKeyPageOnTts,
+      tapZones: tapZones ?? this.tapZones,
     );
   }
 
@@ -769,6 +793,7 @@ class ReaderSettings {
         'keepScreenOn': keepScreenOn,
         'enableVolumeKeyPage': enableVolumeKeyPage,
         'volumeKeyPageOnTts': volumeKeyPageOnTts,
+        'tapZones': tapZones,
       };
 
   factory ReaderSettings.fromJson(Map<String, dynamic> json) {
@@ -831,8 +856,27 @@ class ReaderSettings {
       // 走"缺字段 fallback 默认值"路径，不强升 settingsVersion）。
       enableVolumeKeyPage: json['enableVolumeKeyPage'] as bool? ?? true,
       volumeKeyPageOnTts: json['volumeKeyPageOnTts'] as bool? ?? false,
+      // 批次 3 (05-18): 3×3 点击区域。缺字段 fallback 默认列表；长度异常
+      // 也回退默认（避免老/损坏 JSON 把 9 槽位破成 5/3 长度引发越界）。
+      tapZones: _parseTapZones(json['tapZones']),
     );
   }
+}
+
+/// 批次 3 (05-18): 解析 JSON 里的 tapZones 字段。
+/// - null / 类型不对 → 回退默认 [ReaderSettings.tapZonesDefault]
+/// - 长度 != 9       → 回退默认（数据损坏防御）
+/// - 元素类型不是 int → 用 0..3 范围 clamp，非 int 直接当 2 (showMenu)
+/// 返回的 List 是新的可修改副本（避免引用 const 默认列表后被外部 mutate）。
+List<int> _parseTapZones(dynamic raw) {
+  if (raw is! List) return List<int>.from(ReaderSettings.tapZonesDefault);
+  if (raw.length != 9) return List<int>.from(ReaderSettings.tapZonesDefault);
+  return List<int>.generate(9, (i) {
+    final v = raw[i];
+    if (v is int) return v.clamp(0, 3);
+    if (v is num) return v.toInt().clamp(0, 3);
+    return 2; // showMenu 兜底
+  });
 }
 
 final readerSettingsProvider = StateProvider<ReaderSettings>((ref) => const ReaderSettings());
