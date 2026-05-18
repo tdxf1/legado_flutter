@@ -202,6 +202,15 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       if (mounted) {
         _setReaderSettings(s, markLoaded: true);
       }
+    }).catchError((Object e) {
+      // T1 followup #2：磁盘读失败也要置 _readerSettingsLoaded=true，
+      // 避免 build() 永远卡在 loading 不触发 _restoreProgress。
+      debugPrint('[Reader] loadReaderSettingsFromDisk failed: $e');
+      if (mounted) {
+        setState(() {
+          _readerSettingsLoaded = true;
+        });
+      }
     });
     _loadBookmarks();
     _tts.init(
@@ -1012,7 +1021,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       bookId: widget.bookId,
     );
     debugPrint(
-        '[Reader.T1] restoreProgress: saved=$saved bookId=${widget.bookId}');
+        '[Reader.T1] restoreProgress: saved=$saved bookId=${widget.bookId} settingsLoaded=$_readerSettingsLoaded pageAnim=${_settings.pageAnim} isScrollMode=${_settings.isScrollMode}');
     if (saved == null) {
       debugPrint(
           '[Reader.T1] restoreProgress: NO saved, fallback widget.chapterIndex=${widget.chapterIndex}');
@@ -1543,7 +1552,13 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
 
     return chaptersAsync.when(
       data: (chapters) {
-        if (chapters.isNotEmpty && !_progressRestored) {
+        // T1 followup #2 (05-18 fix5)：必须等 _readerSettingsLoaded 才能
+        // 触发 _restoreProgress。原因——_settings 默认是 scroll 模式
+        // (ReaderPageAnim.scroll=5)，loadReaderSettingsFromDisk 是 fire-
+        // and-forget；如果 chapters 比 settings 先 load 完（缓存命中常见），
+        // _restoreProgress 跑时 _settings.isScrollMode 仍是 true → 走滚动
+        // 分支不设 _restoreCharOffset → 恢复链路完全失效，落回章首页。
+        if (chapters.isNotEmpty && !_progressRestored && _readerSettingsLoaded) {
           _progressRestored = true;
           _cachedChapters = chapters;
           Future.microtask(() => _restoreProgress(chapters));
