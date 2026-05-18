@@ -252,6 +252,17 @@ class _ReaderSettingsSheetState extends State<ReaderSettingsSheet> {
                     ),
                 ],
               ),
+              const SizedBox(height: 12),
+              Text('翻页动画时长: ${_s.pageAnimDurationMs} ms', style: label),
+              Slider(
+                value: _s.pageAnimDurationMs.toDouble(),
+                min: 200,
+                max: 1000,
+                divisions: 16,
+                label: '${_s.pageAnimDurationMs} ms',
+                onChanged: (v) =>
+                    _update(_s.copyWith(pageAnimDurationMs: v.round())),
+              ),
             ]),
       ),
     );

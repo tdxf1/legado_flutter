@@ -386,7 +386,8 @@ enum ReaderRenderMode {
 ///   PageMode 旧枚举（同 v1） → 见 [migrateFromV2]
 /// - settingsVersion == 3：pageAnim (0=cover...4=noAnim, 无 scroll) +
 ///   PageMode (0=continuousScroll, 1=page)，两者并存 → 见 [migrateFromV3]
-/// - settingsVersion == 4：当前。pageAnim 含 scroll，PageMode 已废弃。
+/// - settingsVersion == 4：pageAnim 含 scroll，PageMode 已废弃。
+/// - settingsVersion == 5：当前。新增 pageAnimDurationMs（int，默认 300）。
 class ReaderPageAnim {
   static const int cover = 0;
   static const int slide = 1;
@@ -494,8 +495,9 @@ int overlayPageModeOnAnim({
 /// - 1（或缺省）：pageAnim 旧语义 (0=无, 2=cover, 3=slide) + PageMode 含 tapChapter
 /// - 2：pageAnim Legado MD3 (0=cover...5=noAnim) + PageMode 仍含 tapChapter
 /// - 3：删除 PageAnim.scroll，删除 PageMode.tapChapter（PageMode 仍存在）
-/// - 4：合并 PageMode 进 PageAnim（scroll = 原 continuousScroll，当前版本）
-const int kReaderSettingsCurrentVersion = 4;
+/// - 4：合并 PageMode 进 PageAnim（scroll = 原 continuousScroll）
+/// - 5：新增 `pageAnimDurationMs`（int，默认 300）—— 翻页动画时长可配（当前版本）
+const int kReaderSettingsCurrentVersion = 5;
 
 class ReaderSettings {
   final double fontSize;
@@ -520,6 +522,12 @@ class ReaderSettings {
   final bool showProgress;
   final double ttsSpeed;
 
+  /// 翻页动画时长（毫秒）。tap / drag fling 共用同一个 [AnimationController]
+  /// 的 duration；调大此值可放慢仿真翻页折角弹起的过程。
+  ///
+  /// 默认 300ms（对齐 Legado MD3 原版体感），UI Slider 提供 200..1000ms 范围。
+  final int pageAnimDurationMs;
+
   const ReaderSettings({
     this.fontSize = 18.0,
     this.fontWeightIndex = 1,
@@ -542,6 +550,7 @@ class ReaderSettings {
     this.showClock = true,
     this.showProgress = true,
     this.ttsSpeed = 0.5,
+    this.pageAnimDurationMs = 300,
   });
 
   static const List<int> fontWeightValues = [400, 700, 900];
@@ -602,6 +611,7 @@ class ReaderSettings {
     bool? showClock,
     bool? showProgress,
     double? ttsSpeed,
+    int? pageAnimDurationMs,
   }) {
     return ReaderSettings(
       fontSize: fontSize ?? this.fontSize,
@@ -625,6 +635,7 @@ class ReaderSettings {
       showClock: showClock ?? this.showClock,
       showProgress: showProgress ?? this.showProgress,
       ttsSpeed: ttsSpeed ?? this.ttsSpeed,
+      pageAnimDurationMs: pageAnimDurationMs ?? this.pageAnimDurationMs,
     );
   }
 
@@ -656,6 +667,7 @@ class ReaderSettings {
         'showClock': showClock,
         'showProgress': showProgress,
         'ttsSpeed': ttsSpeed,
+        'pageAnimDurationMs': pageAnimDurationMs,
       };
 
   factory ReaderSettings.fromJson(Map<String, dynamic> json) {
@@ -708,6 +720,8 @@ class ReaderSettings {
       showClock: json['showClock'] as bool? ?? true,
       showProgress: json['showProgress'] as bool? ?? true,
       ttsSpeed: (json['ttsSpeed'] as num?)?.toDouble() ?? 0.5,
+      // v5 新字段；v ≤ 4 旧 JSON 缺省 fallback 到 300ms（与默认值一致）。
+      pageAnimDurationMs: (json['pageAnimDurationMs'] as int?) ?? 300,
     );
   }
 }

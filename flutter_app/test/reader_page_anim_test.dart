@@ -149,21 +149,21 @@ void main() {
       expect(ReaderPageAnim.max, 5);
     });
 
-    test('toJson 总是写 settingsVersion=4，且没有 pageMode 字段', () {
+    test('toJson 总是写 kReaderSettingsCurrentVersion，且没有 pageMode 字段', () {
       const s = ReaderSettings(pageAnim: ReaderPageAnim.scroll);
       final j = s.toJson();
-      expect(j['settingsVersion'], 4);
+      expect(j['settingsVersion'], kReaderSettingsCurrentVersion);
       expect(j['pageAnim'], ReaderPageAnim.scroll);
       expect(j.containsKey('pageMode'), isFalse);
     });
 
-    test('round-trip: v1 continuousScroll → v4 scroll 持久', () {
+    test('round-trip: v1 continuousScroll → 当前版本 scroll 持久', () {
       final v1 = {'pageMode': 0, 'pageAnim': 0};
       final s1 = ReaderSettings.fromJson(v1);
       final j2 = s1.toJson();
       final s2 = ReaderSettings.fromJson(j2);
       expect(s2.pageAnim, ReaderPageAnim.scroll);
-      expect(j2['settingsVersion'], 4);
+      expect(j2['settingsVersion'], kReaderSettingsCurrentVersion);
     });
 
     test('round-trip: v3 page+simulation → v4 simulation', () {

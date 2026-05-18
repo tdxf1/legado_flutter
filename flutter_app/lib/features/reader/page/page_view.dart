@@ -71,7 +71,8 @@ class _PageViewWidgetState extends State<PageViewWidget>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.pageAnim != widget.pageAnim ||
         oldWidget.settings.effectiveTextColor != widget.settings.effectiveTextColor ||
-        oldWidget.settings.effectiveBackgroundColor != widget.settings.effectiveBackgroundColor) {
+        oldWidget.settings.effectiveBackgroundColor != widget.settings.effectiveBackgroundColor ||
+        oldWidget.settings.pageAnimDurationMs != widget.settings.pageAnimDurationMs) {
       _createDelegate();
     }
   }
@@ -94,7 +95,7 @@ class _PageViewWidgetState extends State<PageViewWidget>
     _animController?.dispose();
     _animController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 300),
+      duration: Duration(milliseconds: widget.settings.pageAnimDurationMs),
     );
 
     final ctrl = widget.controller;
@@ -173,8 +174,11 @@ class _PageViewWidgetState extends State<PageViewWidget>
 
     // Bug 2.5: 把 onTapNext/onTapPrev 注入 controller，让外层（reader_page）
     // 点击屏幕左/右 1/3 时通过 delegate 跑动画再切页。
-    ctrl.onTapNext = () => _delegate.nextPageByAnim(300);
-    ctrl.onTapPrev = () => _delegate.prevPageByAnim(300);
+    // 动画时长由 settings.pageAnimDurationMs 决定（与 AnimationController
+    // duration 一致），用户在设置面板调节滑块即可改变 tap / drag fling 时长。
+    final animMs = widget.settings.pageAnimDurationMs;
+    ctrl.onTapNext = () => _delegate.nextPageByAnim(animMs);
+    ctrl.onTapPrev = () => _delegate.prevPageByAnim(animMs);
 
     // Test-only hook — see [PageViewWidget.debugDelegateSink].
     widget.debugDelegateSink?.call(_delegate);
