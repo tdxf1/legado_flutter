@@ -29,6 +29,7 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
     required super.settings,
     required super.animController,
     super.onChapterBoundary,
+    super.onCrossChapter,
     SimulationDegradeController? degrade,
   }) : degrade = degrade ?? SimulationDegradeController();
 

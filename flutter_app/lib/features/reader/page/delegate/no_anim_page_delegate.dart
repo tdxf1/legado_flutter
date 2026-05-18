@@ -9,6 +9,7 @@ class NoAnimPageDelegate extends PageDelegate {
     required super.settings,
     required super.animController,
     super.onChapterBoundary,
+    super.onCrossChapter,
   });
 
   @override

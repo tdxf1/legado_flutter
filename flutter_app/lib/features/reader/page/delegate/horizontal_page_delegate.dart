@@ -26,6 +26,7 @@ abstract class HorizontalPageDelegate extends PageDelegate {
     required super.settings,
     required super.animController,
     super.onChapterBoundary,
+    super.onCrossChapter,
   });
 
   /// 子类在 direction == none 且没有 picture 缓存时，可调用此方法直接绘制

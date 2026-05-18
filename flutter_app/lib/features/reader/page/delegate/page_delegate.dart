@@ -12,7 +12,21 @@ abstract class PageDelegate {
   final PageViewController controller;
   final ReaderSettings settings;
   final AnimationController animController;
+
+  /// 章末/章首 fallback 路径回调：邻章未灌入或未就绪时调用。
+  /// 调用方（ReaderPage）走旧 `_onPageChapterBoundary` 异步加载下一章 →
+  /// loadChapter → setState 路径（无动画切章，与现状一致）。
   ChapterBoundaryCallback? onChapterBoundary;
+
+  /// Subtask C：跨章动画完成后的"真切章"回调。delegate 在动画 forward 完成
+  /// 时已经调过 [PageViewController.commitToNextChapter] / commitToPrevChapter，
+  /// 把邻章提升为 currentChapter；这里通知外层 ReaderPage 同步
+  /// `_currentIndex` / `_chapterContent` / saveProgress / 重新预加载新邻章。
+  ///
+  /// 与 [onChapterBoundary] 的分工：
+  ///   - onCrossChapter：邻章已就绪，走完整动画 → controller.commit + 这个回调
+  ///   - onChapterBoundary：邻章未就绪，无动画 → 旧 _resetState + 这个回调
+  ChapterBoundaryCallback? onCrossChapter;
 
   bool isRunning = false;
   PageDirection _direction = PageDirection.none;
@@ -28,6 +42,7 @@ abstract class PageDelegate {
     required this.settings,
     required this.animController,
     this.onChapterBoundary,
+    this.onCrossChapter,
   });
 
   PageDirection get direction => _direction;
@@ -63,8 +78,14 @@ abstract class PageDelegate {
   void onDragStart(Size pageSize, TextPage? cur, TextPage? next, TextPage? prev) {
     _clearPictures();
     curPicture = _renderPage(pageSize, cur);
-    nextPicture = _renderPage(pageSize, next);
-    prevPicture = _renderPage(pageSize, prev);
+    // C.4: 章末 / 章首边界场景下 controller.nextPage / prevPage 是 null，
+    // 但邻章已经通过 setNeighborChapter 灌入；此时 fallback 到
+    // boundaryNextPage / boundaryPrevPage 渲染邻章首/末页，让动画过程中
+    // nextPicture / prevPicture 不为 null，实现完整跨章动画。
+    final effectiveNext = next ?? controller.boundaryNextPage;
+    nextPicture = _renderPage(pageSize, effectiveNext);
+    final effectivePrev = prev ?? controller.boundaryPrevPage;
+    prevPicture = _renderPage(pageSize, effectivePrev);
   }
 
   /// Release pre-rendered resources
@@ -124,11 +145,19 @@ abstract class PageDelegate {
     }
 
     final progress = (_dragOffset.abs() / totalWidth).clamp(0.0, 1.0);
-    if (_direction == PageDirection.prev && !controller.hasPrev) {
+    // Subtask C：drag 期间 progress 推进的"边界守门"。同章 hasPrev/hasNext
+    // 不通过时，如果 controller 的 boundaryPrevPage / boundaryNextPage
+    // 已就绪（外层灌过邻章），允许 progress 继续推进，让用户在跨章拖动
+    // 时也能看到完整动画；都没有时再 pin 在 0（与旧行为一致）。
+    if (_direction == PageDirection.prev &&
+        !controller.hasPrev &&
+        controller.boundaryPrevPage == null) {
       animController.value = 0;
       return;
     }
-    if (_direction == PageDirection.next && !controller.hasNext) {
+    if (_direction == PageDirection.next &&
+        !controller.hasNext &&
+        controller.boundaryNextPage == null) {
       animController.value = 0;
       return;
     }
@@ -152,23 +181,46 @@ abstract class PageDelegate {
   }
 
   void goToNext() {
-    if (!controller.hasNext) {
-      _resetState();
-      onChapterBoundary?.call(PageDirection.next);
+    // 同章：直接走 goToNextPage（旧路径）
+    if (controller.hasNext) {
+      _direction = PageDirection.next;
+      _runAnimation(() => controller.goToNextPage());
       return;
     }
-    _direction = PageDirection.next;
-    _runAnimation(() => controller.goToNextPage());
+    // 跨章动画路径：邻章已 measure 好（外层调过 setNeighborChapter），
+    // 走完整 forward 动画后调 commitToNextChapter 切章 + 通知外层。
+    if (controller.boundaryNextPage != null) {
+      _direction = PageDirection.next;
+      _runAnimation(() {
+        controller.commitToNextChapter();
+        onCrossChapter?.call(PageDirection.next);
+      });
+      return;
+    }
+    // fallback：邻章未就绪，旧 boundary 路径（无动画 setState）。
+    _resetState();
+    onChapterBoundary?.call(PageDirection.next);
   }
 
   void goToPrev() {
-    if (!controller.hasPrev) {
-      _resetState();
-      onChapterBoundary?.call(PageDirection.prev);
+    // 同章：直接走 goToPrevPage
+    if (controller.hasPrev) {
+      _direction = PageDirection.prev;
+      _runAnimation(() => controller.goToPrevPage());
       return;
     }
-    _direction = PageDirection.prev;
-    _runAnimation(() => controller.goToPrevPage());
+    // 跨章动画路径
+    if (controller.boundaryPrevPage != null) {
+      _direction = PageDirection.prev;
+      _runAnimation(() {
+        controller.commitToPrevChapter();
+        onCrossChapter?.call(PageDirection.prev);
+      });
+      return;
+    }
+    // fallback
+    _resetState();
+    onChapterBoundary?.call(PageDirection.prev);
   }
 
   void _runAnimation(VoidCallback onComplete) {
@@ -238,32 +290,42 @@ abstract class PageDelegate {
   /// curPicture/nextPicture/prevPicture。点击翻页路径上没有 drag，所以这里
   /// 主动生成一次 picture，让动画期间能正确绘制。
   /// [animationSpeed] 单位毫秒，目前作为 hint，子类可使用。
+  ///
+  /// Subtask C：章末时如果 boundaryNextPage 已就绪，使用其渲染 nextPicture
+  /// 让跨章 tap 翻页也能播放完整动画；都没有时回 fallback boundary callback。
   void nextPageByAnim(int animationSpeed) {
     if (isRunning) return;
-    if (!controller.hasNext) {
+    // fallback：同章无下页 + 邻章未灌入 → 走旧 boundary 路径。
+    if (!controller.hasNext && controller.boundaryNextPage == null) {
       onChapterBoundary?.call(PageDirection.next);
       return;
     }
     final size = pageSize.isEmpty ? const Size(400, 600) : pageSize;
     _clearPictures();
     curPicture = _renderPage(size, controller.currentPage);
-    nextPicture = _renderPage(size, controller.nextPage);
-    prevPicture = _renderPage(size, controller.prevPage);
+    final effectiveNext = controller.nextPage ?? controller.boundaryNextPage;
+    nextPicture = _renderPage(size, effectiveNext);
+    final effectivePrev = controller.prevPage ?? controller.boundaryPrevPage;
+    prevPicture = _renderPage(size, effectivePrev);
     goToNext();
   }
 
   /// 程序化"上一页"触发（按键 / 自动翻页 / 点击翻页）。
+  ///
+  /// Subtask C：章首时如果 boundaryPrevPage 已就绪走完整动画。
   void prevPageByAnim(int animationSpeed) {
     if (isRunning) return;
-    if (!controller.hasPrev) {
+    if (!controller.hasPrev && controller.boundaryPrevPage == null) {
       onChapterBoundary?.call(PageDirection.prev);
       return;
     }
     final size = pageSize.isEmpty ? const Size(400, 600) : pageSize;
     _clearPictures();
     curPicture = _renderPage(size, controller.currentPage);
-    nextPicture = _renderPage(size, controller.nextPage);
-    prevPicture = _renderPage(size, controller.prevPage);
+    final effectiveNext = controller.nextPage ?? controller.boundaryNextPage;
+    nextPicture = _renderPage(size, effectiveNext);
+    final effectivePrev = controller.prevPage ?? controller.boundaryPrevPage;
+    prevPicture = _renderPage(size, effectivePrev);
     goToPrev();
   }
 

@@ -17,6 +17,11 @@ class PageViewWidget extends StatefulWidget {
   final int pageAnim;
   final ChapterBoundaryCallback? onChapterBoundary;
 
+  /// Subtask C：跨章动画完成后的"真切章"回调（与 [onChapterBoundary]
+  /// 共存，分工：邻章已就绪走动画 + 这个 callback；邻章未就绪 fallback
+  /// 走 [onChapterBoundary]）。
+  final ChapterBoundaryCallback? onCrossChapter;
+
   /// Test-only sink. Whenever the internal [PageDelegate] is (re)created,
   /// this callback is invoked with the fresh instance so widget tests can
   /// observe `startTouch`, `isRunning`, etc. without exposing private state.
@@ -32,6 +37,7 @@ class PageViewWidget extends StatefulWidget {
     required this.settings,
     this.pageAnim = 0,
     this.onChapterBoundary,
+    this.onCrossChapter,
     this.debugDelegateSink,
   });
 
@@ -118,6 +124,7 @@ class _PageViewWidgetState extends State<PageViewWidget>
           settings: widget.settings,
           animController: _animController!,
           onChapterBoundary: widget.onChapterBoundary,
+          onCrossChapter: widget.onCrossChapter,
         );
         break;
       case ReaderPageAnim.slide:
@@ -126,6 +133,7 @@ class _PageViewWidgetState extends State<PageViewWidget>
           settings: widget.settings,
           animController: _animController!,
           onChapterBoundary: widget.onChapterBoundary,
+          onCrossChapter: widget.onCrossChapter,
         );
         break;
       case ReaderPageAnim.simulation:
@@ -151,6 +159,7 @@ class _PageViewWidgetState extends State<PageViewWidget>
           settings: widget.settings,
           animController: _animController!,
           onChapterBoundary: widget.onChapterBoundary,
+          onCrossChapter: widget.onCrossChapter,
           degrade: _simDegrade,
         );
         break;
@@ -160,6 +169,7 @@ class _PageViewWidgetState extends State<PageViewWidget>
           settings: widget.settings,
           animController: _animController!,
           onChapterBoundary: widget.onChapterBoundary,
+          onCrossChapter: widget.onCrossChapter,
         );
         break;
       case ReaderPageAnim.noAnim:
@@ -169,6 +179,7 @@ class _PageViewWidgetState extends State<PageViewWidget>
           settings: widget.settings,
           animController: _animController!,
           onChapterBoundary: widget.onChapterBoundary,
+          onCrossChapter: widget.onCrossChapter,
         );
     }
 

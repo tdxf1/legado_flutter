@@ -1731,6 +1731,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       settings: settings,
       pageAnim: settings.pageAnim,
       onChapterBoundary: _onPageChapterBoundary,
+      onCrossChapter: _onCrossChapterCommit,
     );
   }
 
@@ -1783,6 +1784,58 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       _loadPageModeChapter(_currentIndex + 1);
     } else if (dir == PageDirection.prev && _currentIndex > 0) {
       _loadPageModeChapter(_currentIndex - 1);
+    }
+  }
+
+  /// Subtask C：跨章动画完成后由 [PageDelegate] 经
+  /// [PageViewWidget.onCrossChapter] 回调上来。controller 已经把邻章
+  /// 提升为 currentChapter（commitToNextChapter / commitToPrevChapter），
+  /// 这里只负责同步 ReaderPage 的 `_currentIndex` / 标题文案 / 保存进度 /
+  /// 重新预加载新邻章。
+  ///
+  /// 与 [_onPageChapterBoundary] 的分工：
+  ///   - _onCrossChapterCommit：邻章已就绪 → controller commit 完之后
+  ///   - _onPageChapterBoundary：邻章未就绪 fallback → 旧 _loadPageModeChapter
+  ///     异步加载（保留无动画切章的现状）
+  void _onCrossChapterCommit(PageDirection dir) {
+    if (!mounted) return;
+    final ctrl = _pageViewController;
+    if (ctrl == null) return;
+    final newIndex = ctrl.currentChapterIndex;
+    // 防御：commit 实际失败（_nextChapter / _prevChapter == null）controller
+    // 没动；这里检测到 newIndex == _currentIndex 直接返回，避免空跑后面逻辑。
+    if (newIndex == _currentIndex) return;
+    setState(() {
+      _currentIndex = newIndex;
+      if (_cachedChapters != null && newIndex < _cachedChapters!.length) {
+        final m = _cachedChapters![newIndex];
+        _chapterContent = m['content'] as String? ?? '';
+        _chapterUrl = m['url'] as String? ?? '';
+      }
+    });
+    // 保存阅读进度（异步，不阻塞 UI）。
+    _saveProgressAsync(newIndex);
+    // 重新灌邻章 + 字符串预拉。controller 内部 _nextChapter / _prevChapter
+    // 一边已被释放，需要外层重新 setNeighborChapter。
+    _measureAdjacentChapters(newIndex);
+    if (_cachedChapters != null) {
+      _preloadAdjacentContent(newIndex, _cachedChapters!);
+    }
+  }
+
+  Future<void> _saveProgressAsync(int chapterIndex) async {
+    try {
+      final dbPath = await ref.read(dbPathProvider.future);
+      if (!mounted) return;
+      await rust_api.saveReadingProgress(
+        dbPath: dbPath,
+        bookId: widget.bookId,
+        chapterIndex: chapterIndex,
+        paragraphIndex: 0,
+        offset: 0,
+      );
+    } catch (e) {
+      debugPrint('[Reader] saveProgressAsync failed: $e');
     }
   }
 
