@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/05-18-db-schema-migration-batch06/prd.md", "reason": "本任务 PRD"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "schema 改动跨 SQLite / Rust struct / serde / DAO 多层"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "DB migration 规范"}
+{"file": ".trellis/tasks/05-18-drag-cancel-threshold-md3-followup/research/feature-gap-reader-bookshelf-source.md", "reason": "§5 schema gap 字段对照表"}
