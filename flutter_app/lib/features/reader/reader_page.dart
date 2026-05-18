@@ -133,6 +133,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   bool _replaceRuleErrorShown = false;
   final ScrollController _scrollController = ScrollController();
   bool _progressRestored = false;
+
+  /// T1 (05-18): saved 章内字符 offset，等首章 [PageViewController.loadChapter]
+  /// 完成 typeset 后由 [_openChapter] 通过 postFrameCallback 消费一次：
+  /// 调 [PageViewController.getPageIndexByCharOffset] 反算页索引并 jumpToPage。
+  /// 跨章 / 后续章节加载不消费（重置为 null 后保持 null）。
+  int? _restoreCharOffset;
   Timer? _scrollDebounceTimer;
   Timer? _visibleChapterTimer;
   double _accumulatedOverscroll = 0;
@@ -520,6 +526,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
           _pageViewController?.loadChapter(index, title, content);
         }
       });
+      // T1 (05-18): page-mode 启动恢复链路最后一步 — measure 完后通过
+      // postFrameCallback 反算 saved char offset 对应页并 jumpToPage。
+      // 只在首章加载时消费一次（_restoreProgress 把 offset 写进
+      // _restoreCharOffset），后续跨章 / 跳章 _restoreCharOffset 已是 null
+      // 直接跳过。
+      _consumeRestoreCharOffsetIfNeeded();
       _preCacheNextChapter(index, chapters);
       _preCachePrevChapter(index, chapters);
       _preloadAdjacentContent(index, chapters);
@@ -1008,11 +1020,18 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     final savedParagraph = saved.paragraphIndex;
     if (savedIndex < 0 || savedIndex >= chapters.length) return;
 
+    final isContinuous = _settings.isScrollMode;
+    // T1 (05-18): page mode 下把 savedOffset 存起来，让 _openChapter 完成
+    // loadChapter 后通过 postFrameCallback 一次性消费 — controller
+    // measure 完才能用 getPageIndexByCharOffset 反算页索引。续章 / 后续
+    // 章节加载不消费（消费后清成 null）。
+    if (!isContinuous && savedOffset > 0) {
+      _restoreCharOffset = savedOffset;
+    }
+
     await _openChapter(savedIndex, chapters);
     if (!mounted) return;
 
-    final isContinuous =
-        _settings.isScrollMode;
     if (isContinuous && savedParagraph > 0) {
       // P2-13: prefer ensureVisible over height estimation. Falls back to
       // the legacy estimator only when the saved paragraph is past
@@ -1052,15 +1071,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         );
         _visibleParagraphIndex = clampedParagraph;
       });
-    } else if (!isContinuous && savedOffset > 0) {
-      // 分页模式仍按 offset 走（PageViewWidget 内部用，这里其实已不存）；
-      // 保留兜底以防 PageView 改回基于 ScrollController 实现。
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scrollController.hasClients && mounted) {
-          _scrollController.jumpTo(savedOffset.toDouble());
-        }
-      });
     }
+    // T1 (05-18): page-mode 的 jumpToPage 由 _openChapter 内部 postFrameCallback
+    // 消费 [_restoreCharOffset]（measure 完才能用 startCharOffset 反算页）。
   }
 
   /// Bug 6: 在 _onScroll 的 debounce 回调里调用，估算当前可见 paragraph index。
@@ -1814,6 +1827,53 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
 
   void _onPageChanged() {
     if (mounted) setState(() {});
+    // T1 (05-18): 章内每翻一页都立即把进度写库，对齐 MD3
+    // ReadBook.moveToNextPage / moveToPrevPage 的 saveRead(true)。
+    // fire-and-forget，不阻塞 UI。
+    _saveCurrentPagePosition();
+  }
+
+  /// T1 (05-18): 章内翻页保存 — 把当前页 [TextPage.startCharOffset] 当成
+  /// `durChapterPos` 写库。fire-and-forget；DB IO 在 Rust 端 spawn_blocking
+  /// 跑。失败仅 debugPrint，不阻塞 UI。
+  void _saveCurrentPagePosition() {
+    final ctrl = _pageViewController;
+    if (ctrl == null) return;
+    final page = ctrl.currentPage;
+    if (page == null) return;
+    final chapterIndex = ctrl.currentChapterIndex;
+    final offset = page.startCharOffset;
+    final bookId = widget.bookId;
+    ref.read(dbPathProvider.future).then((dbPath) {
+      if (!mounted) return;
+      _progressService.save(
+        dbPath: dbPath,
+        bookId: bookId,
+        chapterIndex: chapterIndex,
+        offset: offset,
+      );
+    }).catchError((Object e) {
+      debugPrint('[Reader] saveCurrentPagePosition failed: $e');
+    });
+  }
+
+  /// T1 (05-18): 启动恢复链路最后一步 — measure 完成后通过 postFrameCallback
+  /// 反算 saved char offset 对应的页并 jumpToPage。只消费一次（[_restoreCharOffset]
+  /// 在消费后清成 null），后续 [_openChapter] 调用不会再触发跳页。
+  void _consumeRestoreCharOffsetIfNeeded() {
+    final saved = _restoreCharOffset;
+    if (saved == null) return;
+    _restoreCharOffset = null; // 一次性消费
+    if (_settings.isScrollMode) return; // 滚动模式不走这条路（见 _restoreProgress）
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ctrl = _pageViewController;
+      if (ctrl == null) return;
+      // measure 完成后 totalPagesInChapter > 0；若仍为 0（极端边界情形）
+      // jumpToPage 自身会早 return，索性留着。
+      final pageIdx = ctrl.getPageIndexByCharOffset(saved);
+      ctrl.jumpToPage(pageIdx);
+    });
   }
 
   void _onPageChapterBoundary(PageDirection dir) {
@@ -1852,30 +1912,21 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         _chapterUrl = m['url'] as String? ?? '';
       }
     });
-    // 保存阅读进度（异步，不阻塞 UI）。
-    _saveProgressAsync(newIndex);
+    // T1 (05-18): 跨章 commit 完保存当前页 startCharOffset。
+    // - dir == next：controller.commitToNextChapter 把 currentPageIndex 重置 0，
+    //   startCharOffset = 0（行为等价于旧 _saveProgressAsync(newIndex)）。
+    // - dir == prev：controller.commitToPrevChapter 把 currentPageIndex 定位到
+    //   prev 章末页，startCharOffset = 末页首字符 offset（>0），相比旧路径
+    //   `_saveProgressAsync(newIndex)` 把 offset 强制写 0 是更准确的恢复点
+    //   ——用户从下章翻回上一章末页，重开 app 应该回末页而不是首页。
+    // 走与章内翻页统一的 _saveCurrentPagePosition 代码路径，避免两路语义漂移。
+    _saveCurrentPagePosition();
     // 重新灌邻章 + 字符串预拉。controller 内部 _nextChapter / _prevChapter
     // 一边已被释放，需要外层重新 setNeighborChapter。
     _measureAdjacentChapters(newIndex);
     if (_cachedChapters != null) {
       _preloadAdjacentContent(newIndex, _cachedChapters!);
       _preCachePrevChapter(newIndex, _cachedChapters!);
-    }
-  }
-
-  Future<void> _saveProgressAsync(int chapterIndex) async {
-    try {
-      final dbPath = await ref.read(dbPathProvider.future);
-      if (!mounted) return;
-      await rust_api.saveReadingProgress(
-        dbPath: dbPath,
-        bookId: widget.bookId,
-        chapterIndex: chapterIndex,
-        paragraphIndex: 0,
-        offset: 0,
-      );
-    } catch (e) {
-      debugPrint('[Reader] saveProgressAsync failed: $e');
     }
   }
 

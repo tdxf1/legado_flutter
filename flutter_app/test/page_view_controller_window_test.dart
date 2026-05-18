@@ -482,4 +482,166 @@ void main() {
           isTrue);
     });
   });
+
+  /// T1 (05-18): getPageIndexByCharOffset 用 [TextPage.startCharOffset] /
+  /// [TextPage.endCharOffset] 反算页索引，对齐 MD3
+  /// `TextChapter.getPageIndexByCharIndex`。
+  group('getPageIndexByCharOffset', () {
+    test('未 loadChapter / pages 为空 → 返回 0', () {
+      const settings = ReaderSettings();
+      final controller = PageViewController(settings: settings);
+      addTearDown(controller.dispose);
+      controller.updatePageSize(_kPageSize);
+
+      expect(controller.getPageIndexByCharOffset(0), 0);
+      expect(controller.getPageIndexByCharOffset(100), 0);
+      expect(controller.getPageIndexByCharOffset(-1), 0);
+    });
+
+    test('charOffset == 0 → 返回首页 0', () {
+      const settings = ReaderSettings();
+      final controller = PageViewController(settings: settings);
+      addTearDown(controller.dispose);
+      controller.updatePageSize(_kPageSize);
+      controller.loadChapter(0, '第一章', _longContent(80));
+      expect(controller.totalPagesInChapter, greaterThan(1));
+
+      expect(controller.getPageIndexByCharOffset(0), 0);
+    });
+
+    test('charOffset 为负数 → 返回 0（防御）', () {
+      const settings = ReaderSettings();
+      final controller = PageViewController(settings: settings);
+      addTearDown(controller.dispose);
+      controller.updatePageSize(_kPageSize);
+      controller.loadChapter(0, '第一章', _longContent(80));
+
+      expect(controller.getPageIndexByCharOffset(-100), 0);
+    });
+
+    test('charOffset 落在中间页范围 → 返回该页 idx', () {
+      const settings = ReaderSettings();
+      final controller = PageViewController(settings: settings);
+      addTearDown(controller.dispose);
+      controller.updatePageSize(_kPageSize);
+      controller.loadChapter(0, '第一章', _longContent(80));
+      final total = controller.totalPagesInChapter;
+      expect(total, greaterThanOrEqualTo(3));
+
+      // 取第 2 页（idx=1）的 startCharOffset 当作恢复目标。
+      controller.jumpToPage(1);
+      final page1Start = controller.currentPage!.startCharOffset;
+      // 跳回首页，再用 offset 反算。
+      controller.jumpToPage(0);
+      expect(controller.getPageIndexByCharOffset(page1Start), 1);
+
+      // 同样验证最后一页。
+      controller.jumpToPage(total - 1);
+      final lastStart = controller.currentPage!.startCharOffset;
+      controller.jumpToPage(0);
+      expect(controller.getPageIndexByCharOffset(lastStart), total - 1);
+    });
+
+    test('charOffset 落在某页 [start, end] 范围内 → 该页 idx', () {
+      const settings = ReaderSettings();
+      final controller = PageViewController(settings: settings);
+      addTearDown(controller.dispose);
+      controller.updatePageSize(_kPageSize);
+      controller.loadChapter(0, '第一章', _longContent(80));
+      final total = controller.totalPagesInChapter;
+      expect(total, greaterThanOrEqualTo(2));
+
+      // 测每一页中点都能反算回该页。
+      for (var i = 0; i < total; i++) {
+        controller.jumpToPage(i);
+        final page = controller.currentPage!;
+        final mid =
+            ((page.startCharOffset + page.endCharOffset) / 2).floor();
+        expect(controller.getPageIndexByCharOffset(mid), i,
+            reason: 'page $i 中点 offset $mid 应反算回 $i');
+      }
+    });
+
+    test('charOffset 越过末页 endCharOffset → 返回末页 idx', () {
+      const settings = ReaderSettings();
+      final controller = PageViewController(settings: settings);
+      addTearDown(controller.dispose);
+      controller.updatePageSize(_kPageSize);
+      controller.loadChapter(0, '第一章', _longContent(80));
+      final total = controller.totalPagesInChapter;
+      expect(total, greaterThan(0));
+
+      controller.jumpToPage(total - 1);
+      final lastEnd = controller.currentPage!.endCharOffset;
+      controller.jumpToPage(0);
+      // 越过末页的 offset：应返回最后一页 idx。
+      expect(controller.getPageIndexByCharOffset(lastEnd + 1000), total - 1);
+      expect(controller.getPageIndexByCharOffset(99999999), total - 1);
+    });
+
+    test('getPageIndexByCharOffset 不修改 currentPageIndex', () {
+      const settings = ReaderSettings();
+      final controller = PageViewController(settings: settings);
+      addTearDown(controller.dispose);
+      controller.updatePageSize(_kPageSize);
+      controller.loadChapter(0, '第一章', _longContent(80));
+      controller.jumpToPage(1);
+      final before = controller.currentPageIndex;
+      controller.getPageIndexByCharOffset(0);
+      controller.getPageIndexByCharOffset(99999);
+      expect(controller.currentPageIndex, before,
+          reason: 'getPageIndexByCharOffset 是只读查询，不应改变 currentPageIndex');
+    });
+  });
+
+  /// T1 (05-18): TextPage.startCharOffset / endCharOffset 单调性测试 —
+  /// 验证 PageMeasure 的累加逻辑正确，否则 getPageIndexByCharOffset 会落错页。
+  group('TextPage startCharOffset 单调性', () {
+    test('页与页之间 startCharOffset 单调递增', () {
+      const settings = ReaderSettings();
+      final controller = PageViewController(settings: settings);
+      addTearDown(controller.dispose);
+      controller.updatePageSize(_kPageSize);
+      controller.loadChapter(0, '第一章', _longContent(80));
+      final total = controller.totalPagesInChapter;
+      expect(total, greaterThan(1));
+
+      int? prev;
+      for (var i = 0; i < total; i++) {
+        controller.jumpToPage(i);
+        final page = controller.currentPage!;
+        if (prev != null) {
+          expect(page.startCharOffset, greaterThanOrEqualTo(prev),
+              reason: 'page $i.startCharOffset 应 >= 上一页 startCharOffset');
+        }
+        prev = page.startCharOffset;
+      }
+    });
+
+    test('每页 endCharOffset >= startCharOffset', () {
+      const settings = ReaderSettings();
+      final controller = PageViewController(settings: settings);
+      addTearDown(controller.dispose);
+      controller.updatePageSize(_kPageSize);
+      controller.loadChapter(0, '第一章', _longContent(40));
+      final total = controller.totalPagesInChapter;
+
+      for (var i = 0; i < total; i++) {
+        controller.jumpToPage(i);
+        final page = controller.currentPage!;
+        expect(page.endCharOffset, greaterThanOrEqualTo(page.startCharOffset),
+            reason: 'page $i: end >= start');
+      }
+    });
+
+    test('首页 startCharOffset == 0', () {
+      const settings = ReaderSettings();
+      final controller = PageViewController(settings: settings);
+      addTearDown(controller.dispose);
+      controller.updatePageSize(_kPageSize);
+      controller.loadChapter(0, '第一章', _longContent(40));
+      controller.jumpToPage(0);
+      expect(controller.currentPage!.startCharOffset, 0);
+    });
+  });
 }

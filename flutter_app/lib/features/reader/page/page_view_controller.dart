@@ -307,6 +307,41 @@ class PageViewController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 用章内字符偏移反算页索引 — MD3 `TextChapter.getPageIndexByCharIndex`
+  /// 的 Flutter 等价实现。
+  ///
+  /// 复用 [TextPage.startCharOffset]（由 [PageMeasure._finalizePage] 累加
+  /// paragraph 长度填充），不引入新字段。
+  ///
+  /// 边界语义（与 MD3 fastBinarySearchBy(chapterPosition) 等价）：
+  /// - 当前章未 measure 或 pages 为空 → 返回 0
+  /// - charOffset <= 0 → 返回 0（首页）
+  /// - 否则返回 `startCharOffset <= charOffset` 的**最后一个**页索引
+  ///   （即下一页 startCharOffset 已超过 charOffset 的那一页）
+  /// - charOffset 越过末页 startCharOffset → 返回末页 idx
+  ///
+  /// **不能**用 `[startCharOffset, endCharOffset]` 双闭区间判断 — page i
+  /// 的 endCharOffset 与 page i+1 的 startCharOffset 在段尾对齐时相等，
+  /// 双闭会让边界 offset 落到上一页。
+  ///
+  /// 章内页数通常 < 50，线性扫描足够；未来如果章节极长可改二分。该方法
+  /// 不修改任何状态，调用前后 currentPageIndex 不变。调用方需要再调
+  /// [jumpToPage] 才会真正跳页 + notifyListeners。
+  int getPageIndexByCharOffset(int charOffset) {
+    final cur = _currentChapter;
+    if (cur == null || cur.pages.isEmpty) return 0;
+    if (charOffset <= 0) return 0;
+    int result = 0;
+    for (int i = 0; i < cur.pages.length; i++) {
+      if (cur.pages[i].startCharOffset <= charOffset) {
+        result = i;
+      } else {
+        break;
+      }
+    }
+    return result;
+  }
+
   /// 章节内翻到下一页。返回 true 表示成功；返回 false 表示已在章末，
   /// 调用方需要自行加载下一章节（参考 ReaderPage._goToNextChapter，或
   /// 走新增的 [commitToNextChapter] 路径）。
