@@ -40,24 +40,33 @@ void main() {
   testWidgets('SearchPage shows search icon prefix', (WidgetTester tester) async {
     await tester.pumpWidget(buildSearchPage());
     await tester.pumpAndSettle();
-    // 一个在输入框 prefix，一个在 AppBar 精确模式 toggle (默认关 → Icons.search)
-    expect(find.byIcon(Icons.search), findsNWidgets(2));
+    // Task X3 后 AppBar action 改用 FilterChip + Icons.search_off / youtube_searched_for，
+    // TextField prefixIcon 仍是 Icons.search。所以 Icons.search 默认状态下应该
+    // 只剩 1 个（输入框 prefix），AppBar 那个 +1 已迁出。
+    expect(find.byIcon(Icons.search), findsOneWidget);
   });
 
   testWidgets('SearchPage AppBar precision toggle defaults to fuzzy mode', (WidgetTester tester) async {
     await tester.pumpWidget(buildSearchPage());
     await tester.pumpAndSettle();
-    expect(find.byTooltip('模糊搜索'), findsOneWidget);
+    // Task X3 — AppBar action 改用 FilterChip：默认 selected=false，avatar 显示
+    // Icons.search_off。
+    final filterChip = tester.widget<FilterChip>(find.byType(FilterChip));
+    expect(filterChip.selected, isFalse);
+    expect(find.byIcon(Icons.search_off), findsOneWidget);
     expect(find.byIcon(Icons.youtube_searched_for), findsNothing);
   });
 
   testWidgets('SearchPage AppBar precision toggle flips to precision mode on tap', (WidgetTester tester) async {
     await tester.pumpWidget(buildSearchPage());
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('模糊搜索'));
+    // Task X3 — 点击 FilterChip 翻转 selected，avatar 切到 Icons.youtube_searched_for。
+    await tester.tap(find.byType(FilterChip));
     await tester.pumpAndSettle();
-    expect(find.byTooltip('精确搜索（已开启）'), findsOneWidget);
+    final filterChip = tester.widget<FilterChip>(find.byType(FilterChip));
+    expect(filterChip.selected, isTrue);
     expect(find.byIcon(Icons.youtube_searched_for), findsOneWidget);
+    expect(find.byIcon(Icons.search_off), findsNothing);
   });
 
   testWidgets('SearchPage shows send button', (WidgetTester tester) async {

@@ -59,6 +59,17 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   bool _precisionMode = false;
   List<String> _searchHistory = [];
 
+  /// Task X3 (Bug A) — 记忆上一次搜索的 keyword。
+  ///
+  /// `_togglePrecisionMode` 在用户已经清空 TextField 的情况下也要能用上次
+  /// 关键字重过滤已经展示的结果，否则 toggle 切换看不见效果。
+  /// 只在 [_doSearch] 入口（trim 后、空校验通过后）写入此字段。
+  String _lastSearchKeyword = '';
+
+  /// 测试用：让 widget test 能验证 toggle 后 keyword 已记忆。
+  @visibleForTesting
+  String get debugLastSearchKeyword => _lastSearchKeyword;
+
   @override
   void initState() {
     super.initState();
@@ -80,7 +91,21 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     setState(() => _precisionMode = !_precisionMode);
     // fire-and-forget：写盘失败仅打日志，不阻塞 UI
     unawaited(saveSearchPrecisionToDisk(_precisionMode));
-    if (_searchCtrl.text.trim().isNotEmpty) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_precisionMode ? '已切换到精确搜索' : '已切换到模糊搜索'),
+          duration: const Duration(seconds: 1),
+        ),
+      );
+    }
+    // 用记忆 keyword 重跑：即便用户清空了 TextField，也能让 toggle 立即对
+    // 已展示的 _results 重过滤。`_doSearch` 仍读 `_searchCtrl.text.trim()`，
+    // 所以先把记忆 keyword 写回 controller 再触发，保证两条路径取到同一份。
+    if (_lastSearchKeyword.isNotEmpty) {
+      if (_searchCtrl.text != _lastSearchKeyword) {
+        _searchCtrl.text = _lastSearchKeyword;
+      }
       _doSearch();
     }
   }
@@ -297,6 +322,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   Future<void> _doSearch() async {
     final keyword = _searchCtrl.text.trim();
     if (keyword.isEmpty) return;
+    _lastSearchKeyword = keyword;
     setState(() => _loading = true);
     try {
       // HTTP mode: 走 axum /api/search/sse 流式聚合，避免阻塞 FRB 单线程
@@ -501,12 +527,22 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       appBar: AppBar(
         title: const Text('搜索'),
         actions: [
-          IconButton(
-            icon: Icon(
-              _precisionMode ? Icons.youtube_searched_for : Icons.search,
+          // Task X3 — 用 FilterChip 替代 IconButton。原来的 IconButton + Icons.search
+          // 与 TextField prefixIcon 视觉重复，移动用户根本注意不到 toggle；
+          // FilterChip 选中态有明显 Material 高亮，更直观。
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            child: FilterChip(
+              label: const Text('精确'),
+              selected: _precisionMode,
+              onSelected: (_) => _togglePrecisionMode(),
+              avatar: Icon(
+                _precisionMode
+                    ? Icons.youtube_searched_for
+                    : Icons.search_off,
+                size: 18,
+              ),
             ),
-            tooltip: _precisionMode ? '精确搜索（已开启）' : '模糊搜索',
-            onPressed: _togglePrecisionMode,
           ),
         ],
       ),

@@ -521,6 +521,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         }
       });
       _preCacheNextChapter(index, chapters);
+      _preCachePrevChapter(index, chapters);
       _preloadAdjacentContent(index, chapters);
       _measureAdjacentChapters(index);
       _fetchSourceInfo();
@@ -1148,6 +1149,43 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     }
   }
 
+  /// Task X2 (Bug C) — prev 跨章预拉对称化。
+  ///
+  /// 与 [_preCacheNextChapter] 镜像，但拉的是 `index - 1` 章的字符串。
+  /// 之所以需要独立一份镜像方法，是因为 `_preCacheNextChapter` 早在
+  /// `_openChapter` 完成时就被 fire-and-forget 触发；prev 方向之前只走
+  /// `_preloadAdjacentContent` 内的 `_loadChapterContent` fire-chain，那条
+  /// 路径在 next 章被 `_preCacheNextChapter` 抢先排队时会**晚到**，
+  /// 导致用户从首页往前翻时 controller `boundaryPrevPage` 仍是 null →
+  /// fallback 走 `_onPageChapterBoundary` 同步 setState 路径 → 无动画 + 卡顿。
+  ///
+  /// 单一职责：把 prev 章字符串补齐 + 写库（与 next 行为对齐），让下次进章
+  /// 直接命中缓存。`_loadChapterContent` 已经处理了缓存命中、Rust API
+  /// 调用、正文清洗等逻辑，复用比镜像 `_preCacheNextChapter` 内部 fetch
+  /// 流程更简洁也更不易漂移；副作用是 `_loadChapterContent` 不会显式
+  /// `updateChapterContent`，但内部走 `getChapterContentWithSourceFromDb`
+  /// 已经触发了 Rust 端的写库逻辑（与 next 等价）。
+  Future<void> _preCachePrevChapter(
+      int index, List<Map<String, dynamic>> chapters) async {
+    final prevIndex = index - 1;
+    if (prevIndex < 0) return;
+    if (prevIndex >= chapters.length) return;
+    final prevContent = chapters[prevIndex]['content'] as String?;
+    if (prevContent != null && prevContent.isNotEmpty) return;
+    try {
+      final content = await _loadChapterContent(prevIndex, chapters);
+      if (!mounted) return;
+      if (content.isNotEmpty) {
+        chapters[prevIndex]['content'] = content;
+        // Subtask B.4 等价：字符串到位后立即让 controller 拿到刚就绪的 prev
+        // 章 picture，下次跨章动画从首页往前翻不会再 fallback。
+        _measureAdjacentChapters(_currentIndex);
+      }
+    } catch (e) {
+      debugPrint('[Reader] preCachePrevChapter failed: $e');
+    }
+  }
+
   void _preloadAdjacentContent(
       int currentIndex, List<Map<String, dynamic>> chapters) {
     final prevIndex = currentIndex - 1;
@@ -1767,6 +1805,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       _pageViewController?.loadChapter(targetIndex, title, content,
           jumpToLast: isPrev);
       _preloadAdjacentContent(targetIndex, chapters);
+      _preCachePrevChapter(targetIndex, chapters);
       _measureAdjacentChapters(targetIndex);
     } catch (e) {
       if (mounted) setState(() => _isLoadingContent = false);
@@ -1820,6 +1859,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     _measureAdjacentChapters(newIndex);
     if (_cachedChapters != null) {
       _preloadAdjacentContent(newIndex, _cachedChapters!);
+      _preCachePrevChapter(newIndex, _cachedChapters!);
     }
   }
 
