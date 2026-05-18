@@ -70,6 +70,10 @@ const REQUIRED_WIRE_FN_FRAGMENTS: &[&str] = &[
     "wire__crate__api__webdav_download_backup_impl",
     // 批次 11 — funcId 70 — webdav_delete_backup
     "wire__crate__api__webdav_delete_backup_impl",
+    // 批次 12 — funcId 71 — set_backup_password
+    "wire__crate__api__set_backup_password_impl",
+    // 批次 12 — funcId 72 — get_backup_password
+    "wire__crate__api__get_backup_password_impl",
 ];
 
 const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
@@ -102,6 +106,9 @@ const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
     "        68 =>",
     "        69 =>",
     "        70 =>",
+    // 批次 12 (加密备份 AES Legado 兼容) 手动 dispatch 注册
+    "        71 =>",
+    "        72 =>",
 ];
 
 /// R3: the dispatcher default arms must surface the unknown funcId
@@ -162,7 +169,7 @@ fn main() {
             "frb_generated.rs is missing {} hand-edited wire/dispatch fragment(s). \
              A `flutter_rust_bridge_codegen generate` run probably overwrote the manual \
              patches. This guard only covers the funcIds we know were hand-edited \
-             (currently 42-52 plus 54-57 plus 63-65 plus 66-70; 53 is intentionally a hole, do not re-introduce), \
+             (currently 42-52 plus 54-57 plus 63-65 plus 66-70 plus 71-72; 53 is intentionally a hole, do not re-introduce), \
              plus the R3 informative panic in the dispatcher default arms. \
              funcIds outside that range are produced by codegen and are NOT checked here, \
              so a regression in those needs separate attention. See CURRENT_STATUS.md \

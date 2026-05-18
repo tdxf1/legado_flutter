@@ -1360,6 +1360,68 @@ pub async fn webdav_delete_backup(
 }
 
 // ============================================================
+// 备份密码持久化 (批次 12 / 05-19)
+// ============================================================
+//
+// 与原 Legado `LocalConfig.password` 行为一致：明文存到 prefs 文件
+// （`<documents_dir>/legado_local.json`），密码空串等价于"未设密码"。
+// 真正加密生效在导出/导入 zip 时：调
+// [`core_storage::legado_aes::encrypt_legado_aes`] / `decrypt_legado_aes`
+// 把这个密码作为 key 派生输入。
+//
+// **不**加密 webdav.json 本机存储 —— 那是另一份独立配置，原 Legado 也只
+// 加密**导出 zip 内的 web_dav_password 字段**，不加密本机 prefs。
+
+const LEGADO_LOCAL_FILE: &str = "legado_local.json";
+
+/// 设置备份密码（持久化到 `<documents_dir>/legado_local.json` 的
+/// `"password"` 字段）。
+///
+/// `password = ""` 等价于"未设密码"（与原 Legado `LocalConfig.password`
+/// 默认值一致）—— 此时备份 zip 仍走 AES 加密但 key = MD5("")。
+pub fn set_backup_password(documents_dir: String, password: String) -> Result<(), String> {
+    let path = std::path::Path::new(&documents_dir).join(LEGADO_LOCAL_FILE);
+    // 读现有 JSON（若存在），仅覆盖 password 字段，保留未来其它配置项。
+    let mut map: serde_json::Map<String, serde_json::Value> = match std::fs::read_to_string(&path)
+    {
+        Ok(text) => serde_json::from_str(&text)
+            .ok()
+            .and_then(|v: serde_json::Value| v.as_object().cloned())
+            .unwrap_or_default(),
+        Err(_) => serde_json::Map::new(),
+    };
+    map.insert(
+        "password".to_string(),
+        serde_json::Value::String(password),
+    );
+    let text = serde_json::to_string(&serde_json::Value::Object(map))
+        .map_err(|e| format!("序列化 legado_local.json 失败: {}", e))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建配置目录失败: {}", e))?;
+    }
+    std::fs::write(&path, text).map_err(|e| format!("写入 legado_local.json 失败: {}", e))
+}
+
+/// 读取当前备份密码；不存在或 JSON 解析失败时返回空串（等价"未设密码"）。
+pub fn get_backup_password(documents_dir: String) -> Result<String, String> {
+    let path = std::path::Path::new(&documents_dir).join(LEGADO_LOCAL_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            let v: serde_json::Value = match serde_json::from_str(&text) {
+                Ok(v) => v,
+                Err(_) => return Ok(String::new()),
+            };
+            Ok(v.get("password")
+                .and_then(|p| p.as_str())
+                .unwrap_or("")
+                .to_string())
+        }
+        Err(_) => Ok(String::new()),
+    }
+}
+
+// ============================================================
 // 内部辅助函数
 // ============================================================
 

@@ -347,6 +347,12 @@ abstract class RustLibApi extends BaseApi {
       required String user,
       required String password,
       required String fileName});
+
+  // 批次 12 — 备份密码持久化
+  Future<void> crateApiSetBackupPassword(
+      {required String documentsDir, required String password});
+
+  Future<String> crateApiGetBackupPassword({required String documentsDir});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -2351,6 +2357,60 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(
         debugName: "webdav_delete_backup",
         argNames: ["url", "user", "password", "fileName"],
+      );
+
+  // ============================================================
+  // 批次 12 — 加密备份 AES Legado 兼容
+  // ============================================================
+
+  @override
+  Future<void> crateApiSetBackupPassword(
+      {required String documentsDir, required String password}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(documentsDir, serializer);
+        sse_encode_String(password, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 71, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiSetBackupPasswordConstMeta,
+      argValues: [documentsDir, password],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSetBackupPasswordConstMeta => const TaskConstMeta(
+        debugName: "set_backup_password",
+        argNames: ["documentsDir", "password"],
+      );
+
+  @override
+  Future<String> crateApiGetBackupPassword({required String documentsDir}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(documentsDir, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 72, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiGetBackupPasswordConstMeta,
+      argValues: [documentsDir],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiGetBackupPasswordConstMeta => const TaskConstMeta(
+        debugName: "get_backup_password",
+        argNames: ["documentsDir"],
       );
 
   @protected

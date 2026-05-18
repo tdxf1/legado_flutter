@@ -27,6 +27,12 @@ import '../../src/rust/api.dart' as rust_api;
 /// 密码本批次**先存明文**（PRD §"先存明文"），批次 12 加密备份时再补
 /// AES 加密。
 ///
+/// 批次 12（05-19）补充：新增"备份密码"字段（独立于 WebDAV 密码），调
+/// [`setBackupPassword`] / [`getBackupPassword`] 持久化到
+/// `<documentsDir>/legado_local.json`，对齐原 Legado `LocalConfig.password`。
+/// 留空 = 不加密备份；设密码后 zip 内 servers.json + webDavPassword 走
+/// AES，与原 Legado 兼容。
+///
 /// **测试钩子**：所有外部 IO（path_provider / FRB 桥）通过 `*Override`
 /// 参数注入 fake 实现。生产代码不传 override 时走真实路径。
 class WebDavConfigPage extends ConsumerStatefulWidget {
@@ -40,10 +46,22 @@ class WebDavConfigPage extends ConsumerStatefulWidget {
     required String password,
   })? webdavCheckOverride;
 
+  /// 测试钩子：替换 [`getBackupPassword`] FRB 调用。
+  final Future<String> Function({required String documentsDir})?
+      getBackupPasswordOverride;
+
+  /// 测试钩子：替换 [`setBackupPassword`] FRB 调用。
+  final Future<void> Function({
+    required String documentsDir,
+    required String password,
+  })? setBackupPasswordOverride;
+
   const WebDavConfigPage({
     super.key,
     this.configDirOverride,
     this.webdavCheckOverride,
+    this.getBackupPasswordOverride,
+    this.setBackupPasswordOverride,
   });
 
   @override
@@ -55,6 +73,7 @@ class _WebDavConfigPageState extends ConsumerState<WebDavConfigPage> {
   final TextEditingController _userCtl = TextEditingController();
   final TextEditingController _pwdCtl = TextEditingController();
   final TextEditingController _deviceCtl = TextEditingController();
+  final TextEditingController _backupPwdCtl = TextEditingController();
 
   bool _testing = false;
   bool _saving = false;
@@ -72,6 +91,7 @@ class _WebDavConfigPageState extends ConsumerState<WebDavConfigPage> {
     _userCtl.dispose();
     _pwdCtl.dispose();
     _deviceCtl.dispose();
+    _backupPwdCtl.dispose();
     super.dispose();
   }
 
@@ -94,6 +114,16 @@ class _WebDavConfigPageState extends ConsumerState<WebDavConfigPage> {
         _userCtl.text = (map['user'] as String?) ?? '';
         _pwdCtl.text = (map['password'] as String?) ?? '';
         _deviceCtl.text = (map['deviceName'] as String?) ?? '';
+      }
+      // 批次 12: 备份密码独立持久化（legado_local.json），通过 FRB 拉取。
+      try {
+        final fn = widget.getBackupPasswordOverride ??
+            ({required String documentsDir}) =>
+                rust_api.getBackupPassword(documentsDir: documentsDir);
+        _backupPwdCtl.text = await fn(documentsDir: dir);
+      } catch (_) {
+        // FRB 调用失败（如桥未初始化的测试场景）退回空串。
+        _backupPwdCtl.text = '';
       }
     } catch (_) {
       // 静默忽略读取失败 — 用户首次配置时也走这里。
@@ -155,6 +185,20 @@ class _WebDavConfigPageState extends ConsumerState<WebDavConfigPage> {
         'deviceName': _deviceCtl.text.trim(),
       };
       await f.writeAsString(jsonEncode(map));
+      // 批次 12: 备份密码独立保存（legado_local.json）。失败不影响 webdav.json。
+      try {
+        final fn = widget.setBackupPasswordOverride ??
+            ({required String documentsDir, required String password}) =>
+                rust_api.setBackupPassword(
+                    documentsDir: documentsDir, password: password);
+        await fn(documentsDir: dir, password: _backupPwdCtl.text);
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('备份密码保存失败: $e')),
+        );
+        return;
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('已保存')),
@@ -209,6 +253,18 @@ class _WebDavConfigPageState extends ConsumerState<WebDavConfigPage> {
                   decoration: const InputDecoration(
                     labelText: '设备名',
                     hintText: '可选,用作 backup<date>-<deviceName>.zip 后缀',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _backupPwdCtl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: '备份密码',
+                    helperText:
+                        '留空 = 不加密。设密码后导出的 zip 内 servers.json + webDavPassword 走 AES，与原 Legado 兼容。',
+                    helperMaxLines: 3,
                     border: OutlineInputBorder(),
                   ),
                 ),

@@ -10,11 +10,15 @@ import 'package:legado_flutter/features/settings/webdav_config_page.dart';
 ///
 /// 通过 [WebDavConfigPage] 的 *Override 测试钩子注入 fake 实现，绕过
 /// path_provider / FRB 桥，验证：
-/// 1. 页面渲染 4 个 TextField (URL/用户名/密码/设备名) + 测试连接 + 保存按钮。
+/// 1. 页面渲染 5 个 TextField (URL/用户名/密码/设备名/备份密码) +
+///    测试连接 + 保存按钮。
 /// 2. 点 "测试连接" 在 URL 已填时调一次 [`webdavCheckOverride`]。
+///
+/// 批次 12 (05-19) 补充：第二个 test 验证"备份密码"字段渲染 + 保存
+/// 时调一次 [`setBackupPasswordOverride`]，并把当前文本传过去。
 void main() {
   testWidgets(
-    'WebDavConfigPage renders 4 fields + 测试连接 invokes override',
+    'WebDavConfigPage renders 5 fields + 测试连接 invokes override',
     (WidgetTester tester) async {
       // 临时目录避免污染真实 documents,且让 _loadConfig 走"文件不存在"
       // 分支拿到默认空表单。
@@ -40,6 +44,11 @@ void main() {
                 capturedUser = user;
                 capturedPwd = password;
               },
+              // 批次 12: 注入备份密码 override,避免触发真实 FRB 桥（测试
+              // 环境无 RustLib.init,会抛异常）。
+              getBackupPasswordOverride: ({required String documentsDir}) async => '',
+              setBackupPasswordOverride: (
+                  {required String documentsDir, required String password}) async {},
             ),
           ),
         ),
@@ -56,15 +65,16 @@ void main() {
       // 标题渲染
       expect(find.text('WebDAV 配置'), findsOneWidget);
 
-      // 4 字段标签 (label 文本 — InputDecoration 渲染两次：原位 + 浮起)
+      // 5 字段标签 (label 文本 — InputDecoration 渲染两次：原位 + 浮起)
       // 用 findsAtLeastNWidgets(1) 容纳 Material 浮动 label 行为。
       expect(find.text('URL'), findsAtLeastNWidgets(1));
       expect(find.text('用户名'), findsAtLeastNWidgets(1));
       expect(find.text('密码'), findsAtLeastNWidgets(1));
       expect(find.text('设备名'), findsAtLeastNWidgets(1));
+      expect(find.text('备份密码'), findsAtLeastNWidgets(1));
 
-      // 4 个 TextField + 2 个按钮
-      expect(find.byType(TextField), findsNWidgets(4));
+      // 5 个 TextField + 2 个按钮
+      expect(find.byType(TextField), findsNWidgets(5));
       expect(find.text('测试连接'), findsOneWidget);
       expect(find.text('保存'), findsOneWidget);
 
@@ -95,6 +105,94 @@ void main() {
       expect(capturedPwd, 'secret-pwd');
 
       // 清理临时目录
+      try {
+        tmp.deleteSync(recursive: true);
+      } catch (_) {}
+    },
+  );
+
+  testWidgets(
+    'WebDavConfigPage 备份密码字段渲染 + 保存调 setBackupPassword 一次',
+    (WidgetTester tester) async {
+      final tmp = Directory.systemTemp.createTempSync('webdav-cfg-bpw-');
+
+      int setCalls = 0;
+      int getCalls = 0;
+      String? capturedDocsDir;
+      String? capturedPassword;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: WebDavConfigPage(
+              configDirOverride: tmp.path,
+              // webdavCheck 不参与本测试,但 _onTestConnection 也无关
+              // (我们只点保存)。
+              webdavCheckOverride: ({
+                required String url,
+                required String user,
+                required String password,
+              }) async {},
+              getBackupPasswordOverride: ({required String documentsDir}) async {
+                getCalls++;
+                return ''; // 模拟首次配置:legado_local.json 不存在,空串
+              },
+              setBackupPasswordOverride: (
+                  {required String documentsDir, required String password}) async {
+                setCalls++;
+                capturedDocsDir = documentsDir;
+                capturedPassword = password;
+              },
+            ),
+          ),
+        ),
+      );
+
+      // 等 _loadConfig 完成
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // 备份密码字段渲染
+      expect(find.text('备份密码'), findsAtLeastNWidgets(1));
+      expect(find.byType(TextField), findsNWidgets(5));
+      // 提示文案存在
+      expect(
+        find.textContaining('留空 = 不加密'),
+        findsOneWidget,
+      );
+
+      // load 时已调 getBackupPassword 一次
+      expect(getCalls, 1, reason: 'initState 应调 getBackupPassword 填回');
+
+      // 填 URL（保存校验要求非空）+ 备份密码
+      await tester.enterText(find.byType(TextField).at(0),
+          'https://example.com/dav/');
+      // 第 5 个 TextField (index 4) = 备份密码
+      await tester.enterText(find.byType(TextField).at(4), 'mybackup-pwd');
+      await tester.pump();
+
+      // 点保存 → 走 _onSave: 写 webdav.json (真实文件 IO) + 调
+      // setBackupPassword override 一次。
+      await tester.tap(find.text('保存'));
+      // 让真实文件 IO 跑完 — 文件 IO + override 的 async 链需要多次
+      // pump + runAsync 才能完整执行（不能 pumpAndSettle 因为
+      // LinearProgressIndicator）。
+      for (var i = 0; i < 5; i++) {
+        await tester.runAsync(() async {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+        });
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+
+      expect(setCalls, 1, reason: '保存应调 setBackupPassword 一次');
+      expect(capturedDocsDir, tmp.path);
+      expect(capturedPassword, 'mybackup-pwd');
+
+      // 清理
       try {
         tmp.deleteSync(recursive: true);
       } catch (_) {}

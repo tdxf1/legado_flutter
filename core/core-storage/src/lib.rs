@@ -10,6 +10,7 @@ pub mod cache_dao;
 pub mod chapter_dao;
 pub mod database;
 pub mod download_dao;
+pub mod legado_aes;
 pub mod legado_field_map;
 pub mod models;
 pub mod progress_dao;

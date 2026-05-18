@@ -1034,6 +1034,77 @@ fn wire__crate__api__webdav_delete_backup_impl(
         },
     )
 }
+// ---- 批次 12 (加密备份 AES Legado 兼容) 手动 wire fn ----
+// funcId 71 — set_backup_password(documents_dir, password) -> Result<(), String>
+// funcId 72 — get_backup_password(documents_dir) -> Result<String, String>
+fn wire__crate__api__set_backup_password_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "set_backup_password",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_documents_dir = <String>::sse_decode(&mut deserializer);
+            let api_password = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok =
+                        crate::api::set_backup_password(api_documents_dir, api_password)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__get_backup_password_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "get_backup_password",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_documents_dir = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::get_backup_password(api_documents_dir)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__get_all_books_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -2803,6 +2874,9 @@ fn pde_ffi_dispatcher_primary_impl(
         68 => wire__crate__api__webdav_upload_backup_impl(port, ptr, rust_vec_len, data_len),
         69 => wire__crate__api__webdav_download_backup_impl(port, ptr, rust_vec_len, data_len),
         70 => wire__crate__api__webdav_delete_backup_impl(port, ptr, rust_vec_len, data_len),
+        // 批次 12 (加密备份 AES Legado 兼容) — 手动 wire fn 注册
+        71 => wire__crate__api__set_backup_password_impl(port, ptr, rust_vec_len, data_len),
+        72 => wire__crate__api__get_backup_password_impl(port, ptr, rust_vec_len, data_len),
         // R3: codegen default branch hit at runtime means Rust and Dart
         // have inconsistent funcId tables. build.rs catches this at
         // compile time when both sides are visible (R3 cross-check),

@@ -542,3 +542,20 @@ Future<void> webdavDeleteBackup(
         required String fileName}) =>
     RustLib.instance.api.crateApiWebdavDeleteBackup(
         url: url, user: user, password: password, fileName: fileName);
+
+// ============================================================
+// 备份密码持久化（批次 12 / 05-19）
+// ============================================================
+
+/// 设置备份密码（持久化到 `<documentsDir>/legado_local.json`）。
+///
+/// `password = ""` 等价于"未设密码"（与原 Legado `LocalConfig.password`
+/// 默认值一致）。导出 zip 时仍走 AES 加密，但 key = MD5("")。
+Future<void> setBackupPassword(
+        {required String documentsDir, required String password}) =>
+    RustLib.instance.api.crateApiSetBackupPassword(
+        documentsDir: documentsDir, password: password);
+
+/// 读取当前备份密码；不存在时返回空串。
+Future<String> getBackupPassword({required String documentsDir}) =>
+    RustLib.instance.api.crateApiGetBackupPassword(documentsDir: documentsDir);

@@ -967,7 +967,10 @@ dependencies = [
 name = "core-storage"
 version = "0.1.0"
 dependencies = [
+ "aes",
+ "base64 0.21.7",
  "chrono",
+ "md-5",
  "rusqlite",
  "serde",
  "serde_json",
