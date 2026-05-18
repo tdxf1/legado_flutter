@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Quality gate: analyzer 0 issue, no test regression"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse PageMeasure / ReaderSettings; avoid duplicating chapter model state"}
+{"file": ".trellis/tasks/05-18-controller-3ch/prd.md", "reason": "A.1-A.8 requirements + ChapterWindow API design + test list"}
+{"file": ".trellis/tasks/05-18-cross-chapter-animation/prd.md", "reason": "Parent task architecture overview - subtask A is one piece of the larger design"}

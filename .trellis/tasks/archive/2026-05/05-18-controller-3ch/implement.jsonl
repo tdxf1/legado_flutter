@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Quality gate"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse existing TextPage / PageMeasure / ReaderSettings; only refactor controller internals"}
+{"file": ".trellis/tasks/05-18-controller-3ch/prd.md", "reason": "Subtask A scope: controller 3-chapter window refactor only, no ReaderPage / Delegate changes"}
+{"file": ".trellis/tasks/05-18-cross-chapter-animation/prd.md", "reason": "Parent task PRD with full architecture - subtask A delivers controller piece"}
