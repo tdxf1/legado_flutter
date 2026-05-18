@@ -35,12 +35,6 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
   /// 性能降级控制器，外部可通过 [attachPerfMonitor] 接入到 [PerfMonitor]。
   final SimulationDegradeController degrade;
 
-  /// Bug 2.5 (决策 B=a)：点击翻页时仿真无触摸坐标，draw 路径会因为 path0
-  /// 退化成空 path 而出现错乱。这个标志位让 [draw] 在点击翻页期间走 cover
-  /// 风格简化动画（横向位移 + 阴影），动画结束后由 [_runAnimation] 调
-  /// _resetState() 时清掉。
-  bool _coverFallback = false;
-
   // 4 个角点，决定翻页方向
   // mCornerX/Y 与 Kotlin 一致：取 0 或 viewWidth/Height
   double _cornerX = 0;
@@ -211,76 +205,44 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
 
   // ── 绘制入口 ──────────────────────────────────────────────────────
 
-  /// Bug 2.5 (决策 B=a)：点击翻页时简单调用父类 nextPageByAnim 即可
-  /// （父类已经预渲染 picture 并启动 animController.forward）；这里把
-  /// _coverFallback 置 true，draw 期间走 cover 风格几何替代仿真贝塞尔。
+  /// Task 5 (MD3 体感复刻 Phase A 收尾)：点击翻页（tap）走完整贝塞尔。
+  ///
+  /// 与 Legado MD3 `HorizontalPageDelegate.nextPageByAnim` 1:1 对齐：
+  /// 合成一个虚拟起点（右下角附近 0.9w / 0.9h），让 [_calcCornerXY] 算出
+  /// `cornerX = w / cornerY = h / isRtOrLb = false`，整个 [draw] 走完整
+  /// 贝塞尔几何，不再退化成 cover 风格简化动画。
+  ///
+  /// `_calcCornerXY` 仅在 [onDragStart] 路径中被调用——tap 路径没有
+  /// drag，因此需要在这里手动计算一次。`_maxLength` 同样需要刷新，因为
+  /// `pageSize` 可能在两次 tap 之间变化（旋屏 / 字号更改）。
   @override
   void nextPageByAnim(int animationSpeed) {
     if (isRunning) return;
-    _coverFallback = true;
+    final size = pageSize.isEmpty ? const Size(400, 600) : pageSize;
+    final virtualStart = Offset(size.width * 0.9, size.height * 0.9);
+    recordTouchStart(virtualStart, size);
+    _maxLength = math.sqrt(
+      size.width * size.width + size.height * size.height,
+    );
+    _calcCornerXY(virtualStart.dx, virtualStart.dy);
     super.nextPageByAnim(animationSpeed);
   }
 
   @override
   void prevPageByAnim(int animationSpeed) {
     if (isRunning) return;
-    _coverFallback = true;
-    super.prevPageByAnim(animationSpeed);
-  }
-
-  /// Cover 风格绘制：当前页向左滑出、下一页底层不动 + 阴影线。
-  /// 与 [CoverPageDelegate.draw] 几何等价，复制以避免类层级耦合。
-  void _drawCoverStyle(
-    Canvas canvas,
-    Size size,
-    double animProgress,
-    TextPage? currentPage,
-    TextPage? nextPage,
-    TextPage? prevPage,
-    int totalPages,
-  ) {
-    final sw = size.width;
-    final progress = animProgress.clamp(0.0, 1.0);
-    if (direction == PageDirection.next &&
-        (nextPicture != null || nextPage != null)) {
-      drawPage(canvas, nextPicture, nextPage, Offset.zero);
-      _drawCoverFallbackShadow(canvas, size, progress, true);
-      canvas.save();
-      canvas.clipRect(Rect.fromLTWH(0, 0, sw * (1 - progress), size.height));
-      canvas.translate(-sw * progress, 0);
-      drawPage(canvas, curPicture, currentPage, Offset.zero);
-      canvas.restore();
-    } else if (direction == PageDirection.prev &&
-        (prevPicture != null || prevPage != null)) {
-      canvas.save();
-      canvas.clipRect(
-          Rect.fromLTWH(sw * progress, 0, sw * (1 - progress), size.height));
-      drawPage(canvas, curPicture, currentPage, Offset.zero);
-      canvas.restore();
-      _drawCoverFallbackShadow(canvas, size, progress, false);
-      canvas.save();
-      canvas.translate(-sw * (1 - progress), 0);
-      drawPage(canvas, prevPicture, prevPage, Offset.zero);
-      canvas.restore();
-    } else {
-      drawStaticCurrent(canvas, size, currentPage, totalPages);
-    }
-  }
-
-  void _drawCoverFallbackShadow(
-      Canvas canvas, Size size, double progress, bool forward) {
-    const shadowWidth = 20.0;
-    final x = forward ? size.width * (1 - progress) : size.width * progress;
-    final shadowPaint = Paint()
-      ..shader = ui.Gradient.linear(
-        forward ? Offset(x, 0) : Offset(x + shadowWidth, 0),
-        forward ? Offset(x + shadowWidth, 0) : Offset(x, 0),
-        const [Color(0x5A000000), Color(0x00000000)],
-      );
-    canvas.drawRect(
-      Rect.fromLTWH(forward ? x : x - shadowWidth, 0, shadowWidth, size.height),
-      shadowPaint,
+    final size = pageSize.isEmpty ? const Size(400, 600) : pageSize;
+    // 左下角附近虚拟起点：与 next 的 (0.9w, 0.9h) 镜像，留出 0.1*w 偏移
+    // 避免 startTouch 落在 cornerXY 上导致 [_calcPoints] 中 (0/0) 退化为 NaN。
+    // x ≤ w/2 与 y > h/2 的象限决策保持不变 → cornerX=0 / cornerY=h /
+    // isRtOrLb=true，与 Legado MD3 设定一致。
+    final virtualStart = Offset(size.width * 0.1, size.height * 0.9);
+    recordTouchStart(virtualStart, size);
+    _maxLength = math.sqrt(
+      size.width * size.width + size.height * size.height,
     );
+    _calcCornerXY(virtualStart.dx, virtualStart.dy);
+    super.prevPageByAnim(animationSpeed);
   }
 
   @override
@@ -293,17 +255,6 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
     required double animProgress,
     required int totalPages,
   }) {
-    // Bug 2.5: 点击翻页期间走 cover-style；动画结束 _resetState 会清 picture，
-    // 但 _coverFallback 也要在动画停止后清，避免下次 drag 走错路径。
-    if (_coverFallback && !isRunning) {
-      _coverFallback = false;
-    }
-    if (_coverFallback) {
-      _drawCoverStyle(
-          canvas, size, animProgress, currentPage, nextPage, prevPage, totalPages);
-      return;
-    }
-
     if (direction == PageDirection.none) {
       drawStaticCurrent(canvas, size, currentPage, totalPages);
       return;
