@@ -32,6 +32,17 @@ abstract class PageDelegate {
   PageDirection _direction = PageDirection.none;
   double _dragOffset = 0;
 
+  /// T4 (05-18): 对应 MD3 `HorizontalPageDelegate.onScroll` 的 isCancel
+  /// 字段。每帧 [onDragUpdate] 比较当前 delta 与翻页方向 — 朝**翻页反向**
+  /// 移动 → 标 cancel；松手时 [onDragEnd] 看本字段决定 reverse 回滚 vs
+  /// forward 翻页。MD3 horizontal/cover/simulation 三种 delegate 共用此
+  /// last-frame 微动方向语义，不参考绝对位置百分比 / fling velocity。
+  bool _dragCancel = false;
+
+  /// 测试和子类只读访问。
+  @visibleForTesting
+  bool get debugDragCancel => _dragCancel;
+
   // Pre-rendered page snapshots for smooth animation (accessible from subclasses)
   ui.Picture? curPicture;
   ui.Picture? nextPicture;
@@ -156,6 +167,20 @@ abstract class PageDelegate {
       _direction = PageDirection.next;
     }
 
+    // T4 (05-18): 每帧覆盖 _dragCancel — last-frame 微动方向决定松手时
+    // 是回滚还是翻页（对齐 MD3 HorizontalPageDelegate.onScroll
+    // `isCancel = (NEXT && sumX>lastX) || (PREV && sumX<lastX)`）。
+    // - next 方向（手指持续向左拉 → delta < 0）：当前帧 delta > 0 表示
+    //   手指向**右**回拉 → 朝翻页反向 → cancel = true
+    // - prev 方向（手指持续向右拉 → delta > 0）：当前帧 delta < 0 表示
+    //   手指向**左**回拉 → 朝翻页反向 → cancel = true
+    // delta == 0（少见，多 touch 数据丢帧）保留上一帧值不动。
+    if (_direction == PageDirection.next && delta != 0) {
+      _dragCancel = delta > 0;
+    } else if (_direction == PageDirection.prev && delta != 0) {
+      _dragCancel = delta < 0;
+    }
+
     final progress = (_dragOffset.abs() / totalWidth).clamp(0.0, 1.0);
     // Subtask C：drag 期间 progress 推进的"边界守门"。同章 hasPrev/hasNext
     // 不通过时，如果 controller 的 boundaryPrevPage / boundaryNextPage
@@ -183,6 +208,20 @@ abstract class PageDelegate {
       _direction = detectedDir;
     }
 
+    if (_direction == PageDirection.none) {
+      resetState();
+      return;
+    }
+
+    // T4 (05-18): _dragCancel = true 时走回滚分支 — animController 从
+    // 当前 progress reverse 到 0，不调 controller.goToNextPage / 不切章。
+    // 对齐 MD3 horizontal/cover/simulation 三种 delegate 的"last-frame
+    // 微动方向决定翻页 vs 回滚"语义。
+    if (_dragCancel) {
+      _runReverseAnimation();
+      return;
+    }
+
     if (_direction == PageDirection.next) {
       goToNext();
     } else if (_direction == PageDirection.prev) {
@@ -190,6 +229,21 @@ abstract class PageDelegate {
     } else {
       resetState();
     }
+  }
+
+  /// T4 (05-18): drag-cancel 路径的反向动画 — animController 从当前
+  /// progress reverse 到 0，跑完后 resetState。不调 controller 翻页 /
+  /// commit / onChapterBoundary —— 用户拖了一半反悔，所以什么都不发生。
+  void _runReverseAnimation() {
+    if (isRunning) return;
+    isRunning = true;
+    void tick() => onAnimTick(animController.value);
+    animController.addListener(tick);
+    animController.reverse(from: animController.value).then((_) {
+      animController.removeListener(tick);
+      resetState();
+      onAnimEnd();
+    });
   }
 
   void goToNext() {
@@ -262,6 +316,7 @@ abstract class PageDelegate {
   void resetState() {
     _direction = PageDirection.none;
     _dragOffset = 0;
+    _dragCancel = false; // T4 (05-18): 清 drag-cancel flag
     isRunning = false;
     animController.value = 0;
     _clearPictures();
@@ -306,6 +361,7 @@ abstract class PageDelegate {
     }
     _direction = PageDirection.none;
     _dragOffset = 0;
+    _dragCancel = false; // T4 (05-18): 清 drag-cancel flag
     isRunning = false;
     animController.value = 0;
     _clearPictures();
