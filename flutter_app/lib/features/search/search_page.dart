@@ -15,6 +15,40 @@ class SearchPage extends ConsumerStatefulWidget {
 
   @override
   ConsumerState<SearchPage> createState() => _SearchPageState();
+
+  /// 精确模式过滤 + 三档排序：
+  /// 1. `name == keyword` 的条目（最高优先级）
+  /// 2. `author == keyword` 的条目
+  /// 3. `name.contains(keyword) || author.contains(keyword)` 的条目
+  ///
+  /// 既不等也不包含的条目被丢弃。这与 Legado MD3
+  /// `SearchModel.startSearch` + `mergeItems` 的 equalData/containsData
+  /// 排序对齐，差异是排序在客户端而不是抓取层（Rust 端零改动）。
+  ///
+  /// keyword 为空时认为没有过滤意义，原样返回（避免吞掉所有结果）。
+  @visibleForTesting
+  static List<Map<String, dynamic>> applyPrecisionFilter(
+    List<Map<String, dynamic>> results,
+    String keyword,
+  ) {
+    if (keyword.isEmpty) return List<Map<String, dynamic>>.from(results);
+    final equalName = <Map<String, dynamic>>[];
+    final equalAuthor = <Map<String, dynamic>>[];
+    final contains = <Map<String, dynamic>>[];
+    for (final r in results) {
+      final name = r['name'] as String? ?? '';
+      final author = r['author'] as String? ?? '';
+      if (name == keyword) {
+        equalName.add(r);
+      } else if (author == keyword) {
+        equalAuthor.add(r);
+      } else if (name.contains(keyword) || author.contains(keyword)) {
+        contains.add(r);
+      }
+      // 不匹配的条目被丢弃
+    }
+    return [...equalName, ...equalAuthor, ...contains];
+  }
 }
 
 class _SearchPageState extends ConsumerState<SearchPage> {
@@ -22,17 +56,57 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   final _results = ValueNotifier<List<Map<String, dynamic>>>([]);
   bool _loading = false;
   bool _onlineMode = false;
+  bool _precisionMode = false;
   List<String> _searchHistory = [];
 
   @override
   void initState() {
     super.initState();
     _loadHistory();
+    _loadPrecisionMode();
   }
 
   Future<void> _loadHistory() async {
     final history = await loadSearchHistoryFromDisk();
     if (mounted) setState(() => _searchHistory = history);
+  }
+
+  Future<void> _loadPrecisionMode() async {
+    final v = await loadSearchPrecisionFromDisk();
+    if (mounted) setState(() => _precisionMode = v);
+  }
+
+  void _togglePrecisionMode() {
+    setState(() => _precisionMode = !_precisionMode);
+    // fire-and-forget：写盘失败仅打日志，不阻塞 UI
+    unawaited(saveSearchPrecisionToDisk(_precisionMode));
+    if (_searchCtrl.text.trim().isNotEmpty) {
+      _doSearch();
+    }
+  }
+
+  void _showPrecisionEmptyDialog() {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('精确搜索无结果'),
+        content: const Text('当前精确搜索模式无匹配结果，是否切换到模糊搜索？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('保持精确'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _togglePrecisionMode();
+            },
+            child: const Text('切换到模糊'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _addToHistory(String keyword) async {
@@ -264,7 +338,13 @@ class _SearchPageState extends ConsumerState<SearchPage> {
             deduped.add(r);
           }
         }
-        _results.value = deduped;
+        final finalResults = _precisionMode
+            ? SearchPage.applyPrecisionFilter(deduped, keyword)
+            : deduped;
+        _results.value = finalResults;
+        if (_precisionMode && finalResults.isEmpty && deduped.isNotEmpty) {
+          _showPrecisionEmptyDialog();
+        }
       } else {
         await ref.read(dbInitializedProvider.future);
         if (!mounted) return;
@@ -274,7 +354,16 @@ class _SearchPageState extends ConsumerState<SearchPage> {
             await rust_api.searchBooksOffline(dbPath: dbPath, keyword: keyword);
         final List<dynamic> offlineList = jsonDecode(offlineJson);
         if (!mounted) return;
-        _results.value = offlineList.cast<Map<String, dynamic>>();
+        final offlineResults = offlineList.cast<Map<String, dynamic>>();
+        final finalOffline = _precisionMode
+            ? SearchPage.applyPrecisionFilter(offlineResults, keyword)
+            : offlineResults;
+        _results.value = finalOffline;
+        if (_precisionMode &&
+            finalOffline.isEmpty &&
+            offlineResults.isNotEmpty) {
+          _showPrecisionEmptyDialog();
+        }
       }
       _addToHistory(keyword);
     } catch (e) {
@@ -320,7 +409,10 @@ class _SearchPageState extends ConsumerState<SearchPage> {
               }
             }
             if (mounted) {
-              _results.value = List.unmodifiable(results);
+              final view = _precisionMode
+                  ? SearchPage.applyPrecisionFilter(results, keyword)
+                  : results;
+              _results.value = List.unmodifiable(view);
             }
             break;
           case 'error':
@@ -347,7 +439,13 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         sub?.cancel();
       });
       if (!mounted) return;
-      _results.value = List.unmodifiable(results);
+      final finalResults = _precisionMode
+          ? SearchPage.applyPrecisionFilter(results, keyword)
+          : results;
+      _results.value = List.unmodifiable(finalResults);
+      if (_precisionMode && finalResults.isEmpty && results.isNotEmpty) {
+        _showPrecisionEmptyDialog();
+      }
       _addToHistory(keyword);
     } catch (e) {
       if (!mounted) return;
@@ -400,7 +498,18 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('搜索')),
+      appBar: AppBar(
+        title: const Text('搜索'),
+        actions: [
+          IconButton(
+            icon: Icon(
+              _precisionMode ? Icons.youtube_searched_for : Icons.search,
+            ),
+            tooltip: _precisionMode ? '精确搜索（已开启）' : '模糊搜索',
+            onPressed: _togglePrecisionMode,
+          ),
+        ],
+      ),
       body: Column(
         children: [
           Padding(

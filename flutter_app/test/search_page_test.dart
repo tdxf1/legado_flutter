@@ -40,7 +40,24 @@ void main() {
   testWidgets('SearchPage shows search icon prefix', (WidgetTester tester) async {
     await tester.pumpWidget(buildSearchPage());
     await tester.pumpAndSettle();
-    expect(find.byIcon(Icons.search), findsOneWidget);
+    // 一个在输入框 prefix，一个在 AppBar 精确模式 toggle (默认关 → Icons.search)
+    expect(find.byIcon(Icons.search), findsNWidgets(2));
+  });
+
+  testWidgets('SearchPage AppBar precision toggle defaults to fuzzy mode', (WidgetTester tester) async {
+    await tester.pumpWidget(buildSearchPage());
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('模糊搜索'), findsOneWidget);
+    expect(find.byIcon(Icons.youtube_searched_for), findsNothing);
+  });
+
+  testWidgets('SearchPage AppBar precision toggle flips to precision mode on tap', (WidgetTester tester) async {
+    await tester.pumpWidget(buildSearchPage());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('模糊搜索'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('精确搜索（已开启）'), findsOneWidget);
+    expect(find.byIcon(Icons.youtube_searched_for), findsOneWidget);
   });
 
   testWidgets('SearchPage shows send button', (WidgetTester tester) async {

@@ -353,6 +353,44 @@ Future<void> saveSearchHistoryToDisk(List<String> history) async {
     debugPrint('Failed to save search history: $e');
   }
 }
+
+/// 搜索精确模式：是否仅保留 `name == kw / author == kw / contains kw` 的结果。
+///
+/// 复用 [loadSearchHistoryFromDisk] 同款 `settings.json` 持久化通道
+/// （PRD 文本写的是 SharedPreferences，但工程里没有 shared_preferences 依赖
+/// 只有 path_provider，且 search_history 已经走 settings.json，按
+/// code-reuse-thinking-guide 复用现有方案，避免引入新依赖与平台 mock）。
+Future<bool> loadSearchPrecisionFromDisk() async {
+  try {
+    final dir = Platform.isAndroid
+        ? (await getApplicationDocumentsDirectory()).path
+        : (await getApplicationSupportDirectory()).path;
+    final file = File('$dir/settings.json');
+    if (!await file.exists()) return false;
+    final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+    final v = json['searchPrecision'];
+    if (v is bool) return v;
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
+
+Future<void> saveSearchPrecisionToDisk(bool enabled) async {
+  try {
+    final dir = Platform.isAndroid
+        ? (await getApplicationDocumentsDirectory()).path
+        : (await getApplicationSupportDirectory()).path;
+    final file = File('$dir/settings.json');
+    final Map<String, dynamic> data = file.existsSync()
+        ? jsonDecode(await file.readAsString()) as Map<String, dynamic>
+        : {};
+    data['searchPrecision'] = enabled;
+    await file.writeAsString(jsonEncode(data));
+  } catch (e) {
+    debugPrint('Failed to save search precision: $e');
+  }
+}
 /// 阅读器渲染模式。
 ///
 /// 之前散落使用 `_settings.pageAnim == ReaderPageAnim.scroll` 或
