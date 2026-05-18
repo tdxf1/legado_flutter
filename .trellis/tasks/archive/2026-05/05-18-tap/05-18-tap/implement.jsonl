@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Quality gate"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse ReaderSettings + copyWith + JSON migration pattern; do not introduce new providers/storage layers"}
+{"file": ".trellis/tasks/05-18-tap/prd.md", "reason": "R4.x scope + ReaderSettings migration v4→v5 + slider UI placement"}
