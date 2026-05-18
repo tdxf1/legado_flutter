@@ -68,7 +68,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -916733173;
+  int get rustContentHash => 1950826732;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -87,8 +87,19 @@ abstract class RustLibApi extends BaseApi {
       required int paragraphIndex,
       String? content});
 
+  Future<String> crateApiApplyReplaceRules(
+      {required String dbPath,
+      required String content,
+      required PlatformInt64 cacheGeneration,
+      String? bookName,
+      String? bookOrigin,
+      required bool applyToTitle});
+
   Future<void> crateApiBatchCreateDownloadChapters(
       {required String dbPath, required String chaptersJson});
+
+  Future<String> crateApiCreateBookGroup(
+      {required String dbPath, required String name, required int sortOrder});
 
   Future<String> crateApiCreateDownloadTask(
       {required String dbPath, required String taskJson});
@@ -103,6 +114,9 @@ abstract class RustLibApi extends BaseApi {
 
   Future<void> crateApiDeleteBook({required String dbPath, required String id});
 
+  Future<void> crateApiDeleteBookGroup(
+      {required String dbPath, required PlatformInt64 id});
+
   Future<void> crateApiDeleteBookmark(
       {required String dbPath, required String bookmarkId});
 
@@ -112,8 +126,14 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiDeleteDownloadTask(
       {required String dbPath, required String taskId});
 
+  Future<void> crateApiDeleteReplaceRule(
+      {required String dbPath, required String id});
+
   Future<void> crateApiDeleteSource(
       {required String dbPath, required String id});
+
+  Future<void> crateApiDeleteSourcesBatch(
+      {required String dbPath, required String idsJson});
 
   Future<String> crateApiDownloadAndSaveChapter(
       {required String dbPath,
@@ -122,6 +142,14 @@ abstract class RustLibApi extends BaseApi {
       required String sourceJson,
       required String chapterUrl,
       required String downloadDir});
+
+  Future<String> crateApiExplore(
+      {required String dbPath,
+      required String sourceId,
+      required String exploreUrl,
+      required int page});
+
+  Future<String> crateApiExportAllSources({required String dbPath});
 
   Future<String> crateApiGetAllBooks({required String dbPath});
 
@@ -159,16 +187,29 @@ abstract class RustLibApi extends BaseApi {
 
   Future<String> crateApiGetEnabledSources({required String dbPath});
 
+  Future<String> crateApiGetExploreEntries(
+      {required String dbPath, required String sourceId});
+
   Future<String> crateApiGetReadingProgress(
       {required String dbPath, required String bookId});
 
+  Future<String> crateApiGetReplaceRules({required String dbPath});
+
   Future<String> crateApiGetSourceForDownload(
+      {required String dbPath, required String sourceId});
+
+  Future<String> crateApiGetSourceRuleSearchRaw(
       {required String dbPath, required String sourceId});
 
   Future<int> crateApiImportSourcesFromJson(
       {required String dbPath, required String json});
 
   Future<String> crateApiInitLegado({required String dbPath});
+
+  Future<String> crateApiListBookGroups({required String dbPath});
+
+  Future<String> crateApiListBooksByGroup(
+      {required String dbPath, required PlatformInt64 groupId});
 
   Future<String> crateApiPing();
 
@@ -195,6 +236,9 @@ abstract class RustLibApi extends BaseApi {
       required int paragraphIndex,
       required int offset});
 
+  Future<void> crateApiSaveReplaceRule(
+      {required String dbPath, required String ruleJson});
+
   Future<void> crateApiSaveSource(
       {required String dbPath, required String sourceJson});
 
@@ -214,8 +258,22 @@ abstract class RustLibApi extends BaseApi {
       required String sourceId,
       required String keyword});
 
+  Future<void> crateApiSetBookGroup(
+      {required String dbPath,
+      required String bookId,
+      required PlatformInt64 groupId});
+
+  Future<void> crateApiSetReplaceRuleEnabled(
+      {required String dbPath, required String id, required bool enabled});
+
   Future<void> crateApiSetSourceEnabled(
       {required String dbPath, required String id, required bool enabled});
+
+  Future<void> crateApiUpdateBookGroup(
+      {required String dbPath,
+      required PlatformInt64 id,
+      required String name,
+      required int sortOrder});
 
   Future<void> crateApiUpdateChapterContent(
       {required String dbPath,
@@ -242,46 +300,10 @@ abstract class RustLibApi extends BaseApi {
       required int status,
       String? errorMessage});
 
-  Future<String> crateApiValidateSourceRules({required String sourceJson});
-
   Future<String> crateApiValidateSourceFromDb(
       {required String dbPath, required String sourceId});
 
-  Future<String> crateApiExportAllSources({required String dbPath});
-
-  Future<String> crateApiGetReplaceRules({required String dbPath});
-
-  Future<String> crateApiGetSourceRuleSearchRaw(
-      {required String dbPath, required String sourceId});
-
-  Future<void> crateApiSaveReplaceRule(
-      {required String dbPath, required String ruleJson});
-
-  Future<void> crateApiDeleteReplaceRule(
-      {required String dbPath, required String id});
-
-  Future<void> crateApiSetReplaceRuleEnabled(
-      {required String dbPath, required String id, required bool enabled});
-
-  Future<void> crateApiDeleteSourcesBatch(
-      {required String dbPath, required String idsJson});
-
-  Future<String> crateApiGetExploreEntries(
-      {required String dbPath, required String sourceId});
-
-  Future<String> crateApiExplore(
-      {required String dbPath,
-      required String sourceId,
-      required String exploreUrl,
-      required int page});
-
-  Future<String> crateApiApplyReplaceRules(
-      {required String dbPath,
-      required String content,
-      required PlatformInt64 cacheGeneration,
-      String? bookName,
-      String? bookOrigin,
-      bool applyToTitle = false});
+  Future<String> crateApiValidateSourceRules({required String sourceJson});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -332,6 +354,55 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiApplyReplaceRules(
+      {required String dbPath,
+      required String content,
+      required PlatformInt64 cacheGeneration,
+      String? bookName,
+      String? bookOrigin,
+      required bool applyToTitle}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(content, serializer);
+        sse_encode_i_64(cacheGeneration, serializer);
+        sse_encode_opt_String(bookName, serializer);
+        sse_encode_opt_String(bookOrigin, serializer);
+        sse_encode_bool(applyToTitle, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 2, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiApplyReplaceRulesConstMeta,
+      argValues: [
+        dbPath,
+        content,
+        cacheGeneration,
+        bookName,
+        bookOrigin,
+        applyToTitle
+      ],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiApplyReplaceRulesConstMeta => const TaskConstMeta(
+        debugName: "apply_replace_rules",
+        argNames: [
+          "dbPath",
+          "content",
+          "cacheGeneration",
+          "bookName",
+          "bookOrigin",
+          "applyToTitle"
+        ],
+      );
+
+  @override
   Future<void> crateApiBatchCreateDownloadChapters(
       {required String dbPath, required String chaptersJson}) {
     return handler.executeNormal(NormalTask(
@@ -340,7 +411,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(chaptersJson, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 2, port: port_);
+            funcId: 3, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -359,6 +430,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiCreateBookGroup(
+      {required String dbPath, required String name, required int sortOrder}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(name, serializer);
+        sse_encode_i_32(sortOrder, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 4, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiCreateBookGroupConstMeta,
+      argValues: [dbPath, name, sortOrder],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiCreateBookGroupConstMeta => const TaskConstMeta(
+        debugName: "create_book_group",
+        argNames: ["dbPath", "name", "sortOrder"],
+      );
+
+  @override
   Future<String> crateApiCreateDownloadTask(
       {required String dbPath, required String taskJson}) {
     return handler.executeNormal(NormalTask(
@@ -367,7 +465,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(taskJson, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 3, port: port_);
+            funcId: 5, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -396,7 +494,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(taskJson, serializer);
         sse_encode_String(chaptersJson, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 4, port: port_);
+            funcId: 6, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -424,7 +522,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(name, serializer);
         sse_encode_String(url, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 5, port: port_);
+            funcId: 7, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -450,7 +548,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(id, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 6, port: port_);
+            funcId: 8, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -468,6 +566,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiDeleteBookGroup(
+      {required String dbPath, required PlatformInt64 id}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_i_64(id, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 9, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiDeleteBookGroupConstMeta,
+      argValues: [dbPath, id],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiDeleteBookGroupConstMeta => const TaskConstMeta(
+        debugName: "delete_book_group",
+        argNames: ["dbPath", "id"],
+      );
+
+  @override
   Future<void> crateApiDeleteBookmark(
       {required String dbPath, required String bookmarkId}) {
     return handler.executeNormal(NormalTask(
@@ -476,7 +600,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(bookmarkId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 7, port: port_);
+            funcId: 10, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -502,7 +626,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(id, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 8, port: port_);
+            funcId: 11, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -528,7 +652,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(taskId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 9, port: port_);
+            funcId: 12, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -546,6 +670,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiDeleteReplaceRule(
+      {required String dbPath, required String id}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(id, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 13, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiDeleteReplaceRuleConstMeta,
+      argValues: [dbPath, id],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiDeleteReplaceRuleConstMeta => const TaskConstMeta(
+        debugName: "delete_replace_rule",
+        argNames: ["dbPath", "id"],
+      );
+
+  @override
   Future<void> crateApiDeleteSource(
       {required String dbPath, required String id}) {
     return handler.executeNormal(NormalTask(
@@ -554,7 +704,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(id, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 10, port: port_);
+            funcId: 14, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -569,6 +719,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiDeleteSourceConstMeta => const TaskConstMeta(
         debugName: "delete_source",
         argNames: ["dbPath", "id"],
+      );
+
+  @override
+  Future<void> crateApiDeleteSourcesBatch(
+      {required String dbPath, required String idsJson}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(idsJson, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 15, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiDeleteSourcesBatchConstMeta,
+      argValues: [dbPath, idsJson],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiDeleteSourcesBatchConstMeta => const TaskConstMeta(
+        debugName: "delete_sources_batch",
+        argNames: ["dbPath", "idsJson"],
       );
 
   @override
@@ -589,7 +765,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(chapterUrl, serializer);
         sse_encode_String(downloadDir, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 11, port: port_);
+            funcId: 16, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -622,13 +798,68 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiExplore(
+      {required String dbPath,
+      required String sourceId,
+      required String exploreUrl,
+      required int page}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(sourceId, serializer);
+        sse_encode_String(exploreUrl, serializer);
+        sse_encode_i_32(page, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 17, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiExploreConstMeta,
+      argValues: [dbPath, sourceId, exploreUrl, page],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiExploreConstMeta => const TaskConstMeta(
+        debugName: "explore",
+        argNames: ["dbPath", "sourceId", "exploreUrl", "page"],
+      );
+
+  @override
+  Future<String> crateApiExportAllSources({required String dbPath}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 18, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiExportAllSourcesConstMeta,
+      argValues: [dbPath],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiExportAllSourcesConstMeta => const TaskConstMeta(
+        debugName: "export_all_sources",
+        argNames: ["dbPath"],
+      );
+
+  @override
   Future<String> crateApiGetAllBooks({required String dbPath}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(dbPath, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 12, port: port_);
+            funcId: 19, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -652,7 +883,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(dbPath, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 13, port: port_);
+            funcId: 20, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -678,7 +909,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(bookId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 14, port: port_);
+            funcId: 21, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -704,7 +935,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(sourceJson, serializer);
         sse_encode_String(bookUrl, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 15, port: port_);
+            funcId: 22, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -730,7 +961,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(bookId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 16, port: port_);
+            funcId: 23, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -756,7 +987,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(sourceJson, serializer);
         sse_encode_String(chapterUrl, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 17, port: port_);
+            funcId: 24, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -786,7 +1017,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(sourceId, serializer);
         sse_encode_String(chapterUrl, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 18, port: port_);
+            funcId: 25, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -813,7 +1044,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(sourceJson, serializer);
         sse_encode_String(bookUrl, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 19, port: port_);
+            funcId: 26, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -838,7 +1069,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(dbPath, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 20, port: port_);
+            funcId: 27, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_i_32,
@@ -864,7 +1095,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(taskId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 21, port: port_);
+            funcId: 28, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -891,7 +1122,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(bookId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 22, port: port_);
+            funcId: 29, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -916,7 +1147,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(dbPath, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 23, port: port_);
+            funcId: 30, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -940,7 +1171,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(dbPath, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 24, port: port_);
+            funcId: 31, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -958,6 +1189,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiGetExploreEntries(
+      {required String dbPath, required String sourceId}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(sourceId, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 32, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiGetExploreEntriesConstMeta,
+      argValues: [dbPath, sourceId],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiGetExploreEntriesConstMeta => const TaskConstMeta(
+        debugName: "get_explore_entries",
+        argNames: ["dbPath", "sourceId"],
+      );
+
+  @override
   Future<String> crateApiGetReadingProgress(
       {required String dbPath, required String bookId}) {
     return handler.executeNormal(NormalTask(
@@ -966,7 +1223,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(bookId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 25, port: port_);
+            funcId: 33, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -984,6 +1241,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiGetReplaceRules({required String dbPath}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 34, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiGetReplaceRulesConstMeta,
+      argValues: [dbPath],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiGetReplaceRulesConstMeta => const TaskConstMeta(
+        debugName: "get_replace_rules",
+        argNames: ["dbPath"],
+      );
+
+  @override
   Future<String> crateApiGetSourceForDownload(
       {required String dbPath, required String sourceId}) {
     return handler.executeNormal(NormalTask(
@@ -992,7 +1273,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(sourceId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 26, port: port_);
+            funcId: 35, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -1011,6 +1292,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiGetSourceRuleSearchRaw(
+      {required String dbPath, required String sourceId}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(sourceId, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 36, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiGetSourceRuleSearchRawConstMeta,
+      argValues: [dbPath, sourceId],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiGetSourceRuleSearchRawConstMeta =>
+      const TaskConstMeta(
+        debugName: "get_source_rule_search_raw",
+        argNames: ["dbPath", "sourceId"],
+      );
+
+  @override
   Future<int> crateApiImportSourcesFromJson(
       {required String dbPath, required String json}) {
     return handler.executeNormal(NormalTask(
@@ -1019,7 +1327,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(json, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 27, port: port_);
+            funcId: 37, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_i_32,
@@ -1044,7 +1352,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(dbPath, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 28, port: port_);
+            funcId: 38, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -1062,12 +1370,62 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiListBookGroups({required String dbPath}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 39, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiListBookGroupsConstMeta,
+      argValues: [dbPath],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiListBookGroupsConstMeta => const TaskConstMeta(
+        debugName: "list_book_groups",
+        argNames: ["dbPath"],
+      );
+
+  @override
+  Future<String> crateApiListBooksByGroup(
+      {required String dbPath, required PlatformInt64 groupId}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_i_64(groupId, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 40, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiListBooksByGroupConstMeta,
+      argValues: [dbPath, groupId],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiListBooksByGroupConstMeta => const TaskConstMeta(
+        debugName: "list_books_by_group",
+        argNames: ["dbPath", "groupId"],
+      );
+
+  @override
   Future<String> crateApiPing() {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 29, port: port_);
+            funcId: 41, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -1096,7 +1454,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(bookId, serializer);
         sse_encode_String(chaptersJson, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 50, port: port_);
+            funcId: 42, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -1126,7 +1484,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(bookId, serializer);
         sse_encode_String(chaptersJson, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 49, port: port_);
+            funcId: 43, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -1153,7 +1511,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(bookJson, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 30, port: port_);
+            funcId: 44, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -1179,7 +1537,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(chapterJson, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 31, port: port_);
+            funcId: 45, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -1212,7 +1570,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_i_32(paragraphIndex, serializer);
         sse_encode_i_32(offset, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 32, port: port_);
+            funcId: 46, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -1237,6 +1595,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiSaveReplaceRule(
+      {required String dbPath, required String ruleJson}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(ruleJson, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 47, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiSaveReplaceRuleConstMeta,
+      argValues: [dbPath, ruleJson],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSaveReplaceRuleConstMeta => const TaskConstMeta(
+        debugName: "save_replace_rule",
+        argNames: ["dbPath", "ruleJson"],
+      );
+
+  @override
   Future<void> crateApiSaveSource(
       {required String dbPath, required String sourceJson}) {
     return handler.executeNormal(NormalTask(
@@ -1245,7 +1629,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(sourceJson, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 33, port: port_);
+            funcId: 48, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -1271,7 +1655,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(keyword, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 34, port: port_);
+            funcId: 49, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -1297,7 +1681,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(sourceJson, serializer);
         sse_encode_String(keyword, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 35, port: port_);
+            funcId: 50, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -1326,7 +1710,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(sourceId, serializer);
         sse_encode_String(keyword, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 36, port: port_);
+            funcId: 51, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -1375,6 +1759,63 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiSetBookGroup(
+      {required String dbPath,
+      required String bookId,
+      required PlatformInt64 groupId}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(bookId, serializer);
+        sse_encode_i_64(groupId, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 53, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiSetBookGroupConstMeta,
+      argValues: [dbPath, bookId, groupId],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSetBookGroupConstMeta => const TaskConstMeta(
+        debugName: "set_book_group",
+        argNames: ["dbPath", "bookId", "groupId"],
+      );
+
+  @override
+  Future<void> crateApiSetReplaceRuleEnabled(
+      {required String dbPath, required String id, required bool enabled}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(id, serializer);
+        sse_encode_bool(enabled, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 54, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiSetReplaceRuleEnabledConstMeta,
+      argValues: [dbPath, id, enabled],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSetReplaceRuleEnabledConstMeta =>
+      const TaskConstMeta(
+        debugName: "set_replace_rule_enabled",
+        argNames: ["dbPath", "id", "enabled"],
+      );
+
+  @override
   Future<void> crateApiSetSourceEnabled(
       {required String dbPath, required String id, required bool enabled}) {
     return handler.executeNormal(NormalTask(
@@ -1384,7 +1825,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(id, serializer);
         sse_encode_bool(enabled, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 37, port: port_);
+            funcId: 55, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -1402,6 +1843,37 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiUpdateBookGroup(
+      {required String dbPath,
+      required PlatformInt64 id,
+      required String name,
+      required int sortOrder}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_i_64(id, serializer);
+        sse_encode_String(name, serializer);
+        sse_encode_i_32(sortOrder, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 56, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiUpdateBookGroupConstMeta,
+      argValues: [dbPath, id, name, sortOrder],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiUpdateBookGroupConstMeta => const TaskConstMeta(
+        debugName: "update_book_group",
+        argNames: ["dbPath", "id", "name", "sortOrder"],
+      );
+
+  @override
   Future<void> crateApiUpdateChapterContent(
       {required String dbPath,
       required String chapterId,
@@ -1413,7 +1885,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(chapterId, serializer);
         sse_encode_String(content, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 38, port: port_);
+            funcId: 57, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -1449,7 +1921,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_i_64(fileSize, serializer);
         sse_encode_opt_String(errorMessage, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 39, port: port_);
+            funcId: 58, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -1488,7 +1960,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_i_32(downloadedChapters, serializer);
         sse_encode_i_64(downloadedSize, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 40, port: port_);
+            funcId: 59, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -1520,7 +1992,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_i_32(status, serializer);
         sse_encode_opt_String(errorMessage, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 41, port: port_);
+            funcId: 60, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_unit,
@@ -1539,31 +2011,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<String> crateApiValidateSourceRules({required String sourceJson}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(sourceJson, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 42, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
-        decodeErrorData: sse_decode_String,
-      ),
-      constMeta: kCrateApiValidateSourceRulesConstMeta,
-      argValues: [sourceJson],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateApiValidateSourceRulesConstMeta =>
-      const TaskConstMeta(
-        debugName: "validate_source_rules",
-        argNames: ["sourceJson"],
-      );
-
-  @override
   Future<String> crateApiValidateSourceFromDb(
       {required String dbPath, required String sourceId}) {
     return handler.executeNormal(NormalTask(
@@ -1572,7 +2019,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_String(dbPath, serializer);
         sse_encode_String(sourceId, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 43, port: port_);
+            funcId: 61, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
@@ -1591,292 +2038,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<String> crateApiExportAllSources({required String dbPath}) {
+  Future<String> crateApiValidateSourceRules({required String sourceJson}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(dbPath, serializer);
+        sse_encode_String(sourceJson, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 44, port: port_);
+            funcId: 62, port: port_);
       },
       codec: SseCodec(
         decodeSuccessData: sse_decode_String,
         decodeErrorData: sse_decode_String,
       ),
-      constMeta: kCrateApiExportAllSourcesConstMeta,
-      argValues: [dbPath],
+      constMeta: kCrateApiValidateSourceRulesConstMeta,
+      argValues: [sourceJson],
       apiImpl: this,
     ));
   }
 
-  TaskConstMeta get kCrateApiExportAllSourcesConstMeta => const TaskConstMeta(
-        debugName: "export_all_sources",
-        argNames: ["dbPath"],
-      );
-
-  @override
-  Future<String> crateApiGetReplaceRules({required String dbPath}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(dbPath, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 45, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
-        decodeErrorData: sse_decode_String,
-      ),
-      constMeta: kCrateApiGetReplaceRulesConstMeta,
-      argValues: [dbPath],
-      apiImpl: this,
-    ));
-  }
-  TaskConstMeta get kCrateApiGetReplaceRulesConstMeta =>
+  TaskConstMeta get kCrateApiValidateSourceRulesConstMeta =>
       const TaskConstMeta(
-        debugName: "get_replace_rules",
-        argNames: ["dbPath"],
-      );
-
-  @override
-  Future<String> crateApiGetSourceRuleSearchRaw(
-      {required String dbPath, required String sourceId}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(dbPath, serializer);
-        sse_encode_String(sourceId, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 51, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
-        decodeErrorData: sse_decode_String,
-      ),
-      constMeta: kCrateApiGetSourceRuleSearchRawConstMeta,
-      argValues: [dbPath, sourceId],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateApiGetSourceRuleSearchRawConstMeta =>
-      const TaskConstMeta(
-        debugName: "get_source_rule_search_raw",
-        argNames: ["dbPath", "sourceId"],
-      );
-
-  @override
-  Future<void> crateApiSaveReplaceRule(
-      {required String dbPath, required String ruleJson}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(dbPath, serializer);
-        sse_encode_String(ruleJson, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 46, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: sse_decode_String,
-      ),
-      constMeta: kCrateApiSaveReplaceRuleConstMeta,
-      argValues: [dbPath, ruleJson],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateApiSaveReplaceRuleConstMeta => const TaskConstMeta(
-        debugName: "save_replace_rule",
-        argNames: ["dbPath", "ruleJson"],
-      );
-
-  @override
-  Future<void> crateApiDeleteReplaceRule(
-      {required String dbPath, required String id}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(dbPath, serializer);
-        sse_encode_String(id, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 47, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: sse_decode_String,
-      ),
-      constMeta: kCrateApiDeleteReplaceRuleConstMeta,
-      argValues: [dbPath, id],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateApiDeleteReplaceRuleConstMeta => const TaskConstMeta(
-        debugName: "delete_replace_rule",
-        argNames: ["dbPath", "id"],
-      );
-
-  @override
-  Future<void> crateApiSetReplaceRuleEnabled(
-      {required String dbPath, required String id, required bool enabled}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(dbPath, serializer);
-        sse_encode_String(id, serializer);
-        sse_encode_bool(enabled, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 48, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: sse_decode_String,
-      ),
-      constMeta: kCrateApiSetReplaceRuleEnabledConstMeta,
-      argValues: [dbPath, id, enabled],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateApiSetReplaceRuleEnabledConstMeta =>
-      const TaskConstMeta(
-        debugName: "set_replace_rule_enabled",
-        argNames: ["dbPath", "id", "enabled"],
-      );
-
-  @override
-  Future<void> crateApiDeleteSourcesBatch(
-      {required String dbPath, required String idsJson}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(dbPath, serializer);
-        sse_encode_String(idsJson, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 54, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_unit,
-        decodeErrorData: sse_decode_String,
-      ),
-      constMeta: kCrateApiDeleteSourcesBatchConstMeta,
-      argValues: [dbPath, idsJson],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateApiDeleteSourcesBatchConstMeta => const TaskConstMeta(
-        debugName: "delete_sources_batch",
-        argNames: ["dbPath", "idsJson"],
-      );
-
-  @override
-  Future<String> crateApiGetExploreEntries(
-      {required String dbPath, required String sourceId}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(dbPath, serializer);
-        sse_encode_String(sourceId, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 55, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
-        decodeErrorData: sse_decode_String,
-      ),
-      constMeta: kCrateApiGetExploreEntriesConstMeta,
-      argValues: [dbPath, sourceId],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateApiGetExploreEntriesConstMeta => const TaskConstMeta(
-        debugName: "get_explore_entries",
-        argNames: ["dbPath", "sourceId"],
-      );
-
-  @override
-  Future<String> crateApiExplore(
-      {required String dbPath,
-      required String sourceId,
-      required String exploreUrl,
-      required int page}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(dbPath, serializer);
-        sse_encode_String(sourceId, serializer);
-        sse_encode_String(exploreUrl, serializer);
-        sse_encode_i_32(page, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 56, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
-        decodeErrorData: sse_decode_String,
-      ),
-      constMeta: kCrateApiExploreConstMeta,
-      argValues: [dbPath, sourceId, exploreUrl, page],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateApiExploreConstMeta => const TaskConstMeta(
-        debugName: "explore",
-        argNames: ["dbPath", "sourceId", "exploreUrl", "page"],
-      );
-
-  @override
-  Future<String> crateApiApplyReplaceRules(
-      {required String dbPath,
-      required String content,
-      required PlatformInt64 cacheGeneration,
-      String? bookName,
-      String? bookOrigin,
-      bool applyToTitle = false}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(dbPath, serializer);
-        sse_encode_String(content, serializer);
-        sse_encode_i_64(cacheGeneration, serializer);
-        // R24: 3 new params for scope filtering. Manual patch — must
-        // be re-applied after flutter_rust_bridge_codegen run.
-        sse_encode_opt_String(bookName, serializer);
-        sse_encode_opt_String(bookOrigin, serializer);
-        sse_encode_bool(applyToTitle, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 57, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
-        decodeErrorData: sse_decode_String,
-      ),
-      constMeta: kCrateApiApplyReplaceRulesConstMeta,
-      argValues: [
-        dbPath,
-        content,
-        cacheGeneration,
-        bookName,
-        bookOrigin,
-        applyToTitle,
-      ],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateApiApplyReplaceRulesConstMeta => const TaskConstMeta(
-        debugName: "apply_replace_rules",
-        argNames: [
-          "dbPath",
-          "content",
-          "cacheGeneration",
-          "bookName",
-          "bookOrigin",
-          "applyToTitle",
-        ],
+        debugName: "validate_source_rules",
+        argNames: ["sourceJson"],
       );
 
   @protected

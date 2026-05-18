@@ -172,6 +172,40 @@ impl<'a> BookDao<'a> {
         rows.collect()
     }
 
+    /// 按分组列出书籍。
+    ///
+    /// 批次 7 (2026-05): 配合书架顶栏 TabBar 切换分组。
+    /// - `group_id == -1` → 列出所有书（"全部" Tab，等价 [`get_all`]）
+    /// - `group_id == 0`  → "未分组" Tab，列出 `WHERE group_id = 0`
+    /// - `group_id >= 1`  → 具体某个用户分组，列出 `WHERE group_id = ?`
+    ///
+    /// 排序与 [`get_all`] 保持一致（`order_time DESC`），UI 端不需要为
+    /// 不同 Tab 单独维护排序状态。
+    pub fn list_by_group(&self, group_id: i64) -> SqlResult<Vec<Book>> {
+        if group_id == -1 {
+            return self.get_all();
+        }
+        let sql = format!(
+            "SELECT {} FROM books WHERE group_id = ? ORDER BY order_time DESC",
+            BOOK_COLUMNS
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![group_id], book_from_row)?;
+        rows.collect()
+    }
+
+    /// 把一本书移到指定分组（`group_id = 0` 表示移回"未分组"）。
+    /// 同时刷新 `updated_at`，让书架排序能感知到"刚移过来"。
+    pub fn set_group(&self, book_id: &str, group_id: i64) -> SqlResult<()> {
+        info!("移动书籍到分组: book_id={}, group_id={}", book_id, group_id);
+        let now = Utc::now().timestamp();
+        self.conn.execute(
+            "UPDATE books SET group_id = ?, updated_at = ? WHERE id = ?",
+            params![group_id, now, book_id],
+        )?;
+        Ok(())
+    }
+
     /// 创建新书籍（便捷函数）
     pub fn create(
         &self,
@@ -248,4 +282,103 @@ fn book_from_row(row: &rusqlite::Row) -> SqlResult<Book> {
         created_at: row.get(25)?,
         updated_at: row.get(26)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn setup() -> (TempDir, Connection) {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let conn = crate::database::init_database(db_path.to_str().unwrap()).unwrap();
+        conn.execute(
+            "INSERT INTO book_sources (id, name, url, created_at, updated_at) \
+             VALUES ('s1', 'Source', 'https://e', 1, 1)",
+            [],
+        )
+        .unwrap();
+        (dir, conn)
+    }
+
+    fn book_with_group(id: &str, group_id: i64, order_time: i64) -> Book {
+        Book {
+            id: id.to_string(),
+            source_id: "s1".to_string(),
+            source_name: Some("Source".to_string()),
+            name: format!("Book {id}"),
+            author: None,
+            cover_url: None,
+            chapter_count: 0,
+            latest_chapter_title: None,
+            intro: None,
+            kind: None,
+            book_url: None,
+            toc_url: None,
+            last_check_time: None,
+            last_check_count: 0,
+            total_word_count: 0,
+            can_update: true,
+            order_time,
+            latest_chapter_time: None,
+            custom_cover_path: None,
+            custom_info_json: None,
+            dur_chapter_index: 0,
+            dur_chapter_pos: 0,
+            dur_chapter_title: None,
+            dur_chapter_time: 0,
+            group_id,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    #[test]
+    fn test_list_by_group_filters_correctly() {
+        let (_dir, conn) = setup();
+        let dao = BookDao::new(&conn);
+        // 3 本未分组 + 2 本到分组 1 + 1 本到分组 2
+        dao.upsert(&book_with_group("u1", 0, 1)).unwrap();
+        dao.upsert(&book_with_group("u2", 0, 2)).unwrap();
+        dao.upsert(&book_with_group("u3", 0, 3)).unwrap();
+        dao.upsert(&book_with_group("g1a", 1, 4)).unwrap();
+        dao.upsert(&book_with_group("g1b", 1, 5)).unwrap();
+        dao.upsert(&book_with_group("g2a", 2, 6)).unwrap();
+
+        // group_id == -1：全部，order_time DESC
+        let all = dao.list_by_group(-1).unwrap();
+        assert_eq!(all.len(), 6);
+        assert_eq!(all[0].id, "g2a"); // order_time=6 最新
+
+        // group_id == 0：未分组
+        let ungrouped = dao.list_by_group(0).unwrap();
+        assert_eq!(ungrouped.len(), 3);
+        assert!(ungrouped.iter().all(|b| b.group_id == 0));
+
+        // group_id == 1：分组 1
+        let g1 = dao.list_by_group(1).unwrap();
+        assert_eq!(g1.len(), 2);
+        assert!(g1.iter().all(|b| b.group_id == 1));
+
+        // group_id == 99：空分组
+        let empty = dao.list_by_group(99).unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn test_set_group_moves_book() {
+        let (_dir, conn) = setup();
+        let dao = BookDao::new(&conn);
+        dao.upsert(&book_with_group("b1", 0, 1)).unwrap();
+
+        dao.set_group("b1", 5).unwrap();
+        let b = dao.get_by_id("b1").unwrap().unwrap();
+        assert_eq!(b.group_id, 5);
+
+        // 再移回未分组
+        dao.set_group("b1", 0).unwrap();
+        let b2 = dao.get_by_id("b1").unwrap().unwrap();
+        assert_eq!(b2.group_id, 0);
+    }
 }

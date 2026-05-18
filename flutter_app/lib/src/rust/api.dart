@@ -6,7 +6,8 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `open_db`, `storage_to_source_book_source`
+// These functions are ignored because they are not marked as `pub`: `apply_replace_rules_impl`, `block_on_explore`, `ensure_regex_generation`, `get_or_compile_regex`, `get_or_load_rules`, `matches_scope`, `new`, `open_db`, `recompute_download_task_status`, `resolve_download_root`, `safe_download_file_name`, `storage_to_source_book_source`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ReplaceRulesCache`
 
 /// Smoke test — 验证桥接是否正常工作
 Future<String> ping() => RustLib.instance.api.crateApiPing();
@@ -33,9 +34,54 @@ Future<String> searchBooksOffline(
 Future<void> saveBook({required String dbPath, required String bookJson}) =>
     RustLib.instance.api.crateApiSaveBook(dbPath: dbPath, bookJson: bookJson);
 
-/// 从书架删除一本书
+/// 从书架删除一本书（同时级联删除该书籍的章节和阅读进度）
 Future<void> deleteBook({required String dbPath, required String id}) =>
     RustLib.instance.api.crateApiDeleteBook(dbPath: dbPath, id: id);
+
+/// 列出所有书架分组（按 sort_order 升序），返回 JSON 数组
+Future<String> listBookGroups({required String dbPath}) =>
+    RustLib.instance.api.crateApiListBookGroups(dbPath: dbPath);
+
+/// 创建新分组，返回新分组的 JSON
+Future<String> createBookGroup(
+        {required String dbPath,
+        required String name,
+        required int sortOrder}) =>
+    RustLib.instance.api.crateApiCreateBookGroup(
+        dbPath: dbPath, name: name, sortOrder: sortOrder);
+
+/// 更新分组的 name + sort_order
+Future<void> updateBookGroup(
+        {required String dbPath,
+        required PlatformInt64 id,
+        required String name,
+        required int sortOrder}) =>
+    RustLib.instance.api.crateApiUpdateBookGroup(
+        dbPath: dbPath, id: id, name: name, sortOrder: sortOrder);
+
+/// 删除分组（同事务把组内书的 group_id 重置为 0）
+Future<void> deleteBookGroup(
+        {required String dbPath, required PlatformInt64 id}) =>
+    RustLib.instance.api.crateApiDeleteBookGroup(dbPath: dbPath, id: id);
+
+/// 列出某分组下的书籍。
+///
+/// `group_id` 语义：
+/// - `-1` → 全部（等价 [`get_all_books`]）
+/// - `0`  → 未分组
+/// - `>= 1` → 具体某个分组
+Future<String> listBooksByGroup(
+        {required String dbPath, required PlatformInt64 groupId}) =>
+    RustLib.instance.api
+        .crateApiListBooksByGroup(dbPath: dbPath, groupId: groupId);
+
+/// 把一本书移动到指定分组（`group_id = 0` 表示移回"未分组"）
+Future<void> setBookGroup(
+        {required String dbPath,
+        required String bookId,
+        required PlatformInt64 groupId}) =>
+    RustLib.instance.api
+        .crateApiSetBookGroup(dbPath: dbPath, bookId: bookId, groupId: groupId);
 
 /// 获取所有书源，返回 JSON 数组
 Future<String> getAllSources({required String dbPath}) =>
@@ -60,72 +106,11 @@ Future<String> createSource(
 Future<void> deleteSource({required String dbPath, required String id}) =>
     RustLib.instance.api.crateApiDeleteSource(dbPath: dbPath, id: id);
 
-/// 获取书源的原始 rule_search JSON（用于诊断），返回 JSON 或 null
-Future<String> getSourceRuleSearchRaw(
-        {required String dbPath, required String sourceId}) =>
-    RustLib.instance.api.crateApiGetSourceRuleSearchRaw(
-        dbPath: dbPath, sourceId: sourceId);
-
-// search_parse_html removed: that path was added under the false assumption
-// of "Android DNS limitations". The on-device LegadoHttpClient handles cookies,
-// charset, URL options, and JS templates that the Dart-side hand-rolled
-// resolver did not. See git log for commit 3c25702 / the code-review report.
-
-// TODO: Regenerate bridge code to restore deleteSourcesBatch
-// /// 批量删除书源 (ids_json 为 JSON 字符串数组)
-// Future<void> deleteSourcesBatch({required String dbPath, required String idsJson}) =>
-//     RustLib.instance.api.crateApiDeleteSourcesBatch(dbPath: dbPath, idsJson: idsJson);
-
 /// 批量删除书源 (ids_json 为 JSON 字符串数组)
-/// Manually wired (codegen timeout, see CURRENT_STATUS.md FRB patch chapter)
 Future<void> deleteSourcesBatch(
         {required String dbPath, required String idsJson}) =>
     RustLib.instance.api
         .crateApiDeleteSourcesBatch(dbPath: dbPath, idsJson: idsJson);
-
-/// 获取书源的发现入口列表（返回 JSON 数组）
-Future<String> getExploreEntries(
-        {required String dbPath, required String sourceId}) =>
-    RustLib.instance.api
-        .crateApiGetExploreEntries(dbPath: dbPath, sourceId: sourceId);
-
-/// 执行发现页请求，获取书籍列表（返回 JSON 数组）
-Future<String> explore(
-        {required String dbPath,
-        required String sourceId,
-        required String exploreUrl,
-        required int page}) =>
-    RustLib.instance.api.crateApiExplore(
-        dbPath: dbPath,
-        sourceId: sourceId,
-        exploreUrl: exploreUrl,
-        page: page);
-
-/// 对内容应用所有已启用的替换规则。
-///
-/// 一次 FRB 调用替代之前 Dart 侧"拉规则 + 主 isolate 循环 RegExp"两步：
-/// - 加载已启用规则用 [cacheGeneration] 参与的进程内缓存（Rust 侧 OnceLock）
-/// - 编译失败的规则只 warn 一次
-/// - 调用方在 ReplaceRule CRUD 后递增 [cacheGeneration] 即可让缓存失效
-///
-/// R24: [bookName] / [bookOrigin] 用于 scope 子串匹配（参考 Legado 原版
-/// `ReplaceRuleDao.findEnabledByContentScope`）。null 表示"调用方不知道
-/// 这本书是什么"——此时 scope 非空的规则会被跳过。[applyToTitle] 选择
-/// 本次跑作用于 章节标题 (true) 还是 正文 (false) 的规则集。
-Future<String> applyReplaceRules(
-        {required String dbPath,
-        required String content,
-        required PlatformInt64 cacheGeneration,
-        String? bookName,
-        String? bookOrigin,
-        bool applyToTitle = false}) =>
-    RustLib.instance.api.crateApiApplyReplaceRules(
-        dbPath: dbPath,
-        content: content,
-        cacheGeneration: cacheGeneration,
-        bookName: bookName,
-        bookOrigin: bookOrigin,
-        applyToTitle: applyToTitle);
 
 /// 启用 / 禁用书源
 Future<void> setSourceEnabled(
@@ -230,6 +215,9 @@ Future<void> deleteBookmark(
         .crateApiDeleteBookmark(dbPath: dbPath, bookmarkId: bookmarkId);
 
 /// 搜索在线书籍（source_json 为 core_source::BookSource 的 JSON），返回搜索结果 JSON 数组
+///
+/// R82: 区分 ParserError::Empty（成功 0 结果，返回 `[]`）与其他失败（Network /
+/// RuleConfig / Parse，作为 Err(String) 返回让 Dart 侧能 toast 出来）。
 Future<String> searchBooksOnline(
         {required String sourceJson, required String keyword}) =>
     RustLib.instance.api
@@ -253,20 +241,27 @@ Future<String> getChapterContentOnline(
     RustLib.instance.api.crateApiGetChapterContentOnline(
         sourceJson: sourceJson, chapterUrl: chapterUrl);
 
+/// 获取书源的原始 rule_search JSON（用于诊断），返回 JSON 或 null
+Future<String> getSourceRuleSearchRaw(
+        {required String dbPath, required String sourceId}) =>
+    RustLib.instance.api
+        .crateApiGetSourceRuleSearchRaw(dbPath: dbPath, sourceId: sourceId);
+
+/// 从数据库加载书源并搜索（异步），返回搜索结果 JSON 数组
+/// 包装结果：正常时返回 [{"ok":true,"data":[...]}]，失败时返回 [{"ok":false,"error":"..."}]
+Future<String> searchWithSourceFromDbV2(
+        {required String dbPath,
+        required String sourceId,
+        required String keyword}) =>
+    RustLib.instance.api.crateApiSearchWithSourceFromDbV2(
+        dbPath: dbPath, sourceId: sourceId, keyword: keyword);
+
 /// 从数据库加载书源并搜索（异步），返回搜索结果 JSON 数组
 Future<String> searchWithSourceFromDb(
         {required String dbPath,
         required String sourceId,
         required String keyword}) =>
     RustLib.instance.api.crateApiSearchWithSourceFromDb(
-        dbPath: dbPath, sourceId: sourceId, keyword: keyword);
-
-/// 从数据库加载书源并搜索 v2（异步），返回带错误信息的包装结果
-Future<String> searchWithSourceFromDbV2(
-        {required String dbPath,
-        required String sourceId,
-        required String keyword}) =>
-    RustLib.instance.api.crateApiSearchWithSourceFromDbV2(
         dbPath: dbPath, sourceId: sourceId, keyword: keyword);
 
 /// 从数据库加载书源并获取章节内容（异步），返回 JSON 或 null
@@ -385,15 +380,30 @@ Future<String> validateSourceFromDb(
     RustLib.instance.api
         .crateApiValidateSourceFromDb(dbPath: dbPath, sourceId: sourceId);
 
-/// 导出所有书源为 JSON 数组
+/// 导出所有书源为 Legado 兼容 JSON 数组（camelCase 格式）
 Future<String> exportAllSources({required String dbPath}) =>
     RustLib.instance.api.crateApiExportAllSources(dbPath: dbPath);
+
+/// 获取书源的发现入口列表
+Future<String> getExploreEntries(
+        {required String dbPath, required String sourceId}) =>
+    RustLib.instance.api
+        .crateApiGetExploreEntries(dbPath: dbPath, sourceId: sourceId);
+
+/// 执行发现页请求，获取书籍列表
+Future<String> explore(
+        {required String dbPath,
+        required String sourceId,
+        required String exploreUrl,
+        required int page}) =>
+    RustLib.instance.api.crateApiExplore(
+        dbPath: dbPath, sourceId: sourceId, exploreUrl: exploreUrl, page: page);
 
 /// 获取所有替换规则，返回 JSON 数组
 Future<String> getReplaceRules({required String dbPath}) =>
     RustLib.instance.api.crateApiGetReplaceRules(dbPath: dbPath);
 
-/// 保存替换规则（ruleJson 为 ReplaceRule 的 JSON），upsert 语义
+/// 保存替换规则（rule_json 为 storage::ReplaceRule 的 JSON），upsert 语义
 Future<void> saveReplaceRule(
         {required String dbPath, required String ruleJson}) =>
     RustLib.instance.api
@@ -408,3 +418,36 @@ Future<void> setReplaceRuleEnabled(
         {required String dbPath, required String id, required bool enabled}) =>
     RustLib.instance.api.crateApiSetReplaceRuleEnabled(
         dbPath: dbPath, id: id, enabled: enabled);
+
+/// 对内容应用所有已启用的替换规则。
+///
+/// 这是 P1-7 的修复：之前 Dart 端在每次切章节时通过 FRB 拉一次规则列表，
+/// 然后在主 isolate 里循环 `RegExp(...).replaceAll`，长正文 + 多条规则会
+/// 阻塞 UI。现在统一下沉到 Rust 单次调用：
+///
+///   - 编译失败的规则只 warn 一次（避免每章都 spam 日志）
+///   - 整个循环在 Rust 端跑，不占 Dart 主 isolate
+///   - 调用方只需把 db_path + 原始内容传过来
+///
+/// 同时 Dart 侧的 ReplaceRule 缓存也可以复用：参数加 `cache_generation`，
+/// Rust 端用 OnceLock + RwLock 保存上次拉取的规则；调用方在 ReplaceRule
+/// CRUD 后递增 generation 即可让缓存失效，不必每次走 DAO。
+///
+/// **R24**: scope 现在按 Legado 原版语义匹配。`book_name` 与
+/// `book_origin` 由 caller 提供（reader_page 持有），filter 逻辑见
+/// [`matches_scope`]。`apply_to_title=true` 表示本次跑作用于标题
+/// 的规则；false 表示作用于正文。
+Future<String> applyReplaceRules(
+        {required String dbPath,
+        required String content,
+        required PlatformInt64 cacheGeneration,
+        String? bookName,
+        String? bookOrigin,
+        required bool applyToTitle}) =>
+    RustLib.instance.api.crateApiApplyReplaceRules(
+        dbPath: dbPath,
+        content: content,
+        cacheGeneration: cacheGeneration,
+        bookName: bookName,
+        bookOrigin: bookOrigin,
+        applyToTitle: applyToTitle);

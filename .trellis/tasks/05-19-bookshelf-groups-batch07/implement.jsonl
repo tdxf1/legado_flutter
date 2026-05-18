@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/05-19-bookshelf-groups-batch07/prd.md", "reason": "本任务 PRD"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 BookGroup struct / Book.group_id schema / 现有 dao 风格"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨 Rust DAO / FRB / Flutter UI 多层"}
+{"file": ".trellis/tasks/archive/2026-05/05-18-db-schema-migration-batch06/prd.md", "reason": "上一批次 schema 上下文（books.group_id / book_groups 表）"}

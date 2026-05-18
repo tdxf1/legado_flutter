@@ -7,7 +7,16 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/providers.dart';
 import '../../src/rust/api.dart' as rust_api;
+import 'widgets/book_group_dialogs.dart';
 
+/// 书架页（批次 7：加分组 TabBar）。
+///
+/// AppBar.bottom = TabBar：第 0 Tab "全部"(group_id=-1) + 第 1 Tab "未分组"
+/// (group_id=0) + 用户分组（来自 [bookGroupsProvider]）。每个 Tab 调
+/// [booksByGroupProvider](groupId) 拿对应书列表。
+///
+/// 长按书条 → 底部 Sheet：删除 / 移动到分组（[GroupSelectDialog]）。
+/// AppBar 菜单 → 管理分组（[GroupManageDialog]）。
 class BookshelfPage extends ConsumerStatefulWidget {
   const BookshelfPage({super.key});
 
@@ -28,41 +37,116 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
 
   @override
   Widget build(BuildContext context) {
-    final booksAsync = ref.watch(allBooksProvider);
+    final groupsAsync = ref.watch(bookGroupsProvider);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('书架'),
-        actions: [
-          IconButton(
-            icon: Icon(_isGridView ? Icons.view_list : Icons.grid_view),
-            tooltip: _isGridView ? '列表视图' : '网格视图',
-            onPressed: () {
-              setState(() => _isGridView = !_isGridView);
-              saveBookshelfGridViewToDisk(_isGridView);
-            },
-          ),
-        ],
-      ),
-      body: booksAsync.when(
-        data: (books) => _buildBookList(context, books),
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('加载失败: $e')),
-      ),
+    return groupsAsync.when(
+      // 错误 / loading 时仍展示 TabBar 骨架（只有"全部"+"未分组"两个虚拟 Tab），
+      // 避免分组拉取失败导致整页都进不去。
+      loading: () => _buildScaffold(context, const []),
+      error: (e, _) => _buildScaffold(context, const []),
+      data: (groups) => _buildScaffold(context, groups),
     );
   }
 
-  Widget _buildBookList(BuildContext context, List<Map<String, dynamic>> books) {
+  Widget _buildScaffold(
+      BuildContext context, List<Map<String, dynamic>> groups) {
+    // Tab 总数 = 2 (全部 + 未分组) + N 个用户分组。
+    // ValueKey 让用户分组数变化时 DefaultTabController 重建，避免 controller
+    // 长度不匹配抛 assertion。
+    final tabSpec = <_TabSpec>[
+      const _TabSpec(label: '全部', groupId: -1),
+      const _TabSpec(label: '未分组', groupId: 0),
+      for (final g in groups)
+        _TabSpec(
+          label: g['name'] as String? ?? '未命名',
+          groupId: (g['id'] as num).toInt(),
+        ),
+    ];
+
+    return DefaultTabController(
+      key: ValueKey(tabSpec.length),
+      length: tabSpec.length,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('书架'),
+          actions: [
+            IconButton(
+              icon: Icon(_isGridView ? Icons.view_list : Icons.grid_view),
+              tooltip: _isGridView ? '列表视图' : '网格视图',
+              onPressed: () {
+                setState(() => _isGridView = !_isGridView);
+                saveBookshelfGridViewToDisk(_isGridView);
+              },
+            ),
+            PopupMenuButton<String>(
+              tooltip: '更多',
+              onSelected: (value) async {
+                if (value == 'manage_groups') {
+                  await showDialog(
+                    context: context,
+                    builder: (_) => const GroupManageDialog(),
+                  );
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: 'manage_groups',
+                  child: ListTile(
+                    leading: Icon(Icons.folder_outlined),
+                    title: Text('管理分组'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+              ],
+            ),
+          ],
+          bottom: TabBar(
+            isScrollable: true,
+            tabs: [for (final t in tabSpec) Tab(text: t.label)],
+          ),
+        ),
+        body: TabBarView(
+          children: [for (final t in tabSpec) _BookListView(groupId: t.groupId, isGridView: _isGridView)],
+        ),
+      ),
+    );
+  }
+}
+
+/// 单个 Tab 内的书列表视图。
+///
+/// 抽出独立 widget 以便每个 Tab 通过 [booksByGroupProvider]`(groupId)`
+/// 各自拿数据，互不污染缓存。`isGridView` 由父级 [BookshelfPage] 全局
+/// 控制（"列表/网格"切换是用户在所有 Tab 间共享的偏好）。
+class _BookListView extends ConsumerWidget {
+  final int groupId;
+  final bool isGridView;
+
+  const _BookListView({required this.groupId, required this.isGridView});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final booksAsync = ref.watch(booksByGroupProvider(groupId));
+    return booksAsync.when(
+      data: (books) => _buildBookList(context, ref, books),
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, _) => Center(child: Text('加载失败: $e')),
+    );
+  }
+
+  Widget _buildBookList(BuildContext context, WidgetRef ref,
+      List<Map<String, dynamic>> books) {
     if (books.isEmpty) {
       return const Center(child: Text('书架为空，去搜索添加书籍吧'));
     }
-    if (_isGridView) {
-      return _buildGridView(context, books);
+    if (isGridView) {
+      return _buildGridView(context, ref, books);
     }
-    return _buildListView(context, books);
+    return _buildListView(context, ref, books);
   }
 
-  Widget _buildListView(BuildContext context, List<Map<String, dynamic>> books) {
+  Widget _buildListView(
+      BuildContext context, WidgetRef ref, List<Map<String, dynamic>> books) {
     return ListView.builder(
       padding: const EdgeInsets.all(8),
       itemExtent: 72,
@@ -70,7 +154,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
       itemBuilder: (context, index) {
         final book = books[index];
         return GestureDetector(
-          onLongPress: () => _deleteBook(context, book),
+          onLongPress: () => _showBookActionSheet(context, ref, book),
           child: Card(
             child: ListTile(
               leading: _buildCover(book),
@@ -89,7 +173,8 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     );
   }
 
-  Widget _buildGridView(BuildContext context, List<Map<String, dynamic>> books) {
+  Widget _buildGridView(
+      BuildContext context, WidgetRef ref, List<Map<String, dynamic>> books) {
     return GridView.builder(
       padding: const EdgeInsets.all(8),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -109,7 +194,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                 'bookId': book['id'] as String? ?? '',
               }).toString(),
             ),
-            onLongPress: () => _deleteBook(context, book),
+            onLongPress: () => _showBookActionSheet(context, ref, book),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -154,7 +239,8 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
         fit: BoxFit.cover,
         cacheWidth: 100,
         cacheHeight: 150,
-        errorBuilder: (_, __, ___) => _buildNetworkCover(book['cover_url'] as String?),
+        errorBuilder: (_, __, ___) =>
+            _buildNetworkCover(book['cover_url'] as String?),
       );
     }
     return _buildNetworkCover(book['cover_url'] as String?);
@@ -182,7 +268,76 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     );
   }
 
-  Future<void> _deleteBook(BuildContext context, Map<String, dynamic> book) async {
+  /// 长按书条弹底部 Sheet：移动到分组 / 删除。
+  /// 抽出独立方法是因为列表 / 网格两套渲染都需要复用同一份动作菜单。
+  Future<void> _showBookActionSheet(
+      BuildContext context, WidgetRef ref, Map<String, dynamic> book) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.drive_file_move_outline),
+              title: const Text('移动到分组'),
+              onTap: () => Navigator.pop(ctx, 'move'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline, color: Colors.red),
+              title: const Text('删除', style: TextStyle(color: Colors.red)),
+              onTap: () => Navigator.pop(ctx, 'delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!context.mounted) return;
+    if (action == 'move') {
+      await _moveBookToGroup(context, ref, book);
+    } else if (action == 'delete') {
+      await _deleteBook(context, ref, book);
+    }
+  }
+
+  Future<void> _moveBookToGroup(BuildContext context, WidgetRef ref,
+      Map<String, dynamic> book) async {
+    final currentGroupId = (book['group_id'] as num?)?.toInt() ?? 0;
+    final newGroupId = await showDialog<int>(
+      context: context,
+      builder: (_) => GroupSelectDialog(currentGroupId: currentGroupId),
+    );
+    if (newGroupId == null || newGroupId == currentGroupId) return;
+    if (!context.mounted) return;
+    try {
+      await ref.read(dbInitializedProvider.future);
+      final dbPath = await ref.read(dbPathProvider.future);
+      final bookId = book['id'] as String?;
+      if (bookId == null || bookId.isEmpty) return;
+      await rust_api.setBookGroup(
+        dbPath: dbPath,
+        bookId: bookId,
+        groupId: newGroupId,
+      );
+      // 刷新所有分组的书列表（旧分组要少一本，新分组要多一本）
+      ref.invalidate(booksByGroupProvider);
+      ref.invalidate(allBooksProvider);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已移动到目标分组')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('移动失败: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _deleteBook(BuildContext context, WidgetRef ref,
+      Map<String, dynamic> book) async {
     final name = book['name'] as String? ?? '未知';
     final confirmed = await showDialog<bool>(
       context: context,
@@ -202,6 +357,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
       ),
     );
     if (confirmed != true) return;
+    if (!context.mounted) return;
     try {
       await ref.read(dbInitializedProvider.future);
       final dbPath = await ref.read(dbPathProvider.future);
@@ -209,17 +365,24 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
       if (bookId == null || bookId.isEmpty) return;
       await rust_api.deleteBook(dbPath: dbPath, id: bookId);
       ref.invalidate(allBooksProvider);
-      if (mounted) {
+      ref.invalidate(booksByGroupProvider);
+      if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('已删除《$name》')),
         );
       }
     } catch (e) {
-      if (mounted) {
+      if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('删除失败: $e')),
         );
       }
     }
   }
+}
+
+class _TabSpec {
+  final String label;
+  final int groupId;
+  const _TabSpec({required this.label, required this.groupId});
 }

@@ -4,6 +4,7 @@
 //! 使用SQLite + rusqlite实现轻量级本地数据库，chrono处理时间相关字段。
 
 pub mod book_dao;
+pub mod book_group_dao;
 pub mod cache_dao;
 pub mod chapter_dao;
 pub mod database;
@@ -15,6 +16,7 @@ pub mod source_dao;
 
 // 重新导出主要类型，方便上层调用
 pub use book_dao::BookDao;
+pub use book_group_dao::BookGroupDao;
 pub use cache_dao::CacheDao;
 pub use chapter_dao::ChapterDao;
 pub use download_dao::DownloadDao;

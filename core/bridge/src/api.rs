@@ -74,6 +74,76 @@ pub fn delete_book(db_path: String, id: String) -> Result<(), String> {
 }
 
 // ============================================================
+// 书架分组 (Book Groups) — 批次 7 / 返回 JSON 字符串
+// ============================================================
+
+/// 列出所有书架分组（按 sort_order 升序），返回 JSON 数组
+pub fn list_book_groups(db_path: String) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let groups = core_storage::book_group_dao::BookGroupDao::list_all(&conn)
+        .map_err(|e| format!("获取分组列表失败: {}", e))?;
+    serde_json::to_string(&groups).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// 创建新分组，返回新分组的 JSON
+pub fn create_book_group(
+    db_path: String,
+    name: String,
+    sort_order: i32,
+) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let group = core_storage::book_group_dao::BookGroupDao::create(&conn, &name, sort_order)
+        .map_err(|e| format!("创建分组失败: {}", e))?;
+    serde_json::to_string(&group).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// 更新分组的 name + sort_order
+pub fn update_book_group(
+    db_path: String,
+    id: i64,
+    name: String,
+    sort_order: i32,
+) -> Result<(), String> {
+    let conn = open_db(&db_path)?;
+    core_storage::book_group_dao::BookGroupDao::update(&conn, id, &name, sort_order)
+        .map_err(|e| format!("更新分组失败: {}", e))
+}
+
+/// 删除分组（同事务把组内书的 group_id 重置为 0）
+pub fn delete_book_group(db_path: String, id: i64) -> Result<(), String> {
+    let mut conn = open_db(&db_path)?;
+    core_storage::book_group_dao::BookGroupDao::delete(&mut conn, id)
+        .map_err(|e| format!("删除分组失败: {}", e))
+}
+
+/// 列出某分组下的书籍。
+///
+/// `group_id` 语义：
+/// - `-1` → 全部（等价 [`get_all_books`]）
+/// - `0`  → 未分组
+/// - `>= 1` → 具体某个分组
+pub fn list_books_by_group(db_path: String, group_id: i64) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::book_dao::BookDao::new(&conn);
+    let books = dao
+        .list_by_group(group_id)
+        .map_err(|e| format!("按分组获取书籍失败: {}", e))?;
+    serde_json::to_string(&books).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// 把一本书移动到指定分组（`group_id = 0` 表示移回"未分组"）
+pub fn set_book_group(
+    db_path: String,
+    book_id: String,
+    group_id: i64,
+) -> Result<(), String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::book_dao::BookDao::new(&conn);
+    dao.set_group(&book_id, group_id)
+        .map_err(|e| format!("移动书籍失败: {}", e))
+}
+
+// ============================================================
 // 书源 (Book Sources) — 返回 JSON 字符串
 // ============================================================
 

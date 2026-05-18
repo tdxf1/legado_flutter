@@ -124,6 +124,33 @@ final allBooksProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async 
   return list.cast<Map<String, dynamic>>();
 });
 
+/// 批次 7：拉取所有用户自建分组（按 sort_order 升序），
+/// 给书架顶栏 TabBar 用。每次分组 CRUD 后调用 `ref.invalidate` 刷新。
+final bookGroupsProvider =
+    FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
+  await ref.watch(dbInitializedProvider.future);
+  final dbPath = await ref.watch(dbPathProvider.future);
+  final json = await rust_api.listBookGroups(dbPath: dbPath);
+  final List<dynamic> list = jsonDecode(json);
+  return list.cast<Map<String, dynamic>>();
+});
+
+/// 批次 7：按分组 ID 拉书。groupId 语义：
+/// - `-1` → 全部（"全部" Tab）
+/// - `0`  → 未分组（"未分组" Tab）
+/// - `>= 1` → 具体分组
+///
+/// 用 `family.autoDispose` —— 不同 Tab 的 cache 独立，离开书架页时释放。
+final booksByGroupProvider = FutureProvider.family
+    .autoDispose<List<Map<String, dynamic>>, int>((ref, groupId) async {
+  await ref.watch(dbInitializedProvider.future);
+  final dbPath = await ref.watch(dbPathProvider.future);
+  final json =
+      await rust_api.listBooksByGroup(dbPath: dbPath, groupId: groupId);
+  final List<dynamic> list = jsonDecode(json);
+  return list.cast<Map<String, dynamic>>();
+});
+
 final allSourcesProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   await ref.watch(dbInitializedProvider.future);
   final dbPath = await ref.watch(dbPathProvider.future);
