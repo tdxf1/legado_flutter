@@ -1146,6 +1146,153 @@ fn wire__crate__api__import_local_book_impl(
         },
     )
 }
+// ---- 批次 14 (阅读时长统计 ReadRecord) 手动 wire fn ----
+// funcId 74 — add_read_time(db_path, book_id, book_name, delta_seconds: i64) -> Result<(), String>
+fn wire__crate__api__add_read_time_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "add_read_time",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_db_path = <String>::sse_decode(&mut deserializer);
+            let api_book_id = <String>::sse_decode(&mut deserializer);
+            let api_book_name = <String>::sse_decode(&mut deserializer);
+            let api_delta_seconds = <i64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    crate::api::add_read_time(
+                        api_db_path,
+                        api_book_id,
+                        api_book_name,
+                        api_delta_seconds,
+                    )?;
+                    Ok(())
+                })())
+            }
+        },
+    )
+}
+// funcId 75 — get_read_record(db_path, book_id) -> Result<String, String>
+fn wire__crate__api__get_read_record_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "get_read_record",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_db_path = <String>::sse_decode(&mut deserializer);
+            let api_book_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok =
+                        crate::api::get_read_record(api_db_path, api_book_id)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+// funcId 76 — list_read_records(db_path) -> Result<String, String>
+fn wire__crate__api__list_read_records_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "list_read_records",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_db_path = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::list_read_records(api_db_path)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+// funcId 77 — get_total_read_time(db_path) -> Result<i64, String>
+fn wire__crate__api__get_total_read_time_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "get_total_read_time",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_db_path = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::get_total_read_time(api_db_path)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__get_all_books_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -2920,6 +3067,11 @@ fn pde_ffi_dispatcher_primary_impl(
         72 => wire__crate__api__get_backup_password_impl(port, ptr, rust_vec_len, data_len),
         // 批次 13 (本地书导入 MVP) — 手动 wire fn 注册
         73 => wire__crate__api__import_local_book_impl(port, ptr, rust_vec_len, data_len),
+        // 批次 14 (阅读时长统计 ReadRecord) — 手动 wire fn 注册
+        74 => wire__crate__api__add_read_time_impl(port, ptr, rust_vec_len, data_len),
+        75 => wire__crate__api__get_read_record_impl(port, ptr, rust_vec_len, data_len),
+        76 => wire__crate__api__list_read_records_impl(port, ptr, rust_vec_len, data_len),
+        77 => wire__crate__api__get_total_read_time_impl(port, ptr, rust_vec_len, data_len),
         // R3: codegen default branch hit at runtime means Rust and Dart
         // have inconsistent funcId tables. build.rs catches this at
         // compile time when both sides are visible (R3 cross-check),

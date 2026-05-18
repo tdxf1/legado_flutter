@@ -133,6 +133,9 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                 } else if (value == 'import_local') {
                   // 批次 13 (05-19): 导入本地书。
                   await _onImportLocalBook(context);
+                } else if (value == 'read_stats') {
+                  // 批次 14 (05-19): 阅读统计页。
+                  if (context.mounted) context.push('/read-stats');
                 }
               },
               itemBuilder: (context) => const [
@@ -157,6 +160,14 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                   child: ListTile(
                     leading: Icon(Icons.note_add),
                     title: Text('导入本地书'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'read_stats',
+                  child: ListTile(
+                    leading: Icon(Icons.timer_outlined),
+                    title: Text('阅读统计'),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),
@@ -360,7 +371,11 @@ class _BookListView extends ConsumerWidget {
             child: ListTile(
               leading: _buildCover(book),
               title: Text(book['name'] ?? '未知书名'),
-              subtitle: Text(book['author'] ?? '未知作者'),
+              subtitle: Text(
+                _formatBookSubtitle(book),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
               trailing: Text('${book['chapter_count'] ?? 0}章'),
               onTap: () => context.push(
                 Uri(path: '/reader', queryParameters: {
@@ -416,7 +431,7 @@ class _BookListView extends ConsumerWidget {
                             ),
                       ),
                       Text(
-                        book['author'] ?? '',
+                        _formatBookSubtitle(book),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.labelSmall,
@@ -430,6 +445,37 @@ class _BookListView extends ConsumerWidget {
         );
       },
     );
+  }
+
+  /// 批次 14 (05-19): 列表/网格副标题。原本只显示 `book.author`；
+  /// 现在优先用 `dur_chapter_title` + 相对时间戳，回退作者。
+  ///
+  /// 例：`3 小时前 · 第 12 章` / `昨天 · 第 1 章` / 没有阅读记录时
+  /// 退化为 `张三` 或 `未知作者`。
+  String _formatBookSubtitle(Map<String, dynamic> book) {
+    final durTitle = book['dur_chapter_title'] as String?;
+    final durTime = (book['dur_chapter_time'] as num?)?.toInt() ?? 0;
+    final author = book['author'] as String? ?? '';
+    if (durTitle != null && durTitle.isNotEmpty && durTime > 0) {
+      return '${_formatRelativeTime(durTime)} · $durTitle';
+    }
+    return author.isEmpty ? '未知作者' : author;
+  }
+
+  /// 批次 14 (05-19): 把 unix 时间戳（秒）格式化成"刚刚 / N 分钟前 /
+  /// N 小时前 / N 天前 / yyyy-MM-dd"风格的相对时间字符串。
+  String _formatRelativeTime(int sec) {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final delta = now - sec;
+    if (delta < 60) return '刚刚';
+    if (delta < 3600) return '${(delta / 60).floor()} 分钟前';
+    if (delta < 86400) return '${(delta / 3600).floor()} 小时前';
+    if (delta < 86400 * 30) return '${(delta / 86400).floor()} 天前';
+    return DateTime.fromMillisecondsSinceEpoch(sec * 1000)
+        .toLocal()
+        .toString()
+        .split(' ')
+        .first;
   }
 
   Widget _buildCover(Map<String, dynamic> book) {

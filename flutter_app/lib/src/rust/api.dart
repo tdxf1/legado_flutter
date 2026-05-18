@@ -575,3 +575,35 @@ Future<String> importLocalBook(
         required String documentsDir}) =>
     RustLib.instance.api.crateApiImportLocalBook(
         dbPath: dbPath, filePath: filePath, documentsDir: documentsDir);
+
+// ============================================================
+// 阅读时长统计（批次 14 / 05-19）— ReadRecord
+// ============================================================
+
+/// 累加某本书的阅读时长（秒）。若 `book_id` 已存在则累加 + 更新
+/// last_read_at；否则 INSERT 新行。reader_page 60s ticker 调用。
+Future<void> addReadTime(
+        {required String dbPath,
+        required String bookId,
+        required String bookName,
+        required PlatformInt64 deltaSeconds}) =>
+    RustLib.instance.api.crateApiAddReadTime(
+        dbPath: dbPath,
+        bookId: bookId,
+        bookName: bookName,
+        deltaSeconds: deltaSeconds);
+
+/// 取单本书的阅读记录，返回 JSON `Option<ReadRecord>`（"null" 或对象）。
+Future<String> getReadRecord(
+        {required String dbPath, required String bookId}) =>
+    RustLib.instance.api
+        .crateApiGetReadRecord(dbPath: dbPath, bookId: bookId);
+
+/// 列出所有阅读记录（按 last_read_at DESC），返回 JSON 数组。
+/// 设置页"阅读统计"用。
+Future<String> listReadRecords({required String dbPath}) =>
+    RustLib.instance.api.crateApiListReadRecords(dbPath: dbPath);
+
+/// 全局总阅读时长（秒）。空表返回 0。
+Future<PlatformInt64> getTotalReadTime({required String dbPath}) =>
+    RustLib.instance.api.crateApiGetTotalReadTime(dbPath: dbPath);

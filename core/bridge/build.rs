@@ -76,6 +76,14 @@ const REQUIRED_WIRE_FN_FRAGMENTS: &[&str] = &[
     "wire__crate__api__get_backup_password_impl",
     // 批次 13 — funcId 73 — import_local_book
     "wire__crate__api__import_local_book_impl",
+    // 批次 14 — funcId 74 — add_read_time
+    "wire__crate__api__add_read_time_impl",
+    // 批次 14 — funcId 75 — get_read_record
+    "wire__crate__api__get_read_record_impl",
+    // 批次 14 — funcId 76 — list_read_records
+    "wire__crate__api__list_read_records_impl",
+    // 批次 14 — funcId 77 — get_total_read_time
+    "wire__crate__api__get_total_read_time_impl",
 ];
 
 const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
@@ -113,6 +121,11 @@ const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
     "        72 =>",
     // 批次 13 (本地书导入 MVP) 手动 dispatch 注册
     "        73 =>",
+    // 批次 14 (阅读时长统计 ReadRecord) 手动 dispatch 注册
+    "        74 =>",
+    "        75 =>",
+    "        76 =>",
+    "        77 =>",
 ];
 
 /// R3: the dispatcher default arms must surface the unknown funcId
@@ -173,7 +186,7 @@ fn main() {
             "frb_generated.rs is missing {} hand-edited wire/dispatch fragment(s). \
              A `flutter_rust_bridge_codegen generate` run probably overwrote the manual \
              patches. This guard only covers the funcIds we know were hand-edited \
-             (currently 42-52 plus 54-57 plus 63-65 plus 66-70 plus 71-72 plus 73; 53 is intentionally a hole, do not re-introduce), \
+             (currently 42-52 plus 54-57 plus 63-65 plus 66-70 plus 71-72 plus 73 plus 74-77; 53 is intentionally a hole, do not re-introduce), \
              plus the R3 informative panic in the dispatcher default arms. \
              funcIds outside that range are produced by codegen and are NOT checked here, \
              so a regression in those needs separate attention. See CURRENT_STATUS.md \

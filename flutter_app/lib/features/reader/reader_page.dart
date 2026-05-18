@@ -122,7 +122,8 @@ class ReaderPage extends ConsumerStatefulWidget {
   }
 }
 
-class _ReaderPageState extends ConsumerState<ReaderPage> {
+class _ReaderPageState extends ConsumerState<ReaderPage>
+    with WidgetsBindingObserver {
   int _currentIndex = 0;
   int _visibleChapterIndex = 0;
 
@@ -182,6 +183,13 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   double? _sliderValue;
   final ValueNotifier<DateTime> _nowNotifier = ValueNotifier(DateTime.now());
   Timer? _clockTimer;
+
+  /// 批次 14 (05-19): 阅读时长统计 ticker。每 60s 调
+  /// [`rust_api.addReadTime`] 累加 60 秒。后台 / 前台切换通过
+  /// [didChangeAppLifecycleState] 把 [_isReadTimePaused] 翻成 true / false
+  /// — timer 仍在跑但 callback 早 return，避免重启 timer 导致漂移。
+  Timer? _readTimeTicker;
+  bool _isReadTimePaused = false;
   bool get _isSearching => _search.isActive;
   TextEditingController get _searchController => _search.textController;
   late final rsc.ReaderSearchController _search =
@@ -260,6 +268,11 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     _clockTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _nowNotifier.value = DateTime.now();
     });
+    // 批次 14 (05-19): 阅读时长 ticker + 生命周期监听。
+    WidgetsBinding.instance.addObserver(this);
+    _readTimeTicker = Timer.periodic(const Duration(seconds: 60), (_) {
+      _onReadTimeTick();
+    });
   }
 
   @override
@@ -283,6 +296,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     _scrollDebounceTimer?.cancel();
     _visibleChapterTimer?.cancel();
     _clockTimer?.cancel();
+    // 批次 14 (05-19): 关 ticker + 解除生命周期监听。
+    _readTimeTicker?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     _autoScroller.dispose();
     _search.dispose();
     _tts.dispose();
@@ -331,6 +347,44 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       }
     } catch (e) {
       debugPrint('[Reader] screen brightness apply failed: $e');
+    }
+  }
+
+  /// 批次 14 (05-19): 阅读时长 ticker 回调。每 60s 触发一次，调
+  /// [`rust_api.addReadTime`] 把 60s 累加到该书的 `read_records` 行。
+  /// fire-and-forget；DB IO 在 Rust 端 spawn_blocking 跑，不阻塞 UI。
+  Future<void> _onReadTimeTick() async {
+    if (_isReadTimePaused) return;
+    final bookId = widget.bookId;
+    if (bookId.isEmpty) return;
+    try {
+      final dbPath = await ref.read(dbPathProvider.future);
+      await rust_api.addReadTime(
+        dbPath: dbPath,
+        bookId: bookId,
+        bookName: _bookName,
+        deltaSeconds: 60,
+      );
+    } catch (e) {
+      debugPrint('[Reader] addReadTime failed: $e');
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    // 批次 14 (05-19): 后台暂停 ticker 累加，前台恢复。注意 timer 本身
+    // 不停只是 callback 早 return，避免重启 timer 导致 60s 周期漂移。
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.detached:
+        _isReadTimePaused = true;
+        break;
+      case AppLifecycleState.resumed:
+        _isReadTimePaused = false;
+        break;
     }
   }
 

@@ -14,6 +14,7 @@ pub mod legado_aes;
 pub mod legado_field_map;
 pub mod models;
 pub mod progress_dao;
+pub mod read_record_dao;
 pub mod replace_rule_dao;
 pub mod source_dao;
 
@@ -28,6 +29,7 @@ pub use models::{
     DownloadTask, ReadRecord, ReplaceRule, RuleSub,
 };
 pub use progress_dao::ProgressDao;
+pub use read_record_dao::ReadRecordDao;
 pub use replace_rule_dao::ReplaceRuleDao;
 pub use source_dao::SourceDao;
 

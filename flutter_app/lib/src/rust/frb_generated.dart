@@ -359,6 +359,20 @@ abstract class RustLibApi extends BaseApi {
       {required String dbPath,
       required String filePath,
       required String documentsDir});
+
+  // 批次 14 — 阅读时长统计 ReadRecord
+  Future<void> crateApiAddReadTime(
+      {required String dbPath,
+      required String bookId,
+      required String bookName,
+      required PlatformInt64 deltaSeconds});
+
+  Future<String> crateApiGetReadRecord(
+      {required String dbPath, required String bookId});
+
+  Future<String> crateApiListReadRecords({required String dbPath});
+
+  Future<PlatformInt64> crateApiGetTotalReadTime({required String dbPath});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -2450,6 +2464,115 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiImportLocalBookConstMeta => const TaskConstMeta(
         debugName: "import_local_book",
         argNames: ["dbPath", "filePath", "documentsDir"],
+      );
+
+  // ============================================================
+  // 批次 14 — 阅读时长统计 ReadRecord
+  // ============================================================
+
+  @override
+  Future<void> crateApiAddReadTime(
+      {required String dbPath,
+      required String bookId,
+      required String bookName,
+      required PlatformInt64 deltaSeconds}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(bookId, serializer);
+        sse_encode_String(bookName, serializer);
+        sse_encode_i_64(deltaSeconds, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 74, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiAddReadTimeConstMeta,
+      argValues: [dbPath, bookId, bookName, deltaSeconds],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiAddReadTimeConstMeta => const TaskConstMeta(
+        debugName: "add_read_time",
+        argNames: ["dbPath", "bookId", "bookName", "deltaSeconds"],
+      );
+
+  @override
+  Future<String> crateApiGetReadRecord(
+      {required String dbPath, required String bookId}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(bookId, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 75, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiGetReadRecordConstMeta,
+      argValues: [dbPath, bookId],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiGetReadRecordConstMeta => const TaskConstMeta(
+        debugName: "get_read_record",
+        argNames: ["dbPath", "bookId"],
+      );
+
+  @override
+  Future<String> crateApiListReadRecords({required String dbPath}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 76, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiListReadRecordsConstMeta,
+      argValues: [dbPath],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiListReadRecordsConstMeta => const TaskConstMeta(
+        debugName: "list_read_records",
+        argNames: ["dbPath"],
+      );
+
+  @override
+  Future<PlatformInt64> crateApiGetTotalReadTime({required String dbPath}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 77, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_i_64,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiGetTotalReadTimeConstMeta,
+      argValues: [dbPath],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiGetTotalReadTimeConstMeta => const TaskConstMeta(
+        debugName: "get_total_read_time",
+        argNames: ["dbPath"],
       );
 
   @protected

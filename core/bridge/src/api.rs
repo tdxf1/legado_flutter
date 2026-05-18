@@ -1577,6 +1577,58 @@ pub fn import_local_book(
 }
 
 // ============================================================
+// 阅读时长统计 (批次 14 / 05-19) — ReadRecord
+// ============================================================
+//
+// 对齐原 Legado `ReadRecord.kt`。reader_page Timer 每 60s 调
+// [`add_read_time`] 累加；设置页"阅读统计" UI 通过 [`list_read_records`]
+// + [`get_total_read_time`] 拉数据；书架卡片需要单本时长用
+// [`get_read_record`]（MVP 暂不在书架卡片显示，但 fn 留着以备扩展）。
+
+/// 累加某本书的阅读时长（秒）。若 `book_id` 已有记录则 read_time +=
+/// delta_seconds + last_read_at = now；否则 INSERT 新行。
+pub fn add_read_time(
+    db_path: String,
+    book_id: String,
+    book_name: String,
+    delta_seconds: i64,
+) -> Result<(), String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::read_record_dao::ReadRecordDao::new(&conn);
+    dao.add_time(&book_id, &book_name, delta_seconds)
+        .map_err(|e| format!("累加阅读时长失败: {}", e))
+}
+
+/// 取单本书的阅读记录，返回 JSON `Option<ReadRecord>`。
+pub fn get_read_record(db_path: String, book_id: String) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::read_record_dao::ReadRecordDao::new(&conn);
+    let rec = dao
+        .get_by_book(&book_id)
+        .map_err(|e| format!("查询阅读记录失败: {}", e))?;
+    serde_json::to_string(&rec).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// 列出所有阅读记录（按 last_read_at DESC），返回 JSON 数组。
+/// 设置页"阅读统计"用。
+pub fn list_read_records(db_path: String) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::read_record_dao::ReadRecordDao::new(&conn);
+    let list = dao
+        .list_all()
+        .map_err(|e| format!("获取阅读记录列表失败: {}", e))?;
+    serde_json::to_string(&list).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// 全局总阅读时长（秒）。空表返回 0。
+pub fn get_total_read_time(db_path: String) -> Result<i64, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::read_record_dao::ReadRecordDao::new(&conn);
+    dao.total_read_time()
+        .map_err(|e| format!("获取总阅读时长失败: {}", e))
+}
+
+// ============================================================
 // 内部辅助函数
 // ============================================================
 

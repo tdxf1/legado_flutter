@@ -6,6 +6,7 @@ import '../features/bookshelf/book_info_edit_page.dart';
 import '../features/reader/reader_page.dart';
 import '../features/search/search_page.dart';
 import '../features/settings/backup_page.dart';
+import '../features/settings/read_stats_page.dart';
 import '../features/settings/settings_page.dart';
 import '../features/settings/webdav_config_page.dart';
 import '../features/source/source_page.dart';
@@ -91,6 +92,11 @@ final router = GoRouter(
     GoRoute(
       path: '/webdav-config',
       builder: (context, state) => const WebDavConfigPage(),
+    ),
+    // 批次 14 (05-19): 阅读统计页。bookshelf_page PopupMenu 入口。
+    GoRoute(
+      path: '/read-stats',
+      builder: (context, state) => const ReadStatsPage(),
     ),
   ],
 );

@@ -1,0 +1,10 @@
+{"file": ".trellis/tasks/05-19-read-time-stats-batch14/prd.md", "reason": "本任务 PRD"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 BookGroupDao / progress_dao 风格"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Flutter Timer ↔ Rust DAO ↔ DB 数据流"}
+{"file": "core/core-storage/src/models.rs", "reason": "ReadRecord struct 字段基准"}
+{"file": "core/core-storage/src/database.rs", "reason": "read_records 表 schema 已就绪"}
+{"file": "core/core-storage/src/book_group_dao.rs", "reason": "DAO 风格参考（批次 7）"}
+{"file": "core/core-storage/src/progress_dao.rs", "reason": "类似按 book_id 主键的 DAO 参考"}
+{"file": "core/bridge/src/api.rs", "reason": "新增 4 个 read_record pub fn 入口；批次 7/13 添加风格"}
+{"file": "flutter_app/lib/features/reader/reader_page.dart", "reason": "Timer 注入位置 + AppLifecycleState"}
+{"file": "flutter_app/lib/features/bookshelf/bookshelf_page.dart", "reason": "副标题改 + AppBar PopupMenu 加项"}
