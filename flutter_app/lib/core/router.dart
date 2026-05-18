@@ -6,6 +6,7 @@ import '../features/bookshelf/book_info_edit_page.dart';
 import '../features/reader/reader_page.dart';
 import '../features/search/search_page.dart';
 import '../features/settings/backup_page.dart';
+import '../features/settings/cache_management_page.dart';
 import '../features/settings/read_stats_page.dart';
 import '../features/settings/settings_page.dart';
 import '../features/settings/webdav_config_page.dart';
@@ -97,6 +98,11 @@ final router = GoRouter(
     GoRoute(
       path: '/read-stats',
       builder: (context, state) => const ReadStatsPage(),
+    ),
+    // 批次 15 (05-19): 缓存管理页。bookshelf_page PopupMenu 入口。
+    GoRoute(
+      path: '/cache-management',
+      builder: (context, state) => const CacheManagementPage(),
     ),
   ],
 );

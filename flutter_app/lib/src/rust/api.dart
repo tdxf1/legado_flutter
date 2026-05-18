@@ -607,3 +607,29 @@ Future<String> listReadRecords({required String dbPath}) =>
 /// 全局总阅读时长（秒）。空表返回 0。
 Future<PlatformInt64> getTotalReadTime({required String dbPath}) =>
     RustLib.instance.api.crateApiGetTotalReadTime(dbPath: dbPath);
+
+// ============================================================
+// 缓存管理（批次 15 / 05-19）— CacheStats
+// ============================================================
+
+/// 单本已缓存章节数。content 非 NULL 且非空串才算"已缓存"。
+Future<PlatformInt64> countCachedChaptersForBook(
+        {required String dbPath, required String bookId}) =>
+    RustLib.instance.api.crateApiCountCachedChaptersForBook(
+        dbPath: dbPath, bookId: bookId);
+
+/// 列出所有书 + 已缓存章节数（按 cached DESC 排序）。
+/// 返回 JSON 数组：`[{book_id, book_name, total_chapters, cached_chapters}]`。
+Future<String> listBooksWithCacheStats({required String dbPath}) =>
+    RustLib.instance.api.crateApiListBooksWithCacheStats(dbPath: dbPath);
+
+/// 单本清空缓存：UPDATE chapters SET content=NULL WHERE book_id=?。
+/// 返回受影响行数（与 chapter_count 一致）。
+Future<PlatformInt64> clearBookCache(
+        {required String dbPath, required String bookId}) =>
+    RustLib.instance.api.crateApiClearBookCache(dbPath: dbPath, bookId: bookId);
+
+/// 全局清空缓存：UPDATE chapters SET content=NULL（无 WHERE）。
+/// 返回受影响行数。
+Future<PlatformInt64> clearAllCache({required String dbPath}) =>
+    RustLib.instance.api.crateApiClearAllCache(dbPath: dbPath);

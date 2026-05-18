@@ -373,6 +373,17 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiListReadRecords({required String dbPath});
 
   Future<PlatformInt64> crateApiGetTotalReadTime({required String dbPath});
+
+  // 批次 15 — 缓存管理 CacheStats
+  Future<PlatformInt64> crateApiCountCachedChaptersForBook(
+      {required String dbPath, required String bookId});
+
+  Future<String> crateApiListBooksWithCacheStats({required String dbPath});
+
+  Future<PlatformInt64> crateApiClearBookCache(
+      {required String dbPath, required String bookId});
+
+  Future<PlatformInt64> crateApiClearAllCache({required String dbPath});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -2572,6 +2583,112 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiGetTotalReadTimeConstMeta => const TaskConstMeta(
         debugName: "get_total_read_time",
+        argNames: ["dbPath"],
+      );
+
+  // ============================================================
+  // 批次 15 — 缓存管理 CacheStats
+  // ============================================================
+
+  @override
+  Future<PlatformInt64> crateApiCountCachedChaptersForBook(
+      {required String dbPath, required String bookId}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(bookId, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 78, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_i_64,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiCountCachedChaptersForBookConstMeta,
+      argValues: [dbPath, bookId],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiCountCachedChaptersForBookConstMeta =>
+      const TaskConstMeta(
+        debugName: "count_cached_chapters_for_book",
+        argNames: ["dbPath", "bookId"],
+      );
+
+  @override
+  Future<String> crateApiListBooksWithCacheStats({required String dbPath}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 79, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiListBooksWithCacheStatsConstMeta,
+      argValues: [dbPath],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiListBooksWithCacheStatsConstMeta =>
+      const TaskConstMeta(
+        debugName: "list_books_with_cache_stats",
+        argNames: ["dbPath"],
+      );
+
+  @override
+  Future<PlatformInt64> crateApiClearBookCache(
+      {required String dbPath, required String bookId}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(bookId, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 80, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_i_64,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiClearBookCacheConstMeta,
+      argValues: [dbPath, bookId],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiClearBookCacheConstMeta => const TaskConstMeta(
+        debugName: "clear_book_cache",
+        argNames: ["dbPath", "bookId"],
+      );
+
+  @override
+  Future<PlatformInt64> crateApiClearAllCache({required String dbPath}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 81, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_i_64,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiClearAllCacheConstMeta,
+      argValues: [dbPath],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiClearAllCacheConstMeta => const TaskConstMeta(
+        debugName: "clear_all_cache",
         argNames: ["dbPath"],
       );
 

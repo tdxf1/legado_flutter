@@ -136,6 +136,9 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                 } else if (value == 'read_stats') {
                   // 批次 14 (05-19): 阅读统计页。
                   if (context.mounted) context.push('/read-stats');
+                } else if (value == 'cache_management') {
+                  // 批次 15 (05-19): 缓存管理页。
+                  if (context.mounted) context.push('/cache-management');
                 }
               },
               itemBuilder: (context) => const [
@@ -168,6 +171,14 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                   child: ListTile(
                     leading: Icon(Icons.timer_outlined),
                     title: Text('阅读统计'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'cache_management',
+                  child: ListTile(
+                    leading: Icon(Icons.cleaning_services_outlined),
+                    title: Text('缓存管理'),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),

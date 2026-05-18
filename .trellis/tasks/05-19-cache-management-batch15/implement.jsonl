@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/05-19-cache-management-batch15/prd.md", "reason": "本任务 PRD"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 ChapterDao update_content 风格 / 现有 dao 模式"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Flutter UI ↔ Rust DAO ↔ DB 数据流"}
+{"file": "core/core-storage/src/chapter_dao.rs", "reason": "现有 update_content / delete_by_book 风格参考"}
+{"file": "core/core-storage/src/book_group_dao.rs", "reason": "DAO 风格参考（含静态 fn）"}
+{"file": "core/bridge/src/api.rs", "reason": "新增 4 个 pub fn 入口；批次 13/14 添加风格"}
+{"file": "flutter_app/lib/features/settings/read_stats_page.dart", "reason": "ConsumerStatefulWidget + 测试 hook 模式参考（批次 14）"}
+{"file": "flutter_app/lib/features/bookshelf/bookshelf_page.dart", "reason": "AppBar PopupMenu 加项（批次 13/14 后状态）"}

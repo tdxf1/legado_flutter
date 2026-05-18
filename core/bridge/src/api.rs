@@ -1629,6 +1629,58 @@ pub fn get_total_read_time(db_path: String) -> Result<i64, String> {
 }
 
 // ============================================================
+// 缓存管理 (批次 15 / 05-19) — CacheStats
+// ============================================================
+//
+// 对齐原 Legado `CacheActivity.kt`。设置页"缓存管理" UI 通过
+// [`list_books_with_cache_stats`] 拉数据；用户点单本/全局清空时分别
+// 调 [`clear_book_cache`] / [`clear_all_cache`]。后者只动 chapters.content
+// 字段（置 NULL），不删 chapters 行 — 章节列表与目录依旧完整，仅释放
+// 已下载的正文文本。
+
+/// 单本已缓存章节数（content IS NOT NULL 且非空串）。MVP 暂未在 UI 端
+/// 直接调用（list_books_with_cache_stats 已包含），但保留便于上层扩展
+/// 单本详情页。
+pub fn count_cached_chapters_for_book(
+    db_path: String,
+    book_id: String,
+) -> Result<i64, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::cache_stats_dao::CacheStatsDao::new(&conn);
+    dao.count_cached_chapters_for_book(&book_id)
+        .map_err(|e| format!("查询缓存章节数失败: {}", e))
+}
+
+/// 列出所有书的缓存统计（按 cached DESC），返回
+/// `Vec<BookCacheStats>` 的 JSON。
+pub fn list_books_with_cache_stats(db_path: String) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::cache_stats_dao::CacheStatsDao::new(&conn);
+    let stats = dao
+        .list_books_with_cache_stats()
+        .map_err(|e| format!("获取缓存统计失败: {}", e))?;
+    serde_json::to_string(&stats).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// 单本清空缓存：UPDATE chapters SET content=NULL WHERE book_id=?。
+/// 返回受影响行数。
+pub fn clear_book_cache(db_path: String, book_id: String) -> Result<i64, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::cache_stats_dao::CacheStatsDao::new(&conn);
+    dao.clear_book_cache(&book_id)
+        .map_err(|e| format!("清空书籍缓存失败: {}", e))
+}
+
+/// 全局清空缓存：UPDATE chapters SET content=NULL（无 WHERE）。
+/// 返回受影响行数。
+pub fn clear_all_cache(db_path: String) -> Result<i64, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::cache_stats_dao::CacheStatsDao::new(&conn);
+    dao.clear_all_cache()
+        .map_err(|e| format!("全局清空缓存失败: {}", e))
+}
+
+// ============================================================
 // 内部辅助函数
 // ============================================================
 

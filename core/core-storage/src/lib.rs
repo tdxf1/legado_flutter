@@ -7,6 +7,7 @@ pub mod backup_dao;
 pub mod book_dao;
 pub mod book_group_dao;
 pub mod cache_dao;
+pub mod cache_stats_dao;
 pub mod chapter_dao;
 pub mod database;
 pub mod download_dao;
@@ -22,6 +23,7 @@ pub mod source_dao;
 pub use book_dao::BookDao;
 pub use book_group_dao::BookGroupDao;
 pub use cache_dao::CacheDao;
+pub use cache_stats_dao::{BookCacheStats, CacheStatsDao};
 pub use chapter_dao::ChapterDao;
 pub use download_dao::DownloadDao;
 pub use models::{
