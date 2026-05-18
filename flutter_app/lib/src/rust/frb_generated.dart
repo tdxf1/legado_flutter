@@ -353,6 +353,12 @@ abstract class RustLibApi extends BaseApi {
       {required String documentsDir, required String password});
 
   Future<String> crateApiGetBackupPassword({required String documentsDir});
+
+  // 批次 13 — 本地书导入 MVP
+  Future<String> crateApiImportLocalBook(
+      {required String dbPath,
+      required String filePath,
+      required String documentsDir});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -2411,6 +2417,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiGetBackupPasswordConstMeta => const TaskConstMeta(
         debugName: "get_backup_password",
         argNames: ["documentsDir"],
+      );
+
+  // ============================================================
+  // 批次 13 — 本地书导入 MVP
+  // ============================================================
+
+  @override
+  Future<String> crateApiImportLocalBook(
+      {required String dbPath,
+      required String filePath,
+      required String documentsDir}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(filePath, serializer);
+        sse_encode_String(documentsDir, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 73, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiImportLocalBookConstMeta,
+      argValues: [dbPath, filePath, documentsDir],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiImportLocalBookConstMeta => const TaskConstMeta(
+        debugName: "import_local_book",
+        argNames: ["dbPath", "filePath", "documentsDir"],
       );
 
   @protected

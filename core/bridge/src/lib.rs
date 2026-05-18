@@ -3,6 +3,9 @@
 //! 通过 flutter_rust_bridge 实现 Dart 与 Rust 的双向调用。
 
 mod frb_generated;
+// 批次 13 (05-19): 本地书导入辅助函数。pub(crate) 即可，仅供
+// `api::import_local_book` 内部使用。
+pub(crate) mod local_book;
 
 pub use api::*;
 pub mod api;

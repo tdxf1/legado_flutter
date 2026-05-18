@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:go_router/go_router.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/providers.dart';
 import '../../src/rust/api.dart' as rust_api;
@@ -16,9 +19,37 @@ import 'widgets/book_group_dialogs.dart';
 /// [booksByGroupProvider](groupId) 拿对应书列表。
 ///
 /// 长按书条 → 底部 Sheet：删除 / 移动到分组（[GroupSelectDialog]）。
-/// AppBar 菜单 → 管理分组（[GroupManageDialog]）。
+/// AppBar 菜单 → 管理分组（[GroupManageDialog]）/ 备份恢复 / 导入本地书。
+///
+/// 批次 13 (05-19): 顶栏 PopupMenu 加"导入本地书"项，触发 file_picker
+/// 选 .txt/.epub/.umd → 调 [`rust_api.importLocalBook`] → invalidate
+/// 书架 providers + SnackBar 成功提示 + 自动跳到 reader。
 class BookshelfPage extends ConsumerStatefulWidget {
-  const BookshelfPage({super.key});
+  /// 测试钩子：注入假 dbPath，避免 widget test 走 path_provider。
+  final String? dbPathOverride;
+
+  /// 测试钩子：注入假 documentsDir，避免 widget test 走 path_provider。
+  final String? documentsDirOverride;
+
+  /// 测试钩子：注入假的"导入本地书"文件选择器。返回选中文件绝对路径
+  /// 或 null（用户取消）。
+  final Future<String?> Function()? pickFileForLocalImportOverride;
+
+  /// 测试钩子：注入假的 importLocalBook FRB 调用，返回与真实 FRB
+  /// 相同形状的 JSON 字符串 `{"book_id":"..."}`。
+  final Future<String> Function({
+    required String dbPath,
+    required String filePath,
+    required String documentsDir,
+  })? importLocalBookOverride;
+
+  const BookshelfPage({
+    super.key,
+    this.dbPathOverride,
+    this.documentsDirOverride,
+    this.pickFileForLocalImportOverride,
+    this.importLocalBookOverride,
+  });
 
   @override
   ConsumerState<BookshelfPage> createState() => _BookshelfPageState();
@@ -99,6 +130,9 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                 } else if (value == 'backup') {
                   // 批次 10 (05-19): 备份/恢复页。
                   if (context.mounted) context.push('/backup');
+                } else if (value == 'import_local') {
+                  // 批次 13 (05-19): 导入本地书。
+                  await _onImportLocalBook(context);
                 }
               },
               itemBuilder: (context) => const [
@@ -115,6 +149,14 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                   child: ListTile(
                     leading: Icon(Icons.settings_backup_restore),
                     title: Text('备份/恢复'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'import_local',
+                  child: ListTile(
+                    leading: Icon(Icons.note_add),
+                    title: Text('导入本地书'),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),
@@ -138,6 +180,86 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
         ),
       ),
     );
+  }
+
+  /// 批次 13 (05-19): 选本地文件 → 调 [`rust_api.importLocalBook`] →
+  /// invalidate 书架/分组 providers → SnackBar 提示成功 → 自动跳到
+  /// reader 页面。
+  ///
+  /// 走过 `pickFileForLocalImportOverride` / `importLocalBookOverride`
+  /// 测试钩子时不依赖真实 file_picker / FRB / path_provider；生产代码
+  /// 跑默认路径。
+  ///
+  /// 失败处理：所有异常（用户取消除外）都会 catch + SnackBar 提示，避免
+  /// 把异常向上抛打断书架页。
+  Future<void> _onImportLocalBook(BuildContext context) async {
+    try {
+      final pickFn = widget.pickFileForLocalImportOverride ??
+          () async {
+            final result = await FilePicker.pickFiles(
+              type: FileType.custom,
+              allowedExtensions: ['txt', 'epub', 'umd'],
+            );
+            if (result == null || result.files.isEmpty) return null;
+            return result.files.single.path;
+          };
+      final pickedPath = await pickFn();
+      if (pickedPath == null || pickedPath.isEmpty) return;
+      if (!context.mounted) return;
+      // 解析 dbPath / documentsDir
+      final String dbPath =
+          widget.dbPathOverride ?? await ref.read(dbPathProvider.future);
+      final String documentsDir = widget.documentsDirOverride ??
+          (await getApplicationDocumentsDirectory()).path;
+      // FRB 调用
+      final importFn = widget.importLocalBookOverride ??
+          ({
+            required String dbPath,
+            required String filePath,
+            required String documentsDir,
+          }) =>
+              rust_api.importLocalBook(
+                dbPath: dbPath,
+                filePath: filePath,
+                documentsDir: documentsDir,
+              );
+      final json = await importFn(
+        dbPath: dbPath,
+        filePath: pickedPath,
+        documentsDir: documentsDir,
+      );
+      // 解析返回 JSON `{"book_id": "..."}`
+      String? bookId;
+      try {
+        final Map<String, dynamic> map =
+            jsonDecode(json) as Map<String, dynamic>;
+        bookId = map['book_id'] as String?;
+      } catch (_) {
+        bookId = null;
+      }
+      if (!context.mounted) return;
+      // 让书架 / 分组所有相关 providers 立刻刷新
+      ref.invalidate(allBooksProvider);
+      ref.invalidate(booksByGroupProvider);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(bookId != null && bookId.isNotEmpty
+              ? '导入成功 (id: ${bookId.substring(0, bookId.length < 8 ? bookId.length : 8)})'
+              : '导入成功'),
+        ),
+      );
+      // 自动跳到 reader（GoRouter `/reader?bookId=...`）
+      if (bookId != null && bookId.isNotEmpty && context.mounted) {
+        context.push(
+          Uri(path: '/reader', queryParameters: {'bookId': bookId}).toString(),
+        );
+      }
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('导入失败: $e')),
+      );
+    }
   }
 
   /// 批次 8 (05-19): 排序选择对话框。点 AppBar `Icons.sort` 按钮触发，

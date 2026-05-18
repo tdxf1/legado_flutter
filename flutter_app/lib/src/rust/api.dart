@@ -559,3 +559,19 @@ Future<void> setBackupPassword(
 /// 读取当前备份密码；不存在时返回空串。
 Future<String> getBackupPassword({required String documentsDir}) =>
     RustLib.instance.api.crateApiGetBackupPassword(documentsDir: documentsDir);
+
+// ============================================================
+// 本地书导入（批次 13 / 05-19）
+// ============================================================
+
+/// 导入本地书（TXT / EPUB / UMD）。返回 `{"book_id": "..."}` JSON。
+///
+/// `file_path` 必须是 .txt / .epub / .umd 文件绝对路径；
+/// `documents_dir` 用于复制源文件到 `<documents_dir>/local_books/`，
+/// 防原文件后续被移动 / 删除导致 reader 打不开。
+Future<String> importLocalBook(
+        {required String dbPath,
+        required String filePath,
+        required String documentsDir}) =>
+    RustLib.instance.api.crateApiImportLocalBook(
+        dbPath: dbPath, filePath: filePath, documentsDir: documentsDir);

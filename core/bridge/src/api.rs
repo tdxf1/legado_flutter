@@ -1422,6 +1422,161 @@ pub fn get_backup_password(documents_dir: String) -> Result<String, String> {
 }
 
 // ============================================================
+// 本地书导入 (批次 13 / 05-19)
+// ============================================================
+
+/// 导入本地书（TXT / EPUB / UMD）。返回 `{"book_id": "..."}` JSON 字符串。
+///
+/// 流程（对齐原 Legado `ImportBookActivity` MVP）：
+/// 1. 按 `file_path` 扩展名分发 `core_parser` 三个解析器之一
+/// 2. 复制源文件到 `<documents_dir>/local_books/<book_id>_<basename>`
+///    防原文件移动 / 删除断链
+/// 3. 确保虚拟"本地书"书源（id="local"/url="loc_book"）存在
+/// 4. 构造 `Book`：name 优先取 EPUB metadata.title，fallback basename(去扩展)
+///    `book_url = "loc_book:<copied_path>"`，`source_id = "local"`
+/// 5. 章节适配后 `ChapterDao::replace_by_book`（不保留旧章节正文）
+/// 6. `BookDao::upsert(&book)`
+///
+/// 不在 scope 内：mobi / pdf / cbz、TxtTocRule 自定义切分、cover 提取。
+pub fn import_local_book(
+    db_path: String,
+    file_path: String,
+    documents_dir: String,
+) -> Result<String, String> {
+    let path = std::path::Path::new(&file_path);
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .ok_or_else(|| "缺少文件扩展名".to_string())?;
+
+    // basename 不带扩展，作为 Book.name 的 fallback
+    let basename_no_ext = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    // 1. 分发 parser
+    let (chapters, epub_meta) = match ext.as_str() {
+        "txt" => (
+            core_parser::txt::parse_txt_file(&file_path)
+                .map_err(|e| format!("TXT 解析失败: {}", e))?,
+            None,
+        ),
+        "epub" => {
+            let (meta, chs) = core_parser::epub::parse_epub_file(&file_path)
+                .map_err(|e| format!("EPUB 解析失败: {}", e))?;
+            (chs, Some(meta))
+        }
+        "umd" => (
+            core_parser::umd::parse_umd_file(&file_path)
+                .map_err(|e| format!("UMD 解析失败: {}", e))?,
+            None,
+        ),
+        other => return Err(format!("不支持的文件类型: .{}", other)),
+    };
+
+    if chapters.is_empty() {
+        return Err("文件解析后无任何章节".to_string());
+    }
+
+    // 2. 生成 book_id（先生成才能拼复制后的目标路径）
+    let book_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().timestamp();
+
+    // 3. 复制源文件到 local_books
+    let copied_path = crate::local_book::copy_to_local_books_dir(
+        path,
+        std::path::Path::new(&documents_dir),
+        &book_id,
+    )?;
+
+    // 4. 打开 db + 确保虚拟 source
+    let mut conn = open_db(&db_path)?;
+    let source_id = crate::local_book::ensure_local_source(&mut conn)?;
+
+    // 5. 构造 Book
+    let book_url = format!(
+        "{}:{}",
+        crate::local_book::LOCAL_BOOK_URL_KEY,
+        copied_path.display()
+    );
+    // EPUB metadata.title / author 优先，fallback basename
+    let (name, author) = match epub_meta {
+        Some(ref m) => {
+            let n = m
+                .title
+                .clone()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| basename_no_ext.clone());
+            let a = m
+                .author
+                .clone()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            (n, a)
+        }
+        None => (basename_no_ext.clone(), None),
+    };
+    let total_word_count: i32 = chapters
+        .iter()
+        .map(|c| c.content.chars().count() as i32)
+        .sum();
+    let latest_chapter_title = chapters.last().map(|c| c.title.clone());
+    let book = core_storage::models::Book {
+        id: book_id.clone(),
+        source_id,
+        source_name: Some("本地书".to_string()),
+        name,
+        author,
+        cover_url: None,
+        chapter_count: chapters.len() as i32,
+        latest_chapter_title,
+        intro: None,
+        kind: None,
+        book_url: Some(book_url),
+        toc_url: None,
+        last_check_time: None,
+        last_check_count: 0,
+        total_word_count,
+        can_update: false, // 本地书不需要远端更新
+        order_time: now,
+        latest_chapter_time: Some(now),
+        custom_cover_path: None,
+        custom_info_json: None,
+        dur_chapter_index: 0,
+        dur_chapter_pos: 0,
+        dur_chapter_title: None,
+        dur_chapter_time: 0,
+        group_id: 0,
+        created_at: now,
+        updated_at: now,
+    };
+
+    // 6. 章节适配 + 入库
+    let storage_chapters =
+        crate::local_book::parser_chapters_to_storage(&chapters, &book_id, now);
+    // 注意：必须先 upsert Book（books.id 是 chapters.book_id 外键），再
+    // replace_by_book 写章节，否则触发 FOREIGN KEY constraint failed。
+    {
+        let book_dao = core_storage::book_dao::BookDao::new(&conn);
+        book_dao
+            .upsert(&book)
+            .map_err(|e| format!("写入书籍失败: {}", e))?;
+    }
+    {
+        let mut chapter_dao = core_storage::chapter_dao::ChapterDao::new(&mut conn);
+        chapter_dao
+            .replace_by_book(&book_id, &storage_chapters)
+            .map_err(|e| format!("写入章节失败: {}", e))?;
+    }
+
+    serde_json::to_string(&serde_json::json!({ "book_id": book_id }))
+        .map_err(|e| format!("序列化失败: {}", e))
+}
+
+// ============================================================
 // 内部辅助函数
 // ============================================================
 

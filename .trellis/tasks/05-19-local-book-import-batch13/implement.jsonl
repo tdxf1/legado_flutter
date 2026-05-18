@@ -1,0 +1,14 @@
+{"file": ".trellis/tasks/05-19-local-book-import-batch13/prd.md", "reason": "本任务 PRD"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 BookDao.upsert / ChapterDao.replace_by_book / source_dao 风格"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Flutter UI ↔ Rust parser ↔ DB 数据流"}
+{"file": "core/core-parser/src/types.rs", "reason": "parser::Chapter / BookMetadata 字段对照"}
+{"file": "core/core-parser/src/txt.rs", "reason": "parse_txt_file 签名"}
+{"file": "core/core-parser/src/epub.rs", "reason": "parse_epub_file 签名 + metadata 字段"}
+{"file": "core/core-parser/src/umd.rs", "reason": "parse_umd_file 签名"}
+{"file": "core/core-storage/src/models.rs", "reason": "storage::Book / Chapter 字段顺序基准"}
+{"file": "core/core-storage/src/book_dao.rs", "reason": "upsert 入口 + create 风格"}
+{"file": "core/core-storage/src/chapter_dao.rs", "reason": "replace_by_book + Chapter 字段写入"}
+{"file": "core/core-storage/src/source_dao.rs", "reason": "ensure source 模式参考"}
+{"file": "core/bridge/src/api.rs", "reason": "新增 import_local_book pub fn 入口；批次 10/11/12 添加风格参考"}
+{"file": "flutter_app/lib/features/bookshelf/bookshelf_page.dart", "reason": "AppBar PopupMenu 加项"}
+{"file": "flutter_app/lib/features/settings/backup_page.dart", "reason": "测试 hook 模式参考（批次 10）"}

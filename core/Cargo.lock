@@ -682,6 +682,7 @@ dependencies = [
 name = "bridge"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "core-net",
  "core-parser",
  "core-source",
@@ -693,6 +694,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
