@@ -205,11 +205,25 @@ final bookByIdProvider =
 final bookChaptersProvider =
     FutureProvider.family<List<Map<String, dynamic>>, String>(
         (ref, bookId) async {
+  final stopwatch = Stopwatch()..start();
+  debugPrint('[providers.timing] bookChaptersProvider START bookId=$bookId');
   await ref.watch(dbInitializedProvider.future);
+  debugPrint(
+      '[providers.timing] bookChaptersProvider db ready t=${stopwatch.elapsedMilliseconds}ms');
   final dbPath = await ref.watch(dbPathProvider.future);
+  debugPrint(
+      '[providers.timing] bookChaptersProvider dbPath ready t=${stopwatch.elapsedMilliseconds}ms');
   final json = await rust_api.getBookChapters(dbPath: dbPath, bookId: bookId);
+  debugPrint(
+      '[providers.timing] bookChaptersProvider Rust returned len=${json.length} t=${stopwatch.elapsedMilliseconds}ms');
   final List<dynamic> list = jsonDecode(json);
-  return list.cast<Map<String, dynamic>>();
+  final result = list.cast<Map<String, dynamic>>();
+  // 统计有 content 的章节数
+  final withContent =
+      result.where((m) => (m['content'] as String?)?.isNotEmpty ?? false).length;
+  debugPrint(
+      '[providers.timing] bookChaptersProvider DONE chapters=${result.length} withContent=$withContent TOTAL=${stopwatch.elapsedMilliseconds}ms');
+  return result;
 });
 
 Future<ThemeMode> loadThemeModeFromDisk({String? directory}) async {

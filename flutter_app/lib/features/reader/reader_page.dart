@@ -318,14 +318,29 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
 
   Future<String> _loadChapterContent(
       int index, List<Map<String, dynamic>> chapters) async {
+    final stopwatch = Stopwatch()..start();
+    debugPrint('[Reader.timing] _loadChapterContent ch=$index START');
     final chContent = chapters[index]['content'] as String?;
     if (chContent != null && chContent.isNotEmpty) {
+      debugPrint(
+          '[Reader.timing] _loadChapterContent ch=$index cache HIT, len=${chContent.length} t=${stopwatch.elapsedMilliseconds}ms');
       final dbPath2 = await ref.read(dbPathProvider.future);
+      debugPrint(
+          '[Reader.timing] _loadChapterContent ch=$index dbPath ready t=${stopwatch.elapsedMilliseconds}ms');
       final content = await _applyReplaceRulesViaRust(dbPath2, chContent);
-      return _cleanHtml(content);
+      debugPrint(
+          '[Reader.timing] _loadChapterContent ch=$index applyReplaceRules done t=${stopwatch.elapsedMilliseconds}ms');
+      final cleaned = _cleanHtml(content);
+      debugPrint(
+          '[Reader.timing] _loadChapterContent ch=$index cleanHtml done TOTAL=${stopwatch.elapsedMilliseconds}ms');
+      return cleaned;
     }
+    debugPrint(
+        '[Reader.timing] _loadChapterContent ch=$index cache MISS, going to fetch');
     final book = await ref.read(bookByIdProvider(widget.bookId).future);
     final dbPath = await ref.read(dbPathProvider.future);
+    debugPrint(
+        '[Reader.timing] _loadChapterContent ch=$index book+dbPath ready t=${stopwatch.elapsedMilliseconds}ms');
     // Always use book's source_id when state is empty (fresh open)
     if (_sourceId.isEmpty && book != null) {
       _sourceId = book['source_id'] as String? ?? '';
@@ -368,6 +383,23 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
               }
             } else {
               content = data['content'] as String? ?? '（无内容）';
+              // T3 (05-18) 修复：普通解析路径下 Rust 端 get_chapter_content
+              // _with_source_from_db 只 fetch 不写库，导致每次重开 app 都
+              // 要重新跑 BookSourceParser 跨网络拉一次（用户感知 2-3s 卡顿）。
+              // 这里在拿到内容后立即 updateChapterContent + chapters[i]['content']
+              // = content 把缓存灌进 DB，下次重开同书 cache HIT 直接秒开。
+              if (content.isNotEmpty && content != '（无内容）') {
+                try {
+                  await rust_api.updateChapterContent(
+                    dbPath: dbPath,
+                    chapterId: chapters[index]['id'] as String? ?? '',
+                    content: content,
+                  );
+                  chapters[index]['content'] = content;
+                } catch (e) {
+                  debugPrint('[Reader] cache plain content failed: $e');
+                }
+              }
             }
           } else {
             content = data.toString();
@@ -407,10 +439,17 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   Future<String> _applyReplaceRulesViaRust(
       String dbPath, String content) async {
     if (content.isEmpty) return content;
+    final stopwatch = Stopwatch()..start();
+    debugPrint(
+        '[Reader.timing] applyReplaceRules START, content.len=${content.length} bookName=${_bookName.isEmpty ? "<empty>" : _bookName} sourceUrl=${_sourceUrl.isEmpty ? "<empty>" : "${_sourceUrl.substring(0, _sourceUrl.length.clamp(0, 40))}..."}');
     if (_bookName.isEmpty || _sourceUrl.isEmpty) {
+      debugPrint(
+          '[Reader.timing] applyReplaceRules R105 backfill needed');
       try {
         final book =
             await ref.read(bookByIdProvider(widget.bookId).future);
+        debugPrint(
+            '[Reader.timing] applyReplaceRules bookByIdProvider done t=${stopwatch.elapsedMilliseconds}ms');
         if (book != null && mounted) {
           // R115: setState 让 AppBar 标题 / change-source 对话框等
           // 读取这两个字段的 widget 立即 rebuild。
@@ -443,7 +482,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     }
     try {
       final generation = ref.read(replaceRuleGenerationProvider);
-      return await rust_api.applyReplaceRules(
+      debugPrint(
+          '[Reader.timing] applyReplaceRules calling Rust applyReplaceRules t=${stopwatch.elapsedMilliseconds}ms');
+      final result = await rust_api.applyReplaceRules(
         dbPath: dbPath,
         content: content,
         cacheGeneration: generation,
@@ -451,6 +492,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         bookOrigin: _sourceUrl.isNotEmpty ? _sourceUrl : null,
         applyToTitle: false,
       );
+      debugPrint(
+          '[Reader.timing] applyReplaceRules Rust returned len=${result.length} TOTAL=${stopwatch.elapsedMilliseconds}ms');
+      return result;
     } catch (e) {
       debugPrint('[Reader] applyReplaceRules failed: $e');
       // R44: surface the failure once so the user knows their replace
