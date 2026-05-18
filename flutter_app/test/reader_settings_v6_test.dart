@@ -136,4 +136,64 @@ void main() {
       expect(s2.keepScreenOn, false);
     });
   });
+
+  // ── 批次 2 (05-18) — enableVolumeKeyPage / volumeKeyPageOnTts ─────────
+  // 仍保 schema=v6（与 batch01 同模式：fromJson 缺字段 fallback 默认值，
+  // 不强升 settingsVersion）。
+  group('ReaderSettings — 批次 2 音量键翻页字段', () {
+    test('默认值：enableVolumeKeyPage=true / volumeKeyPageOnTts=false', () {
+      const s = ReaderSettings();
+      expect(s.enableVolumeKeyPage, true,
+          reason: '对齐原 Legado MD3 AppConfig.volumeKeyPage 默认开启');
+      expect(s.volumeKeyPageOnTts, false,
+          reason: '对齐 AppConfig.volumeKeyPageOnPlay 默认关闭');
+    });
+
+    test('copyWith 单独修改两个字段', () {
+      const base = ReaderSettings();
+      final a = base.copyWith(enableVolumeKeyPage: false);
+      expect(a.enableVolumeKeyPage, false);
+      expect(a.volumeKeyPageOnTts, base.volumeKeyPageOnTts);
+      final b = base.copyWith(volumeKeyPageOnTts: true);
+      expect(b.volumeKeyPageOnTts, true);
+      expect(b.enableVolumeKeyPage, base.enableVolumeKeyPage);
+    });
+
+    test('toJson 写出两个新字段', () {
+      const s = ReaderSettings(
+        enableVolumeKeyPage: false,
+        volumeKeyPageOnTts: true,
+      );
+      final j = s.toJson();
+      expect(j['enableVolumeKeyPage'], false);
+      expect(j['volumeKeyPageOnTts'], true);
+    });
+
+    test('round-trip 保持值', () {
+      const s = ReaderSettings(
+        enableVolumeKeyPage: false,
+        volumeKeyPageOnTts: true,
+      );
+      final s2 = ReaderSettings.fromJson(s.toJson());
+      expect(s2.enableVolumeKeyPage, false);
+      expect(s2.volumeKeyPageOnTts, true);
+    });
+
+    test('v6 旧 JSON 缺新字段 → fallback 到默认值', () {
+      // 模拟 batch01 时期写入的 v6 JSON：含 screenBrightness/keepScreenOn
+      // 但没有 batch02 两个字段。
+      final s = ReaderSettings.fromJson({
+        'settingsVersion': 6,
+        'screenBrightness': 0.5,
+        'keepScreenOn': false,
+      });
+      expect(s.enableVolumeKeyPage, true,
+          reason: 'v6 旧 JSON 缺 enableVolumeKeyPage 应 fallback 到 true');
+      expect(s.volumeKeyPageOnTts, false,
+          reason: 'v6 旧 JSON 缺 volumeKeyPageOnTts 应 fallback 到 false');
+      // batch01 字段保持。
+      expect(s.screenBrightness, 0.5);
+      expect(s.keepScreenOn, false);
+    });
+  });
 }

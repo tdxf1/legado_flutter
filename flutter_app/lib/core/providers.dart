@@ -599,6 +599,20 @@ class ReaderSettings {
 
   final bool keepScreenOn;
 
+  /// 批次 2 (05-18): 启用音量键翻页（VOLUME_UP / VOLUME_DOWN）。默认 true，
+  /// 对齐原 Legado MD3 `AppConfig.volumeKeyPage` 默认值。
+  ///
+  /// PageUp / PageDown / Space / 方向键不受此开关影响——它们没有系统冲突
+  /// 行为，始终翻页。该开关只挡住"音量键被吃成翻页"这一条路径。
+  final bool enableVolumeKeyPage;
+
+  /// 批次 2 (05-18): 朗读中音量键是否仍翻页。默认 false（朗读时让系统调
+  /// 音量），对齐原 Legado MD3 `AppConfig.volumeKeyPageOnPlay` 默认行为。
+  ///
+  /// 仅在 [enableVolumeKeyPage] 为 true 时才会被检查；如果设为 true，则
+  /// 朗读中音量键依旧翻页，调音量需要靠系统音量条手动调节。
+  final bool volumeKeyPageOnTts;
+
   const ReaderSettings({
     this.fontSize = 18.0,
     this.fontWeightIndex = 1,
@@ -624,6 +638,8 @@ class ReaderSettings {
     this.pageAnimDurationMs = 300,
     this.screenBrightness = -1.0,
     this.keepScreenOn = true,
+    this.enableVolumeKeyPage = true,
+    this.volumeKeyPageOnTts = false,
   });
 
   static const List<int> fontWeightValues = [400, 700, 900];
@@ -687,6 +703,8 @@ class ReaderSettings {
     int? pageAnimDurationMs,
     double? screenBrightness,
     bool? keepScreenOn,
+    bool? enableVolumeKeyPage,
+    bool? volumeKeyPageOnTts,
   }) {
     return ReaderSettings(
       fontSize: fontSize ?? this.fontSize,
@@ -713,6 +731,8 @@ class ReaderSettings {
       pageAnimDurationMs: pageAnimDurationMs ?? this.pageAnimDurationMs,
       screenBrightness: screenBrightness ?? this.screenBrightness,
       keepScreenOn: keepScreenOn ?? this.keepScreenOn,
+      enableVolumeKeyPage: enableVolumeKeyPage ?? this.enableVolumeKeyPage,
+      volumeKeyPageOnTts: volumeKeyPageOnTts ?? this.volumeKeyPageOnTts,
     );
   }
 
@@ -747,6 +767,8 @@ class ReaderSettings {
         'pageAnimDurationMs': pageAnimDurationMs,
         'screenBrightness': screenBrightness,
         'keepScreenOn': keepScreenOn,
+        'enableVolumeKeyPage': enableVolumeKeyPage,
+        'volumeKeyPageOnTts': volumeKeyPageOnTts,
       };
 
   factory ReaderSettings.fromJson(Map<String, dynamic> json) {
@@ -805,6 +827,10 @@ class ReaderSettings {
       screenBrightness:
           (json['screenBrightness'] as num?)?.toDouble() ?? -1.0,
       keepScreenOn: json['keepScreenOn'] as bool? ?? true,
+      // 批次 2 (05-18): 音量键翻页开关。仍保 schema=v6（与 batch01 同模式：
+      // 走"缺字段 fallback 默认值"路径，不强升 settingsVersion）。
+      enableVolumeKeyPage: json['enableVolumeKeyPage'] as bool? ?? true,
+      volumeKeyPageOnTts: json['volumeKeyPageOnTts'] as bool? ?? false,
     );
   }
 }

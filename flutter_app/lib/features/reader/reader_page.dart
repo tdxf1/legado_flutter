@@ -22,6 +22,7 @@ import 'services/reader_tts_manager.dart';
 import 'services/reader_auto_scroller.dart';
 import 'services/reader_progress_service.dart';
 import 'services/reader_bookmark_service.dart';
+import 'services/reader_key_handler.dart';
 import 'state/reader_search_controller.dart' as rsc;
 import 'widgets/reader_settings_sheet.dart';
 import 'widgets/reader_search_bar.dart';
@@ -195,6 +196,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   final ReaderTtsManager _tts = ReaderTtsManager();
   PageViewController? _pageViewController;
 
+  /// 批次 2 (05-18): reader 渲染区的 [FocusNode]。让 [Focus.onKeyEvent] 在
+  /// reader Activity 前台时拿到物理按键事件（音量键 / PageUp / PageDown /
+  /// Space / 方向键），转化为翻页。autofocus 保证打开 reader 立即获焦，
+  /// 不需要用户先点屏幕才能用按键翻页。
+  final FocusNode _readerFocusNode = FocusNode(debugLabel: 'ReaderPage');
+
   @override
   void initState() {
     super.initState();
@@ -275,6 +282,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         debugPrint('[Reader] dispose pageViewController failed: $e');
       }
     }
+    _readerFocusNode.dispose();
     super.dispose();
   }
 
@@ -1743,7 +1751,36 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
 
     final showInfoBars = settings.showReadingInfo;
 
-    return AnnotatedRegion<SystemUiOverlayStyle>(
+    // 批次 2 (05-18): Focus 包住整个 reader 渲染区，让物理按键事件能被
+    // [handleReaderKeyEvent] 拦截转化为翻页。autofocus = true 保证一进
+    // reader 立即获焦，不需要用户先点屏幕。控件可见时（菜单 / 设置 sheet）
+    // 不拦截 — 见 [handleReaderKeyEvent] 内的 controlsVisible 守卫。
+    return Focus(
+      focusNode: _readerFocusNode,
+      autofocus: true,
+      onKeyEvent: (node, event) => handleReaderKeyEvent(
+        event: event,
+        settings: _settings,
+        controlsVisible: _controlsVisible,
+        ttsSpeaking: _tts.isSpeaking,
+        onPrev: () {
+          final pvc = _pageViewController;
+          if (pvc?.onTapPrev != null) {
+            pvc!.onTapPrev!();
+          } else if (pvc != null && !pvc.goToPrevPage()) {
+            _onPageChapterBoundary(PageDirection.prev);
+          }
+        },
+        onNext: () {
+          final pvc = _pageViewController;
+          if (pvc?.onTapNext != null) {
+            pvc!.onTapNext!();
+          } else if (pvc != null && !pvc.goToNextPage()) {
+            _onPageChapterBoundary(PageDirection.next);
+          }
+        },
+      ),
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle(
         statusBarIconBrightness:
             _settings.nightMode ? Brightness.light : Brightness.dark,
@@ -1829,6 +1866,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
           ),
         ),
       ),
+    ),
     );
   }
 

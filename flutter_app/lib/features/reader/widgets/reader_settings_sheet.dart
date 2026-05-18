@@ -308,6 +308,33 @@ class _ReaderSettingsSheetState extends State<ReaderSettingsSheet> {
                 dense: true,
                 onChanged: (v) => _update(_s.copyWith(keepScreenOn: v)),
               ),
+              const SizedBox(height: 12),
+              // 批次 2 (05-18): 物理按键翻页开关。"音量键翻页"对齐原 Legado
+              // MD3 `AppConfig.volumeKeyPage` 默认开启；"朗读时音量键也翻页"
+              // 对齐 `volumeKeyPageOnPlay` 默认关闭（朗读时让系统调音量）。
+              // PageUp/PageDown/Space/方向键不受这两个开关影响（无系统冲突）。
+              Text('按键', style: label),
+              const SizedBox(height: 4),
+              SwitchListTile(
+                title: Text('音量键翻页', style: label),
+                subtitle: Text(
+                  '音量+ 上一页 / 音量- 下一页',
+                  style: TextStyle(color: fg.withValues(alpha: 0.6), fontSize: 12),
+                ),
+                value: _s.enableVolumeKeyPage,
+                dense: true,
+                onChanged: (v) => _update(_s.copyWith(enableVolumeKeyPage: v)),
+              ),
+              SwitchListTile(
+                title: Text('朗读时音量键也翻页', style: label),
+                subtitle: Text(
+                  '默认关闭，朗读中音量键控制系统音量',
+                  style: TextStyle(color: fg.withValues(alpha: 0.6), fontSize: 12),
+                ),
+                value: _s.volumeKeyPageOnTts,
+                dense: true,
+                onChanged: (v) => _update(_s.copyWith(volumeKeyPageOnTts: v)),
+              ),
             ]),
       ),
     );
