@@ -116,7 +116,7 @@ void main() {
       await tester.pumpAndSettle();
     });
 
-    testWidgets('tap prev：起点 (0.1w, 0.9h)，终点 (w, h)，currentTouch.dx 推向 +w',
+    testWidgets('tap prev：起点 (0, h)，终点 (w, h)，currentTouch.dx 推向 +w',
         (tester) async {
       final (controller, ref) = await buildWidget(tester);
       // 翻到第 2 页让 hasPrev = true
@@ -128,14 +128,17 @@ void main() {
       delegate.prevPageByAnim(300);
       await tester.pump();
 
-      expect(delegate.debugAnimStartTouch, const Offset(40, 540),
-          reason: 'tap prev 起点应为 (0.1w, 0.9h)');
-      expect(delegate.debugAnimTargetTouch, const Offset(400, 600),
-          reason: 'tap prev 终点应为 (w, h)');
+      // T2 (05-18): 对齐 MD3 setDirection(PREV) → setStartPoint(0, h)；
+      // 触摸点起点是屏幕左下角 (0, h)，终点放到屏外右侧 (2w, h)（避免与
+      // cornerXY=(w, h) 重合时 _calcPoints 触发 0/0 NaN，视觉效果不变）。
+      expect(delegate.debugAnimStartTouch, const Offset(0, 600),
+          reason: 'tap prev 起点应为屏幕左下 (0, h)');
+      expect(delegate.debugAnimTargetTouch, const Offset(800, 600),
+          reason: 'tap prev 终点应为屏外右侧 (2w, h) 避开 corner 奇点');
 
       await tester.pump(const Duration(milliseconds: 100));
-      expect(delegate.currentTouch.dx, greaterThan(40),
-          reason: 'tap prev 动画推进后 currentTouch.dx 应大于虚拟起点 0.1w');
+      expect(delegate.currentTouch.dx, greaterThan(0),
+          reason: 'tap prev 动画推进后 currentTouch.dx 应大于起点 0');
 
       await tester.pumpAndSettle();
     });

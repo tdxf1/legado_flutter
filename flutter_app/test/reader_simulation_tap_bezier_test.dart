@@ -87,7 +87,7 @@ void main() {
       await tester.pumpAndSettle();
     });
 
-    testWidgets('tap prev：合成左下角虚拟起点 (cornerX=0, cornerY=h, isRtOrLb)',
+    testWidgets('tap prev：MD3 镜像 cornerXY 锚右下 (cornerX=w, cornerY=h, !isRtOrLb)',
         (tester) async {
       final (controller, ref) = await buildWidget(tester);
       // 先翻到第 2 页让 hasPrev = true
@@ -100,14 +100,16 @@ void main() {
       delegate.prevPageByAnim(300);
       await tester.pump();
 
-      // R5.2 / R5.6: 虚拟起点 (0, h) = (0, 600) 落在左下角
-      // → cornerX = 0, cornerY = h (600), isRtOrLb = true
-      expect(delegate.debugCornerX, 0,
-          reason: '左下角虚拟起点应映射到左边角 cornerX = 0');
+      // T2 (05-18): 对齐 MD3 SimulationPageDelegate.setDirection(PREV)
+      // L188-L206 的镜像逻辑。tap prev 触发后 cornerXY 应该锚到右下角
+      // (w, h)（与 next 共用支点），让"上一页"动画视觉上像 next 的反向
+      // 镜像（活页书"翻过去盖回来"）。
+      expect(delegate.debugCornerX, 400,
+          reason: 'PREV 方向镜像后 cornerX 应为 pageSize.width');
       expect(delegate.debugCornerY, 600,
-          reason: '左下角虚拟起点应映射到下边角 cornerY = pageSize.height');
-      expect(delegate.debugIsRtOrLb, isTrue,
-          reason: '左下角属于右上/左下对角线');
+          reason: 'PREV 方向 cornerY 应为 pageSize.height');
+      expect(delegate.debugIsRtOrLb, isFalse,
+          reason: 'cornerXY = (w, h) 属于右下角，isRtOrLb 应为 false');
 
       await tester.pumpAndSettle();
     });

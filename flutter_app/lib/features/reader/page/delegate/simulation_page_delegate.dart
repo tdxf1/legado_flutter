@@ -106,6 +106,23 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
     );
     final start = startTouch;
     _calcCornerXY(start.dx, start.dy);
+    // T2 (05-18) note: 此时 _direction == none，方向未定。corner 暂按 startTouch
+    // 算（next 几何）。等 [onDragUpdate] 检测到 PREV 方向后再走
+    // [_setDirectionMirrorCorner] 镜像，对齐 MD3 setDirection。
+  }
+
+  /// T2 (05-18): drag 路径方向首次确定时（slop 越过、_direction 从 none 切到
+  /// next/prev）应用 MD3 setDirection 镜像，让 prev 方向 cornerXY 锚到右下。
+  /// next 方向：父类 onDragUpdate 仅在 _direction == none 时根据 _dragOffset
+  /// 符号设方向，方向落地的下一帧 _setDirectionMirrorCorner 重新算 corner。
+  @override
+  void onDragUpdate(double delta) {
+    final priorDirection = direction;
+    super.onDragUpdate(delta);
+    if (priorDirection == PageDirection.none &&
+        direction != PageDirection.none) {
+      _setDirectionMirrorCorner(direction);
+    }
   }
 
   void _calcCornerXY(double x, double y) {
@@ -115,6 +132,33 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
     _cornerY = y <= h / 2 ? 0 : h;
     _isRtOrLb = (_cornerX == 0 && _cornerY == h) ||
         (_cornerY == 0 && _cornerX == w);
+  }
+
+  /// T2 (05-18): 对应 Legado MD3 `SimulationPageDelegate.setDirection` (L188-L206)
+  /// 的镜像逻辑——PREV 方向时强制把 cornerXY 锚到屏幕右半边底部，让"上一页"
+  /// 动画与 next 共用右下角支点（视觉效果"活页书翻过去盖回来"）。
+  ///
+  /// 不论 startTouch 落在屏幕哪边：
+  /// - x > viewWidth / 2 → 直接走右半边，calcCornerXY(x, h) → cornerX = w
+  /// - x ≤ viewWidth / 2 → 镜像到右半边，calcCornerXY(viewWidth - x, h) → cornerX = w
+  ///
+  /// NEXT 方向：MD3 setDirection 内 NEXT 分支只在 startX < w/2 时镜像
+  /// （把 cornerX 从 0 拉回 w）。这里完整复刻；当前 nextPageByAnim 用虚拟
+  /// 起点 (0.9w, 0.9h) 已 > w/2，分支不动作，行为不变。
+  void _setDirectionMirrorCorner(PageDirection dir) {
+    final size = pageSize.isEmpty ? const Size(400, 600) : pageSize;
+    final sx = startTouch.dx;
+    final sy = startTouch.dy;
+    if (dir == PageDirection.prev) {
+      final mirroredX = sx > size.width / 2 ? sx : size.width - sx;
+      _calcCornerXY(mirroredX, size.height);
+    } else if (dir == PageDirection.next) {
+      if (sx < size.width / 2) {
+        _calcCornerXY(size.width - sx, sy);
+      }
+      // sx >= w/2：cornerXY 由 onDragStart / nextPageByAnim 已经 _calcCornerXY
+      // 算好（右半边），不动
+    }
   }
 
   void _calcPoints() {
@@ -219,13 +263,19 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
 
   /// X1：tap 路径 lerp 起点（虚拟起点）→ 终点（屏幕外侧底部）。
   /// progress 一定从 0 开始（tap 触发 nextPageByAnim 时 animController.value = 0）。
+  ///
+  /// T2 (05-18): prev 终点 `(2w, h)` 而不是 `(w, h)`——`(w, h)` 正是 cornerXY
+  /// 位置，会让 `_calcPoints` 内 `cornerX - middleX → 0` 同时
+  /// `cornerY - middleY → 0`，触发 0/0 NaN。把终点放到屏外右侧（与 next 的
+  /// `(-w, h)` 屏外左侧对偶），动画 lerp 经过 90% 时 progress 已经 ≈1，视觉
+  /// 上跟 (w, h) 完全一样、又避开几何奇点。
   void _setupTapAnim(Offset virtualStart, PageDirection dir) {
     final size = pageSize.isEmpty ? const Size(400, 600) : pageSize;
     _animStartTouch = virtualStart;
     _animStartProgress = 0.0;
     _animTargetTouch = dir == PageDirection.next
         ? Offset(-size.width, size.height)
-        : Offset(size.width, size.height);
+        : Offset(size.width * 2, size.height); // T2 fix: 屏外右侧避开 corner 奇点
   }
 
   /// X1：drag-end 路径 lerp 起点（用户松手位置）→ 终点。
@@ -237,7 +287,7 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
     _animStartProgress = animController.value;
     _animTargetTouch = dir == PageDirection.next
         ? Offset(-size.width, size.height)
-        : Offset(size.width, size.height);
+        : Offset(size.width * 2, size.height); // T2 fix: 同 _setupTapAnim 避奇点
   }
 
   /// Task 5 (MD3 体感复刻 Phase A 收尾)：点击翻页（tap）走完整贝塞尔。
@@ -268,20 +318,36 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
     super.nextPageByAnim(animationSpeed);
   }
 
+  /// T2 (05-18): prev tap 路径——对齐 MD3 `prevPageByAnim` (L140-L146)。
+  ///
+  /// 修复用户报告的"prev 视觉是从左下卷出新纸而非右下盖回"问题。MD3 实现：
+  ///   1. setDirection(PREV) → 镜像 cornerXY 到 (w, h) 右下
+  ///   2. setStartPoint(0, h) → 重置触摸点到左下
+  ///   3. onAnimStart → dx = w / dy = 0 → scroller 把 touch 从 (0, h) 滑到 (w, h)
+  ///
+  /// 视觉：cornerXY 锚右下、触摸点从屏幕左下沿底边水平拖到右下——刚好是
+  /// next "右下卷起从右滑到左" 的反向（活页书"翻过去盖回来"）。
+  ///
+  /// 旧实现用 (0.1w, 0.9h) 作虚拟起点直接调 _calcCornerXY → cornerX=0 左下，
+  /// 视觉上是"从左下角卷出一张新纸"，与 MD3 不一致。
   @override
   void prevPageByAnim(int animationSpeed) {
     if (isRunning) return;
     final size = pageSize.isEmpty ? const Size(400, 600) : pageSize;
-    // 左下角附近虚拟起点：与 next 的 (0.9w, 0.9h) 镜像，留出 0.1*w 偏移
-    // 避免 startTouch 落在 cornerXY 上导致 [_calcPoints] 中 (0/0) 退化为 NaN。
-    // x ≤ w/2 与 y > h/2 的象限决策保持不变 → cornerX=0 / cornerY=h /
-    // isRtOrLb=true，与 Legado MD3 设定一致。
-    final virtualStart = Offset(size.width * 0.1, size.height * 0.9);
-    recordTouchStart(virtualStart, size);
+    // 步骤 1：用一个左半屏 tap 落点触发 setDirection 镜像逻辑
+    // （留出 0.1*w 偏移避免 _calcPoints 中除零）
+    final tapPoint = Offset(size.width * 0.1, size.height * 0.9);
+    recordTouchStart(tapPoint, size);
     _maxLength = math.sqrt(
       size.width * size.width + size.height * size.height,
     );
-    _calcCornerXY(virtualStart.dx, virtualStart.dy);
+    // 步骤 2：MD3 setDirection(PREV) → 镜像 cornerXY 到右下角
+    _setDirectionMirrorCorner(PageDirection.prev);
+    // 步骤 3：MD3 setStartPoint(0, h) → 把触摸点重置到屏幕左下角
+    final virtualStart = Offset(0, size.height);
+    recordTouchStart(virtualStart, size);
+    // 步骤 4：lerp 起点 (0, h) → 终点 (w, h)（_setupTapAnim 内 prev 分支
+    // _animTargetTouch = (size.width, size.height)）
     _setupTapAnim(virtualStart, PageDirection.prev);
     super.prevPageByAnim(animationSpeed);
   }
