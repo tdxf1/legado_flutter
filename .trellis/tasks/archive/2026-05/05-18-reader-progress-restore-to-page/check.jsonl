@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/05-18-reader-progress-restore-to-page/prd.md", "reason": "验收基准：检查实现是否覆盖所有 Acceptance Criteria 与 Out of Scope 边界"}
+{"file": ".trellis/tasks/05-18-reader-progress-restore-to-page/research/md3-progress-storage.md", "reason": "对照 MD3 行为校验：每翻一页保存 / char offset 反算 / 启动恢复链路语义是否一致"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "校验数据流：ReaderPage → ProgressService → Rust DB 与 反向恢复链路是否对齐"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "校验是否复用了 startCharOffset / jumpToPage / progressService 而非重复实现"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "lint / typecheck / 测试基线"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "load/save 失败兜底是否合规"}

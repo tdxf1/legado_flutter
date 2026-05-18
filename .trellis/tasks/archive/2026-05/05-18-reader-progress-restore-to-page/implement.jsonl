@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/05-18-reader-progress-restore-to-page/prd.md", "reason": "本任务 PRD，含 ADR / 验收 / 技术方案 / Out of Scope"}
+{"file": ".trellis/tasks/05-18-reader-progress-restore-to-page/research/md3-progress-storage.md", "reason": "MD3 进度存储/恢复链路逐字代码摘录（Book.durChapterPos / TextChapter.getPageIndexByCharIndex / saveRead 调用点）"}
+{"file": ".trellis/spec/guides/index.md", "reason": "通用 thinking guides 入口"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "本任务跨 ReaderPage / PageViewController / ProgressService / TextPage 多层，需要按这个 guide 检查数据流一致性"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "本任务核心是复用现有 startCharOffset / progressService.load/save / jumpToPage，避免重复造轮"}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend spec 入口（即使本任务主要改 Flutter，跨章 commit 路径有 Rust SQLite 保存调用，关系到错误处理风格）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "progressService.load/save 失败时的兜底策略对齐"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "_restoreProgress / _saveCurrentPagePosition 失败的日志格式对齐"}
