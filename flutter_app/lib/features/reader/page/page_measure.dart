@@ -196,14 +196,32 @@ class PageMeasure {
     int endParagraph,
     int startCharOffset,
   ) {
-    final endCharOffset = startCharOffset +
+    // T1 (05-18) bug fix：兜底保证 startCharOffset 严格单调递增。
+    //
+    // 原 measureChapter 在段内分页（fittingLines < lines.length）时把下一页的
+    // startCharOffset 算成 `paragraphs.take(i).fold(...)` —— 但此时 i 还指向
+    // 当前正在被切分的段（未 ++），且没加上段内已读字符数 → page N 与 page N+1
+    // 的 startCharOffset 都是同一个值（典型现象：page 0 = 0, page 1 = 0）。
+    //
+    // 后果：getPageIndexByCharOffset(savedOffset) 反算时永远命中第一个匹配
+    // 页（line 1879 的'最大 startCharOffset <= offset' 单边比较），用户停在
+    // page 1 但 saved offset = 0 → 重开 if(savedOffset > 0) 不进恢复路径 →
+    // fallback 到章首页。
+    //
+    // 这里在 finalize 时强制 effectiveStart > 上一页 endCharOffset；如果调
+    // 用方传入的 startCharOffset 已经 > 上一页 end 就尊重原值，否则提升到
+    // lastEnd（保证 lookup 表的唯一性 / 单调性）。
+    final lastEnd = pages.isNotEmpty ? pages.last.endCharOffset : 0;
+    final effectiveStart =
+        startCharOffset > lastEnd ? startCharOffset : lastEnd;
+    final endCharOffset = effectiveStart +
         paragraphTexts.fold<int>(0, (sum, p) => sum + p.length);
     pages.add(TextPage(
       chapterIndex: chapterIndex,
       pageIndex: pageIndex,
       startParagraphIndex: startParagraph,
       endParagraphIndex: endParagraph,
-      startCharOffset: startCharOffset,
+      startCharOffset: effectiveStart,
       endCharOffset: endCharOffset,
       paragraphTexts: List.from(paragraphTexts),
       headerText: chapterTitle,

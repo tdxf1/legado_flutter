@@ -44,6 +44,8 @@ class ReaderProgressService {
         paragraphIndex: paragraphIndex,
         offset: offset,
       );
+      debugPrint(
+          '[ReaderProgress] save OK: bookId=$bookId chapter=$chapterIndex offset=$offset');
     } catch (e) {
       debugPrint('[ReaderProgress] save failed: $e');
     }
@@ -57,14 +59,19 @@ class ReaderProgressService {
     try {
       final json =
           await rust_api.getReadingProgress(dbPath: dbPath, bookId: bookId);
+      debugPrint(
+          '[ReaderProgress] load: bookId=$bookId rawJson=${json.isEmpty ? "<EMPTY>" : (json.length > 200 ? "${json.substring(0, 200)}..." : json)}');
       if (json.isEmpty || json == 'null') return null;
       final decoded = jsonDecode(json);
       if (decoded is! Map<String, dynamic>) return null;
-      return SavedReadingProgress(
+      final result = SavedReadingProgress(
         chapterIndex: decoded['chapter_index'] as int? ?? 0,
         paragraphIndex: decoded['paragraph_index'] as int? ?? 0,
         offset: decoded['offset'] as int? ?? 0,
       );
+      debugPrint(
+          '[ReaderProgress] load OK: chapter=${result.chapterIndex} offset=${result.offset} paragraph=${result.paragraphIndex}');
+      return result;
     } catch (e) {
       debugPrint('[ReaderProgress] load failed: $e');
       return null;

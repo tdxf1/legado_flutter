@@ -66,6 +66,10 @@ void main() {
   });
 
   testWidgets('shows chapter list with titles', (WidgetTester tester) async {
+    // T1 followup (05-18): 二次进入路径修复后，build 在 _restoreProgress /
+    // _openChapter 完成填充 _chapterContent 之前一律显示 loading 占位，
+    // 不再闪现 _buildChapterList 目录列表（旧行为造成"返回书架再开闪一下
+    // 目录然后跳到正文"的视觉跳变）。原断言改为验证不再走目录路径。
     final chapters = [
       <String, dynamic>{'title': 'Chapter 1', 'url': '/ch1', 'id': 'ch1'},
       <String, dynamic>{'title': 'Chapter 2', 'url': '/ch2', 'id': 'ch2'},
@@ -81,16 +85,21 @@ void main() {
         child: const MaterialApp(home: ReaderPage(bookId: 'book_4')),
       ),
     );
-    await tester.pumpAndSettle();
-    expect(find.text('目录'), findsOneWidget);
-    expect(find.text('Chapter 1'), findsOneWidget);
-    expect(find.text('Chapter 2'), findsOneWidget);
-    expect(find.text('Chapter 3'), findsOneWidget);
-    expect(find.byIcon(Icons.arrow_back), findsOneWidget);
-    expect(find.byType(ListTile), findsNWidgets(3));
+    await tester.pump(); // 让 chaptersAsync data 帧呈现
+    // 不再显示目录列表的 AppBar 标题与章节标题
+    expect(find.text('目录'), findsNothing);
+    expect(find.text('Chapter 1'), findsNothing);
+    expect(find.text('Chapter 2'), findsNothing);
+    expect(find.text('Chapter 3'), findsNothing);
+    // 反而显示 loading 占位（"阅读器" AppBar + CircularProgressIndicator）
+    expect(find.text('阅读器'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
   });
 
-  testWidgets('shows fallback title for null chapter names', (WidgetTester tester) async {
+  testWidgets('shows fallback title for null chapter names',
+      (WidgetTester tester) async {
+    // T1 followup: 同上 — null title fallback 走的也是 _buildChapterList，
+    // 现在改成 loading 占位。
     final chapters = [
       <String, dynamic>{'title': null, 'url': '/ch1', 'id': 'ch1'},
       <String, dynamic>{'title': null, 'url': '/ch2', 'id': 'ch2'},
@@ -105,9 +114,11 @@ void main() {
         child: const MaterialApp(home: ReaderPage(bookId: 'book_5')),
       ),
     );
-    await tester.pumpAndSettle();
-    expect(find.text('章节 1'), findsOneWidget);
-    expect(find.text('章节 2'), findsOneWidget);
+    await tester.pump();
+    expect(find.text('章节 1'), findsNothing);
+    expect(find.text('章节 2'), findsNothing);
+    expect(find.text('阅读器'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
   });
 
   testWidgets('shows app bar title in loading state', (WidgetTester tester) async {

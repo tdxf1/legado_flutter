@@ -1011,22 +1011,43 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       dbPath: dbPath,
       bookId: widget.bookId,
     );
+    debugPrint(
+        '[Reader.T1] restoreProgress: saved=$saved bookId=${widget.bookId}');
     if (saved == null) {
+      debugPrint(
+          '[Reader.T1] restoreProgress: NO saved, fallback widget.chapterIndex=${widget.chapterIndex}');
       await _openChapter(widget.chapterIndex, chapters);
       return;
     }
     final savedIndex = saved.chapterIndex;
     final savedOffset = saved.offset;
     final savedParagraph = saved.paragraphIndex;
-    if (savedIndex < 0 || savedIndex >= chapters.length) return;
+    if (savedIndex < 0 || savedIndex >= chapters.length) {
+      debugPrint(
+          '[Reader.T1] restoreProgress: savedIndex=$savedIndex out of bounds (chapters=${chapters.length}), bail');
+      return;
+    }
 
     final isContinuous = _settings.isScrollMode;
     // T1 (05-18): page mode 下把 savedOffset 存起来，让 _openChapter 完成
     // loadChapter 后通过 postFrameCallback 一次性消费 — controller
     // measure 完才能用 getPageIndexByCharOffset 反算页索引。续章 / 后续
     // 章节加载不消费（消费后清成 null）。
-    if (!isContinuous && savedOffset > 0) {
+    //
+    // T1 (05-18) 修复：去掉 `savedOffset > 0` 的 guard。原 guard 假设
+    // page 0 的 startCharOffset 必然是 0、其它页必 > 0；但 page_measure
+    // 旧 bug 让 page 1 也是 0（段内分页路径漏算 startOffset 累加），用户
+    // 停在 page 1 saved offset=0 重开就被这个 guard 跳过，落回章首页。
+    // 现在改为：只要 saved 非空 + chapter 合法就触发恢复路径；
+    // savedOffset==0 时 _consumeRestoreCharOffsetIfNeeded 内
+    // getPageIndexByCharOffset(0) 返回 0，jumpToPage(0) 是 no-op，无副作用。
+    if (!isContinuous) {
       _restoreCharOffset = savedOffset;
+      debugPrint(
+          '[Reader.T1] restoreProgress: page mode, savedIndex=$savedIndex savedOffset=$savedOffset → _restoreCharOffset SET');
+    } else {
+      debugPrint(
+          '[Reader.T1] restoreProgress: savedIndex=$savedIndex savedOffset=$savedOffset isContinuous=$isContinuous → no _restoreCharOffset');
     }
 
     await _openChapter(savedIndex, chapters);
@@ -1536,7 +1557,14 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         if (_isLoadingContent || _chapterContent.isNotEmpty) {
           return _buildReaderView();
         }
-        return _buildChapterList(chapters);
+        // T1 followup (05-18): _restoreProgress / _openChapter 还没把
+        // _chapterContent 填满之前显示 loading 占位，避免"返回书架再开"
+        // 路径下首帧闪现 _buildChapterList 目录列表的视觉跳变。
+        // _buildChapterList 不再被生产代码调用（仅作为兜底保留）。
+        return Scaffold(
+          appBar: AppBar(title: const Text('阅读器')),
+          body: const Center(child: CircularProgressIndicator()),
+        );
       },
       loading: () => Scaffold(
         appBar: AppBar(title: const Text('阅读器')),
@@ -1549,6 +1577,10 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     );
   }
 
+  // T1 followup (05-18): build() 改成首屏走 loading 而不是目录列表，
+  // 这个 widget 不再被生产路径调用；保留作为后续"主动选目录"扩展的兜底，
+  // 暂时让 dart analyzer 忽略 unused 警告。
+  // ignore: unused_element
   Widget _buildChapterList(List<Map<String, dynamic>> chapters) {
     return Scaffold(
       appBar: AppBar(
@@ -1840,6 +1872,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   void _saveCurrentPagePosition() {
     if (_restoreCharOffset != null) {
       // 启动恢复链路尚未完成；跳过本次保存避免覆盖 saved offset
+      debugPrint(
+          '[Reader.T1] saveCurrentPagePosition: SKIP (restore in flight, _restoreCharOffset=$_restoreCharOffset)');
       return;
     }
     final ctrl = _pageViewController;
@@ -1849,6 +1883,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     final chapterIndex = ctrl.currentChapterIndex;
     final offset = page.startCharOffset;
     final bookId = widget.bookId;
+    debugPrint(
+        '[Reader.T1] saveCurrentPagePosition: chapter=$chapterIndex pageIdx=${ctrl.currentPageIndex} offset=$offset');
     ref.read(dbPathProvider.future).then((dbPath) {
       if (!mounted) return;
       _progressService.save(
@@ -1858,26 +1894,69 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         offset: offset,
       );
     }).catchError((Object e) {
-      debugPrint('[Reader] saveCurrentPagePosition failed: $e');
+      debugPrint('[Reader.T1] saveCurrentPagePosition failed: $e');
     });
   }
 
   /// T1 (05-18): 启动恢复链路最后一步 — measure 完成后通过 postFrameCallback
   /// 反算 saved char offset 对应的页并 jumpToPage。只消费一次（[_restoreCharOffset]
   /// 在消费后清成 null），后续 [_openChapter] 调用不会再触发跳页。
+  ///
+  /// T1 followup（05-18 race fix）：把 `_restoreCharOffset = null` 从同步路径
+  /// 移到 postFrame 内 jumpToPage 之后。原因——
+  ///
+  /// `loadChapter` 内部 `_measureCurrentChapterIfNeeded` 把 notifyListeners
+  /// 也 deferred 到 postFrame（page_view_controller.dart R39 注释），与本方法
+  /// schedule 的 postFrame 都注册到下一帧。它们按 schedule 顺序串行：
+  ///
+  ///   ① loadChapter postFrame: notifyListeners → _onPageChanged
+  ///        → _saveCurrentPagePosition
+  ///        → 看 `_restoreCharOffset != null` 跳过保存（保护窗口）
+  ///   ② consumeRestoreCharOffset postFrame: jumpToPage(N) → notifyListeners
+  ///        → _onPageChanged → _saveCurrentPagePosition
+  ///        → `_restoreCharOffset` 仍非 null，仍跳过
+  ///        → jumpToPage 完成后清 `_restoreCharOffset`（这一行）
+  ///   ③ 后续用户翻页 listener 才会真正写库（offset = 实际页 startCharOffset）
+  ///
+  /// 旧实现把 `= null` 放在 schedule 之前，导致 ① 时保护窗口失效，把 page 0
+  /// offset=0 写入 DB 覆盖刚 load 出来的 saved offset。表现：从书架二次进入
+  /// 同一本书时永远落回章首页，而 kill app 后重开却正常。
   void _consumeRestoreCharOffsetIfNeeded() {
     final saved = _restoreCharOffset;
-    if (saved == null) return;
-    _restoreCharOffset = null; // 一次性消费
-    if (_settings.isScrollMode) return; // 滚动模式不走这条路（见 _restoreProgress）
+    if (saved == null) {
+      debugPrint(
+          '[Reader.T1] consumeRestoreCharOffset: skip (saved=null)');
+      return;
+    }
+    if (_settings.isScrollMode) {
+      // 滚动模式不走 jumpToPage 路径；直接清，避免下次 _openChapter 误用。
+      _restoreCharOffset = null;
+      debugPrint(
+          '[Reader.T1] consumeRestoreCharOffset: skip (scroll mode), cleared');
+      return;
+    }
+    debugPrint(
+        '[Reader.T1] consumeRestoreCharOffset: schedule postFrame, saved=$saved');
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
+      if (!mounted) {
+        _restoreCharOffset = null; // unmount 兜底防泄漏
+        return;
+      }
       final ctrl = _pageViewController;
-      if (ctrl == null) return;
+      if (ctrl == null) {
+        _restoreCharOffset = null; // 兜底
+        return;
+      }
       // measure 完成后 totalPagesInChapter > 0；若仍为 0（极端边界情形）
-      // jumpToPage 自身会早 return，索性留着。
+      // jumpToPage 自身会早 return。
       final pageIdx = ctrl.getPageIndexByCharOffset(saved);
-      ctrl.jumpToPage(pageIdx);
+      debugPrint(
+          '[Reader.T1] consumeRestoreCharOffset postFrame: saved=$saved totalPages=${ctrl.totalPagesInChapter} pageIdx=$pageIdx → jumpToPage');
+      ctrl.jumpToPage(pageIdx); // 同步置 currentPageIndex + notifyListeners
+                                 // → 同步触发 _onPageChanged → _saveCurrentPagePosition
+                                 // 此时 _restoreCharOffset 仍非 null → 保护窗口跳过
+      _restoreCharOffset = null;  // jumpToPage 同步链跑完才清；后续用户翻页
+                                   // 才会真正落库（实际页 startCharOffset）
     });
   }
 
