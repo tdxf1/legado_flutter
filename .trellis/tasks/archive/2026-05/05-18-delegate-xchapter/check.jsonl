@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Quality gate"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify Delegate goToNext → controller.commitToNextChapter → onCrossChapter → ReaderPage state machine sequence is consistent across all 5 page delegates and fallback path preserved"}
+{"file": ".trellis/tasks/05-18-delegate-xchapter/prd.md", "reason": "C.x scope + onCrossChapter vs onChapterBoundary split"}
+{"file": ".trellis/tasks/05-18-cross-chapter-animation/prd.md", "reason": "Parent architecture - subtask C is the wiring step that completes the cross-chapter animation pipeline"}

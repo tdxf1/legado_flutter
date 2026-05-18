@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Quality gate"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse PageDelegate base class - all 5 subclasses share goToNext/goToPrev/nextPageByAnim, no per-subclass changes"}
+{"file": ".trellis/tasks/05-18-delegate-xchapter/prd.md", "reason": "C.x requirements + cross-chapter dispatch + onCrossChapter callback split from onChapterBoundary fallback"}
+{"file": ".trellis/tasks/05-18-cross-chapter-animation/prd.md", "reason": "Parent task architecture - subtask C wires A's controller commit + B's neighbor feed to actual animation playback"}
