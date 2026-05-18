@@ -151,7 +151,8 @@ abstract class RustLibApi extends BaseApi {
 
   Future<String> crateApiExportAllSources({required String dbPath});
 
-  Future<String> crateApiGetAllBooks({required String dbPath});
+  Future<String> crateApiGetAllBooks(
+      {required String dbPath, required int sortOrder});
 
   Future<String> crateApiGetAllSources({required String dbPath});
 
@@ -209,7 +210,9 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiListBookGroups({required String dbPath});
 
   Future<String> crateApiListBooksByGroup(
-      {required String dbPath, required PlatformInt64 groupId});
+      {required String dbPath,
+      required PlatformInt64 groupId,
+      required int sortOrder});
 
   Future<String> crateApiPing();
 
@@ -853,11 +856,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<String> crateApiGetAllBooks({required String dbPath}) {
+  Future<String> crateApiGetAllBooks(
+      {required String dbPath, required int sortOrder}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(dbPath, serializer);
+        sse_encode_i_32(sortOrder, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 19, port: port_);
       },
@@ -866,14 +871,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: sse_decode_String,
       ),
       constMeta: kCrateApiGetAllBooksConstMeta,
-      argValues: [dbPath],
+      argValues: [dbPath, sortOrder],
       apiImpl: this,
     ));
   }
 
   TaskConstMeta get kCrateApiGetAllBooksConstMeta => const TaskConstMeta(
         debugName: "get_all_books",
-        argNames: ["dbPath"],
+        argNames: ["dbPath", "sortOrder"],
       );
 
   @override
@@ -1395,12 +1400,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   Future<String> crateApiListBooksByGroup(
-      {required String dbPath, required PlatformInt64 groupId}) {
+      {required String dbPath,
+      required PlatformInt64 groupId,
+      required int sortOrder}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
         final serializer = SseSerializer(generalizedFrbRustBinding);
         sse_encode_String(dbPath, serializer);
         sse_encode_i_64(groupId, serializer);
+        sse_encode_i_32(sortOrder, serializer);
         pdeCallFfi(generalizedFrbRustBinding, serializer,
             funcId: 40, port: port_);
       },
@@ -1409,14 +1417,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         decodeErrorData: sse_decode_String,
       ),
       constMeta: kCrateApiListBooksByGroupConstMeta,
-      argValues: [dbPath, groupId],
+      argValues: [dbPath, groupId, sortOrder],
       apiImpl: this,
     ));
   }
 
   TaskConstMeta get kCrateApiListBooksByGroupConstMeta => const TaskConstMeta(
         debugName: "list_books_by_group",
-        argNames: ["dbPath", "groupId"],
+        argNames: ["dbPath", "groupId", "sortOrder"],
       );
 
   @override

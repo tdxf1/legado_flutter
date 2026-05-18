@@ -7,10 +7,13 @@ import 'package:legado_flutter/core/providers.dart';
 
 void main() {
   /// 批次 7 起书架页用 [bookGroupsProvider] + [booksByGroupProvider] 渲染。
+  /// 批次 8 起 [booksByGroupProvider] family key 升级为 `(int, int)` record
+  /// `(groupId, sortOrder)`。下面 override 把 family 当作 `(groupId, sort)` 二元组
+  /// 处理，但 widget test 里只 mock 出当前 sortOrder=0 的数据即可（默认 settings）。
+  ///
   /// 为了在 widget test 里完全脱离 FRB 原生绑定，本帮助函数同时覆盖：
   /// - `bookGroupsProvider`：默认空（即仅显示"全部" + "未分组"两个虚拟 Tab）
-  /// - `booksByGroupProvider(-1)`：当前 Tab 的"全部"视图
-  /// - `booksByGroupProvider(0)` ：当前 Tab 的"未分组"视图
+  /// - `booksByGroupProvider((-1, 0))` / `((0, 0))`：当前 Tab 的视图
   ///
   /// `booksFutureBuilder` 每次调用都生成新的 future（避免错误 future 共享
   /// 带来 AsyncError 二次抛出导致 test framework 误报失败）。
@@ -25,7 +28,7 @@ void main() {
       overrides: [
         bookGroupsProvider.overrideWith((ref) async => groupList),
         booksByGroupProvider.overrideWith(
-          (ref, groupId) =>
+          (ref, key) =>
               booksFutureBuilder != null ? booksFutureBuilder() : Future.value(bookList),
         ),
       ],
@@ -152,5 +155,74 @@ void main() {
     expect(find.text('未分组'), findsOneWidget);
     expect(find.text('玄幻'), findsOneWidget);
     expect(find.text('科幻'), findsOneWidget);
+  });
+
+  // ==========================================================
+  // 批次 8 (05-19): 排序菜单交互测试
+  // ==========================================================
+
+  testWidgets(
+      'BookshelfPage sort icon opens dialog and persists chosen sort to ReaderSettings',
+      (WidgetTester tester) async {
+    // 用容器 ProviderScope 暴露 readerSettingsProvider，让本测试能直接读
+    // 排序设置变化（不依赖 disk persistence）。
+    late ProviderContainer container;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          bookGroupsProvider.overrideWith((ref) async => const []),
+          booksByGroupProvider.overrideWith(
+              (ref, key) => Future.value(const <Map<String, dynamic>>[])),
+        ],
+        child: Consumer(builder: (context, ref, _) {
+          container = ProviderScope.containerOf(context);
+          return const MaterialApp(home: BookshelfPage());
+        }),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 初始默认 sort=0
+    expect(container.read(readerSettingsProvider).bookshelfSort, 0);
+    expect(container.read(bookshelfSortProvider), 0);
+
+    // 点排序图标
+    await tester.tap(find.byIcon(Icons.sort));
+    await tester.pumpAndSettle();
+    expect(find.text('书架排序'), findsOneWidget);
+    // 6 个选项都在
+    for (final label in ['默认', '名称', '作者', '加入时间', '上次阅读', '章节数']) {
+      expect(find.text(label), findsOneWidget);
+    }
+
+    // 选 "章节数" → bookshelfSort 写为 5
+    await tester.tap(find.text('章节数'));
+    await tester.pumpAndSettle();
+    expect(container.read(readerSettingsProvider).bookshelfSort, 5);
+    expect(container.read(bookshelfSortProvider), 5);
+  });
+
+  testWidgets('ReaderSettings.copyWith preserves bookshelfSort when not set',
+      (WidgetTester tester) async {
+    // 单元测试：copyWith 不传 bookshelfSort 应保留原值（v7 字段同其它字段
+    // 一致行为），避免菜单切到非 sort 选项时 sort 被默认值覆盖回 0。
+    const orig = ReaderSettings(bookshelfSort: 3);
+    final copied = orig.copyWith(fontSize: 22.0);
+    expect(copied.bookshelfSort, 3);
+    expect(copied.fontSize, 22.0);
+  });
+
+  test('ReaderSettings.fromJson missing bookshelfSort falls back to 0', () {
+    // 老 JSON（v ≤ 6）没有 bookshelfSort 字段 — fromJson 必须 fallback 0。
+    final settings = ReaderSettings.fromJson(<String, dynamic>{
+      'settingsVersion': 6,
+      'fontSize': 18.0,
+    });
+    expect(settings.bookshelfSort, 0);
+    final settingsV7 = ReaderSettings.fromJson(<String, dynamic>{
+      'settingsVersion': 7,
+      'bookshelfSort': 4,
+    });
+    expect(settingsV7.bookshelfSort, 4);
   });
 }

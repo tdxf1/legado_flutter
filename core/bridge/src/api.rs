@@ -33,12 +33,18 @@ pub fn get_db_version(db_path: String) -> Result<i32, String> {
 // 书架 (Books) — 返回 JSON 字符串
 // ============================================================
 
-/// 获取书架上的所有书籍，返回 JSON 数组
-pub fn get_all_books(db_path: String) -> Result<String, String> {
+/// 获取书架上的所有书籍，返回 JSON 数组。
+///
+/// 批次 8 (2026-05): 加 `sort_order: i32` 参数（0=Default/1=Name/2=Author/
+/// 3=TimeAdd/4=DurTime/5=ChapterCount，越界回 Default）。语义详见
+/// [`core_storage::book_dao::BookSort::from_i32`]。Flutter 端 `bookshelfSort`
+/// 设置直接透传过来。
+pub fn get_all_books(db_path: String, sort_order: i32) -> Result<String, String> {
     let conn = open_db(&db_path)?;
     let dao = core_storage::book_dao::BookDao::new(&conn);
+    let sort = core_storage::book_dao::BookSort::from_i32(sort_order);
     let books = dao
-        .get_all()
+        .get_all_sorted(sort)
         .map_err(|e| format!("获取书籍列表失败: {}", e))?;
     serde_json::to_string(&books).map_err(|e| format!("序列化失败: {}", e))
 }
@@ -122,11 +128,18 @@ pub fn delete_book_group(db_path: String, id: i64) -> Result<(), String> {
 /// - `-1` → 全部（等价 [`get_all_books`]）
 /// - `0`  → 未分组
 /// - `>= 1` → 具体某个分组
-pub fn list_books_by_group(db_path: String, group_id: i64) -> Result<String, String> {
+///
+/// 批次 8 (2026-05): 加 `sort_order: i32`，与 [`get_all_books`] 同语义。
+pub fn list_books_by_group(
+    db_path: String,
+    group_id: i64,
+    sort_order: i32,
+) -> Result<String, String> {
     let conn = open_db(&db_path)?;
     let dao = core_storage::book_dao::BookDao::new(&conn);
+    let sort = core_storage::book_dao::BookSort::from_i32(sort_order);
     let books = dao
-        .list_by_group(group_id)
+        .list_by_group_sorted(group_id, sort)
         .map_err(|e| format!("按分组获取书籍失败: {}", e))?;
     serde_json::to_string(&books).map_err(|e| format!("序列化失败: {}", e))
 }

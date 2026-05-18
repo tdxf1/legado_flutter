@@ -24,6 +24,60 @@ const BOOK_COLUMNS: &str = "id, source_id, source_name, name, author, cover_url,
     dur_chapter_index, dur_chapter_pos, dur_chapter_title, dur_chapter_time, group_id, \
     created_at, updated_at";
 
+/// 书架排序方式。
+///
+/// 批次 8 (2026-05): 对齐原 Legado `BookSourceSort.kt` 枚举。Bridge 层
+/// 入参用 `i32`（避免 FRB 跨语言 enum 序列化负担），DAO 层用本 enum
+/// 把语义集中：sql 拼接只有这一处出口，新增排序方式只需改这里。
+///
+/// 越界值（< 0 或 > 5）走 [`BookSort::Default`]，保持向后兼容。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BookSort {
+    /// `rowid ASC`，等价批次 7 之前默认行为（按插入顺序）。
+    Default = 0,
+    /// `name COLLATE NOCASE ASC`。
+    Name = 1,
+    /// `author COLLATE NOCASE ASC`，author 为 NULL 时排在末尾。
+    Author = 2,
+    /// `order_time DESC`（最近加入书架的在前）。
+    TimeAdd = 3,
+    /// `dur_chapter_time DESC`（最近阅读的在前）。批次 6 字段。
+    DurTime = 4,
+    /// `chapter_count DESC`（章节多的在前）。
+    ChapterCount = 5,
+}
+
+impl BookSort {
+    /// 把 bridge 层来的 i32 解析成 enum；越界值回 [`BookSort::Default`]。
+    pub fn from_i32(value: i32) -> Self {
+        match value {
+            1 => Self::Name,
+            2 => Self::Author,
+            3 => Self::TimeAdd,
+            4 => Self::DurTime,
+            5 => Self::ChapterCount,
+            _ => Self::Default,
+        }
+    }
+
+    /// 返回对应的 SQL `ORDER BY` 子句（不含 `ORDER BY` 关键字，仅排序表达式）。
+    /// 调用方负责拼到 `format!("... ORDER BY {} ...", BOOK_COLUMNS, sort.order_by_clause())`。
+    fn order_by_clause(self) -> &'static str {
+        match self {
+            // 与 sqlite 隐式 rowid ASC 一致；显式写出避免后续维护时被
+            // "看上去没排序" 的 SELECT 误删。
+            Self::Default => "rowid ASC",
+            Self::Name => "name COLLATE NOCASE ASC",
+            // author 可空：NULL 放到最后符合用户直觉（"未知作者" 的书排在已
+            // 知作者之后），同时保持 NOCASE 大小写无关排序。
+            Self::Author => "author IS NULL, author COLLATE NOCASE ASC",
+            Self::TimeAdd => "order_time DESC",
+            Self::DurTime => "dur_chapter_time DESC",
+            Self::ChapterCount => "chapter_count DESC",
+        }
+    }
+}
+
 /// 书籍 DAO
 pub struct BookDao<'a> {
     conn: &'a Connection,
@@ -128,10 +182,25 @@ impl<'a> BookDao<'a> {
     }
 
     /// 获取所有书籍（按排序时间倒序）
+    ///
+    /// 批次 8 之前固定 `order_time DESC`；为保持向后兼容（内部其它调用
+    /// 仍依赖该顺序，例如搜索结果在没有排序需求时也走 [`get_all`]），
+    /// 这里继续用 `TimeAdd`，由批次 8 新增的 [`get_all_sorted`] 接受
+    /// 显式 [`BookSort`]。bridge 层应优先用 [`get_all_sorted`]。
     pub fn get_all(&self) -> SqlResult<Vec<Book>> {
-        let sql = format!("SELECT {} FROM books ORDER BY order_time DESC", BOOK_COLUMNS);
-        let mut stmt = self.conn.prepare(&sql)?;
+        self.get_all_sorted(BookSort::TimeAdd)
+    }
 
+    /// 批次 8 (2026-05): 按指定 [`BookSort`] 列出全部书。
+    /// 调用方拿到 i32 后用 [`BookSort::from_i32`] 解析，越界值会回
+    /// [`BookSort::Default`]，不会触发错误路径。
+    pub fn get_all_sorted(&self, sort: BookSort) -> SqlResult<Vec<Book>> {
+        let sql = format!(
+            "SELECT {} FROM books ORDER BY {}",
+            BOOK_COLUMNS,
+            sort.order_by_clause()
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map([], book_from_row)?;
         rows.collect()
     }
@@ -179,15 +248,29 @@ impl<'a> BookDao<'a> {
     /// - `group_id == 0`  → "未分组" Tab，列出 `WHERE group_id = 0`
     /// - `group_id >= 1`  → 具体某个用户分组，列出 `WHERE group_id = ?`
     ///
-    /// 排序与 [`get_all`] 保持一致（`order_time DESC`），UI 端不需要为
-    /// 不同 Tab 单独维护排序状态。
+    /// 旧实现固定 `order_time DESC`；批次 8 起委托给 [`list_by_group_sorted`]
+    /// 并用 [`BookSort::TimeAdd`] 保持原行为。新代码请直接调
+    /// [`list_by_group_sorted`] 并传 [`BookSort`]。
     pub fn list_by_group(&self, group_id: i64) -> SqlResult<Vec<Book>> {
+        self.list_by_group_sorted(group_id, BookSort::TimeAdd)
+    }
+
+    /// 批次 8 (2026-05): 按分组 + 排序方式列出书籍。
+    ///
+    /// `sort` 由 bridge 层从 i32 解析得来（[`BookSort::from_i32`]），越界
+    /// 安全。`group_id` 语义同 [`list_by_group`]。
+    pub fn list_by_group_sorted(
+        &self,
+        group_id: i64,
+        sort: BookSort,
+    ) -> SqlResult<Vec<Book>> {
         if group_id == -1 {
-            return self.get_all();
+            return self.get_all_sorted(sort);
         }
         let sql = format!(
-            "SELECT {} FROM books WHERE group_id = ? ORDER BY order_time DESC",
-            BOOK_COLUMNS
+            "SELECT {} FROM books WHERE group_id = ? ORDER BY {}",
+            BOOK_COLUMNS,
+            sort.order_by_clause()
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![group_id], book_from_row)?;
@@ -380,5 +463,172 @@ mod tests {
         dao.set_group("b1", 0).unwrap();
         let b2 = dao.get_by_id("b1").unwrap().unwrap();
         assert_eq!(b2.group_id, 0);
+    }
+
+    // ==========================================================
+    // 批次 8 (2026-05): BookSort 排序单测
+    // ==========================================================
+
+    /// 5 本字段都不同的书，跨多个排序维度断言顺序。把书插入顺序
+    /// 与所有排序键都解耦（rowid 不等于 name 不等于 order_time），
+    /// 这样某个 ORDER BY 写错时一定会 fail，避免"因为 rowid 顺序
+    /// 巧合等于 name 顺序"导致测试假绿。
+    fn sortable_book(
+        id: &str,
+        name: &str,
+        author: Option<&str>,
+        order_time: i64,
+        dur_chapter_time: i64,
+        chapter_count: i32,
+    ) -> Book {
+        Book {
+            id: id.to_string(),
+            source_id: "s1".to_string(),
+            source_name: Some("Source".to_string()),
+            name: name.to_string(),
+            author: author.map(|s| s.to_string()),
+            cover_url: None,
+            chapter_count,
+            latest_chapter_title: None,
+            intro: None,
+            kind: None,
+            book_url: None,
+            toc_url: None,
+            last_check_time: None,
+            last_check_count: 0,
+            total_word_count: 0,
+            can_update: true,
+            order_time,
+            latest_chapter_time: None,
+            custom_cover_path: None,
+            custom_info_json: None,
+            dur_chapter_index: 0,
+            dur_chapter_pos: 0,
+            dur_chapter_title: None,
+            dur_chapter_time,
+            group_id: 0,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    fn seed_sortable(conn: &Connection) -> &'static [&'static str] {
+        let dao = BookDao::new(conn);
+        // 字段交错：rowid (插入序) 1..5 = b1..b5
+        // name:           "Charlie","alpha","Delta","bravo","echo"
+        // author:         Some("Z"),None,Some("a"),Some("M"),Some("B")
+        // order_time:     100, 500, 300, 200, 400
+        // dur_chapter_time: 5,   1,   3,   2,   4
+        // chapter_count:  10,  50,  30,  20,  40
+        dao.upsert(&sortable_book("b1", "Charlie", Some("Z"), 100, 5, 10))
+            .unwrap();
+        dao.upsert(&sortable_book("b2", "alpha", None, 500, 1, 50))
+            .unwrap();
+        dao.upsert(&sortable_book("b3", "Delta", Some("a"), 300, 3, 30))
+            .unwrap();
+        dao.upsert(&sortable_book("b4", "bravo", Some("M"), 200, 2, 20))
+            .unwrap();
+        dao.upsert(&sortable_book("b5", "echo", Some("B"), 400, 4, 40))
+            .unwrap();
+        &["b1", "b2", "b3", "b4", "b5"]
+    }
+
+    #[test]
+    fn test_book_sort_from_i32_clamps_out_of_range() {
+        // 越界 / 负值 / 任意脏值都回退到 Default，保持向后兼容
+        assert_eq!(BookSort::from_i32(-1), BookSort::Default);
+        assert_eq!(BookSort::from_i32(0), BookSort::Default);
+        assert_eq!(BookSort::from_i32(1), BookSort::Name);
+        assert_eq!(BookSort::from_i32(2), BookSort::Author);
+        assert_eq!(BookSort::from_i32(3), BookSort::TimeAdd);
+        assert_eq!(BookSort::from_i32(4), BookSort::DurTime);
+        assert_eq!(BookSort::from_i32(5), BookSort::ChapterCount);
+        assert_eq!(BookSort::from_i32(6), BookSort::Default);
+        assert_eq!(BookSort::from_i32(99), BookSort::Default);
+        assert_eq!(BookSort::from_i32(i32::MAX), BookSort::Default);
+        assert_eq!(BookSort::from_i32(i32::MIN), BookSort::Default);
+    }
+
+    #[test]
+    fn test_get_all_sorted_by_name_and_author() {
+        let (_dir, conn) = setup();
+        seed_sortable(&conn);
+        let dao = BookDao::new(&conn);
+
+        // Name ASC，COLLATE NOCASE：alpha < bravo < Charlie < Delta < echo
+        let by_name = dao.get_all_sorted(BookSort::Name).unwrap();
+        let names: Vec<&str> = by_name.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "bravo", "Charlie", "Delta", "echo"]);
+
+        // Author NOCASE ASC，None 排末尾：a, B, M, Z, [None]
+        // 对应 id: b3, b5, b4, b1, b2
+        let by_author = dao.get_all_sorted(BookSort::Author).unwrap();
+        let ids: Vec<&str> = by_author.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, vec!["b3", "b5", "b4", "b1", "b2"]);
+    }
+
+    #[test]
+    fn test_get_all_sorted_by_time_and_chapter_count() {
+        let (_dir, conn) = setup();
+        seed_sortable(&conn);
+        let dao = BookDao::new(&conn);
+
+        // TimeAdd DESC：order_time 500,400,300,200,100 → b2,b5,b3,b4,b1
+        let by_time_add = dao.get_all_sorted(BookSort::TimeAdd).unwrap();
+        let ids: Vec<&str> = by_time_add.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, vec!["b2", "b5", "b3", "b4", "b1"]);
+
+        // DurTime DESC：dur_chapter_time 5,4,3,2,1 → b1,b5,b3,b4,b2
+        let by_dur = dao.get_all_sorted(BookSort::DurTime).unwrap();
+        let ids: Vec<&str> = by_dur.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, vec!["b1", "b5", "b3", "b4", "b2"]);
+
+        // ChapterCount DESC：50,40,30,20,10 → b2,b5,b3,b4,b1
+        let by_count = dao.get_all_sorted(BookSort::ChapterCount).unwrap();
+        let ids: Vec<&str> = by_count.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, vec!["b2", "b5", "b3", "b4", "b1"]);
+
+        // Default = rowid ASC = 插入顺序 b1..b5
+        let by_default = dao.get_all_sorted(BookSort::Default).unwrap();
+        let ids: Vec<&str> = by_default.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, vec!["b1", "b2", "b3", "b4", "b5"]);
+    }
+
+    #[test]
+    fn test_list_by_group_sorted_filters_and_orders() {
+        let (_dir, conn) = setup();
+        let dao = BookDao::new(&conn);
+        // 3 本到分组 7，name 不同；额外 1 本到 0 分组，确保 group filter 生效
+        dao.upsert(&sortable_book("g1", "Zebra", Some("Y"), 1, 1, 30))
+            .unwrap();
+        dao.upsert(&sortable_book("g2", "apple", Some("A"), 2, 2, 10))
+            .unwrap();
+        dao.upsert(&sortable_book("g3", "Mango", Some("M"), 3, 3, 20))
+            .unwrap();
+        // 让组 7 的 3 本都进 group_id=7
+        dao.set_group("g1", 7).unwrap();
+        dao.set_group("g2", 7).unwrap();
+        dao.set_group("g3", 7).unwrap();
+        // 一本未分组的，必须不出现在 group=7 的结果里
+        dao.upsert(&sortable_book("u1", "unrelated", None, 9, 9, 99))
+            .unwrap();
+
+        // Name ASC（NOCASE）：apple < Mango < Zebra
+        let by_name = dao.list_by_group_sorted(7, BookSort::Name).unwrap();
+        let names: Vec<&str> = by_name.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, vec!["apple", "Mango", "Zebra"]);
+        assert!(by_name.iter().all(|b| b.group_id == 7));
+
+        // ChapterCount DESC：30,20,10 → g1,g3,g2
+        let by_count = dao
+            .list_by_group_sorted(7, BookSort::ChapterCount)
+            .unwrap();
+        let ids: Vec<&str> = by_count.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, vec!["g1", "g3", "g2"]);
+
+        // group_id=-1 + Name ASC：所有书（含 u1），apple < Mango < unrelated < Zebra
+        let all_by_name = dao.list_by_group_sorted(-1, BookSort::Name).unwrap();
+        let names: Vec<&str> = all_by_name.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, vec!["apple", "Mango", "unrelated", "Zebra"]);
     }
 }

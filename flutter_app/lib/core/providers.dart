@@ -119,9 +119,23 @@ final dbInitializedProvider = FutureProvider<bool>((ref) async {
 final allBooksProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   await ref.watch(dbInitializedProvider.future);
   final dbPath = await ref.watch(dbPathProvider.future);
-  final json = await rust_api.getAllBooks(dbPath: dbPath);
+  // 批次 8 (05-19): 透传 bookshelfSort 给 Rust 端，让 ORDER BY 生效。
+  // allBooksProvider 不分 family —— 整书架排序就这一个全局设置。
+  final sortOrder = ref.watch(bookshelfSortProvider);
+  final json = await rust_api.getAllBooks(dbPath: dbPath, sortOrder: sortOrder);
   final List<dynamic> list = jsonDecode(json);
   return list.cast<Map<String, dynamic>>();
+});
+
+/// 批次 8 (05-19): 书架排序方式（int），从 [readerSettingsProvider] 派生。
+///
+/// 用 `Provider`（非 StateProvider）保证：写永远走
+/// `readerSettingsProvider.notifier.state = newSettings.copyWith(...)`
+/// 单一路径，避免两个互相不同步的状态源；同时让所有依赖它的 provider
+/// （allBooksProvider / booksByGroupProvider）能在 settings 变更时自动
+/// 重新触发。
+final bookshelfSortProvider = Provider<int>((ref) {
+  return ref.watch(readerSettingsProvider).bookshelfSort;
 });
 
 /// 批次 7：拉取所有用户自建分组（按 sort_order 升序），
@@ -140,13 +154,19 @@ final bookGroupsProvider =
 /// - `0`  → 未分组（"未分组" Tab）
 /// - `>= 1` → 具体分组
 ///
-/// 用 `family.autoDispose` —— 不同 Tab 的 cache 独立，离开书架页时释放。
+/// 批次 8 (05-19): family 入参从 `int groupId` 升级为 record `(groupId, sort)`，
+/// 让每个 Tab 都按当前用户偏好的排序方式拉书。所有调用方（书架页 6 个 Tab +
+/// 长按菜单调用）必须显式传入 sort（默认从 [bookshelfSortProvider] 读）。
+///
+/// 用 `family.autoDispose` —— 不同 Tab + 不同 sort 的 cache 互相独立，
+/// 离开书架页时整体释放。
 final booksByGroupProvider = FutureProvider.family
-    .autoDispose<List<Map<String, dynamic>>, int>((ref, groupId) async {
+    .autoDispose<List<Map<String, dynamic>>, (int, int)>((ref, key) async {
+  final (groupId, sortOrder) = key;
   await ref.watch(dbInitializedProvider.future);
   final dbPath = await ref.watch(dbPathProvider.future);
-  final json =
-      await rust_api.listBooksByGroup(dbPath: dbPath, groupId: groupId);
+  final json = await rust_api.listBooksByGroup(
+      dbPath: dbPath, groupId: groupId, sortOrder: sortOrder);
   final List<dynamic> list = jsonDecode(json);
   return list.cast<Map<String, dynamic>>();
 });
@@ -577,8 +597,11 @@ int overlayPageModeOnAnim({
 /// - 4：合并 PageMode 进 PageAnim（scroll = 原 continuousScroll）
 /// - 5：新增 `pageAnimDurationMs`（int，默认 300）—— 翻页动画时长可配
 /// - 6：新增 `screenBrightness`（double，-1.0 = 跟随系统）+ `keepScreenOn`
-///   （bool，默认 true）—— 屏幕亮度调节 + 屏幕常亮（当前版本）。
-const int kReaderSettingsCurrentVersion = 6;
+///   （bool，默认 true）—— 屏幕亮度调节 + 屏幕常亮。
+/// - 7：新增 `bookshelfSort`（int，默认 0=Default）—— 书架排序方式，对齐
+///   原 Legado `AppConfig.bookshelfSort`。语义见 Rust `BookSort` enum。
+///   旧 JSON 缺字段时 fromJson 走 `?? 0`，不影响存档兼容（当前版本）。
+const int kReaderSettingsCurrentVersion = 7;
 
 class ReaderSettings {
   final double fontSize;
@@ -680,6 +703,15 @@ class ReaderSettings {
   /// 用户可关闭以避免长按误触。
   final bool enableLongPressMenu;
 
+  /// 批次 8 (05-19): 书架排序方式。0=Default(rowid ASC) / 1=Name / 2=Author /
+  /// 3=TimeAdd / 4=DurTime / 5=ChapterCount。语义对齐 Rust `BookSort` enum。
+  ///
+  /// 默认 0（与历史行为一致：按插入顺序）。schema=v7（与 batch01..batch05
+  /// 同模式：fromJson 缺字段 fallback `?? 0`，老 JSON 自动升级无感）。
+  /// 透传给 bridge `getAllBooks` / `listBooksByGroup` 的 `sortOrder` 入参；
+  /// 越界值由 Rust 端 [`BookSort::from_i32`] clamp 回 Default。
+  final int bookshelfSort;
+
   const ReaderSettings({
     this.fontSize = 18.0,
     this.fontWeightIndex = 1,
@@ -711,6 +743,7 @@ class ReaderSettings {
     this.autoScrollSpeed = 1,
     this.autoPageIntervalSeconds = 10,
     this.enableLongPressMenu = true,
+    this.bookshelfSort = 0,
   });
 
   static const List<int> fontWeightValues = [400, 700, 900];
@@ -780,6 +813,7 @@ class ReaderSettings {
     int? autoScrollSpeed,
     int? autoPageIntervalSeconds,
     bool? enableLongPressMenu,
+    int? bookshelfSort,
   }) {
     return ReaderSettings(
       fontSize: fontSize ?? this.fontSize,
@@ -813,6 +847,7 @@ class ReaderSettings {
       autoPageIntervalSeconds:
           autoPageIntervalSeconds ?? this.autoPageIntervalSeconds,
       enableLongPressMenu: enableLongPressMenu ?? this.enableLongPressMenu,
+      bookshelfSort: bookshelfSort ?? this.bookshelfSort,
     );
   }
 
@@ -853,6 +888,7 @@ class ReaderSettings {
         'autoScrollSpeed': autoScrollSpeed,
         'autoPageIntervalSeconds': autoPageIntervalSeconds,
         'enableLongPressMenu': enableLongPressMenu,
+        'bookshelfSort': bookshelfSort,
       };
 
   factory ReaderSettings.fromJson(Map<String, dynamic> json) {
@@ -927,6 +963,9 @@ class ReaderSettings {
               .clamp(1, 30),
       // 批次 5 (05-18): 长按文字菜单开关。缺字段 fallback true（默认开启）。
       enableLongPressMenu: json['enableLongPressMenu'] as bool? ?? true,
+      // 批次 8 (05-19): 书架排序方式。v ≤ 6 旧 JSON 缺字段时 fallback 0。
+      // 越界值不在这里 clamp；Rust [`BookSort::from_i32`] 会兜底回 Default。
+      bookshelfSort: (json['bookshelfSort'] as num?)?.toInt() ?? 0,
     );
   }
 }

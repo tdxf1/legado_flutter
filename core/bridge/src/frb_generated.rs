@@ -727,10 +727,11 @@ fn wire__crate__api__get_all_books_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_db_path = <String>::sse_decode(&mut deserializer);
+            let api_sort_order = <i32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
-                    let output_ok = crate::api::get_all_books(api_db_path)?;
+                    let output_ok = crate::api::get_all_books(api_db_path, api_sort_order)?;
                     Ok(output_ok)
                 })())
             }
@@ -1462,10 +1463,11 @@ fn wire__crate__api__list_books_by_group_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_db_path = <String>::sse_decode(&mut deserializer);
             let api_group_id = <i64>::sse_decode(&mut deserializer);
+            let api_sort_order = <i32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
-                    let output_ok = crate::api::list_books_by_group(api_db_path, api_group_id)?;
+                    let output_ok = crate::api::list_books_by_group(api_db_path, api_group_id, api_sort_order)?;
                     Ok(output_ok)
                 })())
             }

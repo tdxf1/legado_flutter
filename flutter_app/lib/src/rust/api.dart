@@ -20,9 +20,16 @@ Future<String> initLegado({required String dbPath}) =>
 Future<int> getDbVersion({required String dbPath}) =>
     RustLib.instance.api.crateApiGetDbVersion(dbPath: dbPath);
 
-/// 获取书架上的所有书籍，返回 JSON 数组
-Future<String> getAllBooks({required String dbPath}) =>
-    RustLib.instance.api.crateApiGetAllBooks(dbPath: dbPath);
+/// 获取书架上的所有书籍，返回 JSON 数组。
+///
+/// 批次 8 (2026-05): 加 `sort_order: i32` 参数（0=Default/1=Name/2=Author/
+/// 3=TimeAdd/4=DurTime/5=ChapterCount，越界回 Default）。语义详见
+/// [`core_storage::book_dao::BookSort::from_i32`]。Flutter 端 `bookshelfSort`
+/// 设置直接透传过来。
+Future<String> getAllBooks(
+        {required String dbPath, required int sortOrder}) =>
+    RustLib.instance.api
+        .crateApiGetAllBooks(dbPath: dbPath, sortOrder: sortOrder);
 
 /// 搜索书架中的书籍，返回 JSON 数组
 Future<String> searchBooksOffline(
@@ -70,10 +77,14 @@ Future<void> deleteBookGroup(
 /// - `-1` → 全部（等价 [`get_all_books`]）
 /// - `0`  → 未分组
 /// - `>= 1` → 具体某个分组
+///
+/// 批次 8 (2026-05): 加 `sort_order: i32`，与 [`get_all_books`] 同语义。
 Future<String> listBooksByGroup(
-        {required String dbPath, required PlatformInt64 groupId}) =>
-    RustLib.instance.api
-        .crateApiListBooksByGroup(dbPath: dbPath, groupId: groupId);
+        {required String dbPath,
+        required PlatformInt64 groupId,
+        required int sortOrder}) =>
+    RustLib.instance.api.crateApiListBooksByGroup(
+        dbPath: dbPath, groupId: groupId, sortOrder: sortOrder);
 
 /// 把一本书移动到指定分组（`group_id = 0` 表示移回"未分组"）
 Future<void> setBookGroup(

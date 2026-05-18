@@ -56,11 +56,11 @@ void main() {
   });
 
   group('ReaderSettings v6 — JSON 序列化', () {
-    test('settingsVersion 写出 == 6', () {
+    test('settingsVersion 写出 == 7', () {
       const s = ReaderSettings();
       final j = s.toJson();
-      expect(j['settingsVersion'], 6);
-      expect(kReaderSettingsCurrentVersion, 6);
+      expect(j['settingsVersion'], 7);
+      expect(kReaderSettingsCurrentVersion, 7);
     });
 
     test('toJson 写入 screenBrightness + keepScreenOn', () {

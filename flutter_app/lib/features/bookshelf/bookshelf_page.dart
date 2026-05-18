@@ -38,18 +38,20 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   @override
   Widget build(BuildContext context) {
     final groupsAsync = ref.watch(bookGroupsProvider);
+    // 批次 8: 全局监听排序方式；切换排序后下方所有 Tab 都会重新拉书。
+    final sortOrder = ref.watch(bookshelfSortProvider);
 
     return groupsAsync.when(
       // 错误 / loading 时仍展示 TabBar 骨架（只有"全部"+"未分组"两个虚拟 Tab），
       // 避免分组拉取失败导致整页都进不去。
-      loading: () => _buildScaffold(context, const []),
-      error: (e, _) => _buildScaffold(context, const []),
-      data: (groups) => _buildScaffold(context, groups),
+      loading: () => _buildScaffold(context, const [], sortOrder),
+      error: (e, _) => _buildScaffold(context, const [], sortOrder),
+      data: (groups) => _buildScaffold(context, groups, sortOrder),
     );
   }
 
-  Widget _buildScaffold(
-      BuildContext context, List<Map<String, dynamic>> groups) {
+  Widget _buildScaffold(BuildContext context,
+      List<Map<String, dynamic>> groups, int sortOrder) {
     // Tab 总数 = 2 (全部 + 未分组) + N 个用户分组。
     // ValueKey 让用户分组数变化时 DefaultTabController 重建，避免 controller
     // 长度不匹配抛 assertion。
@@ -77,6 +79,14 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                 setState(() => _isGridView = !_isGridView);
                 saveBookshelfGridViewToDisk(_isGridView);
               },
+            ),
+            // 批次 8 (05-19): 排序按钮。打开 6 选 RadioListTile 对话框，选完
+            // 通过 [readerSettingsProvider] 持久化，让 [bookshelfSortProvider]
+            // 自动派生新值并触发各 Tab 重新拉书。
+            IconButton(
+              icon: const Icon(Icons.sort),
+              tooltip: '书架排序',
+              onPressed: () => _showSortDialog(context),
             ),
             PopupMenuButton<String>(
               tooltip: '更多',
@@ -106,27 +116,85 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
           ),
         ),
         body: TabBarView(
-          children: [for (final t in tabSpec) _BookListView(groupId: t.groupId, isGridView: _isGridView)],
+          children: [
+            for (final t in tabSpec)
+              _BookListView(
+                groupId: t.groupId,
+                sortOrder: sortOrder,
+                isGridView: _isGridView,
+              )
+          ],
         ),
       ),
     );
+  }
+
+  /// 批次 8 (05-19): 排序选择对话框。点 AppBar `Icons.sort` 按钮触发，
+  /// 选中后写回 [readerSettingsProvider] 并落盘 [saveReaderSettingsToDisk]。
+  /// `bookshelfSortProvider` 是从 readerSettings 派生的 Provider，state 一变
+  /// 各 Tab 的 [booksByGroupProvider]`((groupId, sort))` 自然换 key 触发重拉。
+  ///
+  /// UI 用 ListTile + trailing check 模拟单选；不用 RadioListTile 是因为
+  /// Flutter 3.32 后其 groupValue/onChanged 已弃用（与
+  /// [GroupSelectDialog] 同模式，避免新增 deprecation warning）。
+  Future<void> _showSortDialog(BuildContext context) async {
+    final current = ref.read(readerSettingsProvider).bookshelfSort;
+    // 0..5 与 Rust BookSort enum 对齐（含 0=Default）。
+    const labels = <int, String>{
+      0: '默认',
+      1: '名称',
+      2: '作者',
+      3: '加入时间',
+      4: '上次阅读',
+      5: '章节数',
+    };
+    final picked = await showDialog<int>(
+      context: context,
+      builder: (ctx) {
+        return SimpleDialog(
+          title: const Text('书架排序'),
+          children: [
+            for (final entry in labels.entries)
+              ListTile(
+                title: Text(entry.value),
+                trailing: entry.key == current
+                    ? const Icon(Icons.check, color: Colors.blue)
+                    : null,
+                onTap: () => Navigator.pop(ctx, entry.key),
+              ),
+          ],
+        );
+      },
+    );
+    if (picked == null || picked == current) return;
+    final notifier = ref.read(readerSettingsProvider.notifier);
+    final updated = notifier.state.copyWith(bookshelfSort: picked);
+    notifier.state = updated;
+    // 持久化到 settings.json，杀进程重启后保留排序。
+    await saveReaderSettingsToDisk(updated);
   }
 }
 
 /// 单个 Tab 内的书列表视图。
 ///
-/// 抽出独立 widget 以便每个 Tab 通过 [booksByGroupProvider]`(groupId)`
+/// 抽出独立 widget 以便每个 Tab 通过 [booksByGroupProvider]`((groupId, sortOrder))`
 /// 各自拿数据，互不污染缓存。`isGridView` 由父级 [BookshelfPage] 全局
-/// 控制（"列表/网格"切换是用户在所有 Tab 间共享的偏好）。
+/// 控制（"列表/网格"切换是用户在所有 Tab 间共享的偏好）；`sortOrder`
+/// 同样全局共享（批次 8）。
 class _BookListView extends ConsumerWidget {
   final int groupId;
+  final int sortOrder;
   final bool isGridView;
 
-  const _BookListView({required this.groupId, required this.isGridView});
+  const _BookListView({
+    required this.groupId,
+    required this.sortOrder,
+    required this.isGridView,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final booksAsync = ref.watch(booksByGroupProvider(groupId));
+    final booksAsync = ref.watch(booksByGroupProvider((groupId, sortOrder)));
     return booksAsync.when(
       data: (books) => _buildBookList(context, ref, books),
       loading: () => const Center(child: CircularProgressIndicator()),

@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/05-19-bookshelf-sort-batch08/prd.md", "reason": "本任务 PRD"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 book_dao 风格 / settings provider 风格"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨 Rust DAO / FRB / Flutter UI 多层"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-bookshelf-groups-batch07/prd.md", "reason": "前置批次（list_books_by_group 是排序的扩展点）"}
+{"file": "core/core-storage/src/book_dao.rs", "reason": "排序入口必改"}
+{"file": "core/bridge/src/api.rs", "reason": "list_books_by_group / get_all_books 签名要扩 sort_order"}
+{"file": "flutter_app/lib/core/providers.dart", "reason": "ReaderSettings v7 + bookshelfSortProvider + booksByGroupProvider family 扩展"}
+{"file": "flutter_app/lib/features/bookshelf/bookshelf_page.dart", "reason": "AppBar 加排序 PopupMenuButton"}
