@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Quality gate"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse existing _preCacheNextChapter pattern for symmetric prev prefetch; reuse FilterChip pattern for visibility"}
+{"file": ".trellis/tasks/05-18-prev-prefetch-and-search-precision-visibility/prd.md", "reason": "X2.x prev 预拉对称化 + X3.x 精确搜索可见性"}
