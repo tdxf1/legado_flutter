@@ -66,6 +66,53 @@ class ReaderPage extends ConsumerStatefulWidget {
 
   @override
   ConsumerState<ReaderPage> createState() => _ReaderPageState();
+
+  /// Subtask B — 计算 [currentIndex] 邻章对应的 [ChapterWindow]，作为
+  /// [PageViewController.setNeighborChapter] 的入参。抽成 static + 暴露
+  /// `@visibleForTesting` 便于单测覆盖（不需要构造完整 ReaderPage widget）。
+  ///
+  /// 安全语义：
+  /// - `chapters == null` 或 0 → 返回 (null, null)
+  /// - 边界 `currentIndex == 0` → prev=null
+  /// - 边界 `currentIndex == chapters.length - 1` → next=null
+  /// - 邻章 `content` 为 null/empty → 对应方向 ChapterWindow=null（不灌空内容
+  ///   让 controller 测出 0 页）
+  ///
+  /// **不**在这里做 settings / scrollMode 检查 — 这些是调用方
+  /// `_measureAdjacentChapters` 的职责，让本函数纯计算便于测试。
+  @visibleForTesting
+  static (ChapterWindow?, ChapterWindow?) computeAdjacentWindows(
+      int currentIndex, List<Map<String, dynamic>>? chapters) {
+    if (chapters == null || chapters.isEmpty) return (null, null);
+    if (currentIndex < 0 || currentIndex >= chapters.length) {
+      return (null, null);
+    }
+    ChapterWindow? prev;
+    if (currentIndex > 0) {
+      final m = chapters[currentIndex - 1];
+      final c = m['content'] as String?;
+      if (c != null && c.isNotEmpty) {
+        prev = ChapterWindow(
+          chapterIndex: currentIndex - 1,
+          title: m['title'] as String? ?? '',
+          content: c,
+        );
+      }
+    }
+    ChapterWindow? next;
+    if (currentIndex < chapters.length - 1) {
+      final m = chapters[currentIndex + 1];
+      final c = m['content'] as String?;
+      if (c != null && c.isNotEmpty) {
+        next = ChapterWindow(
+          chapterIndex: currentIndex + 1,
+          title: m['title'] as String? ?? '',
+          content: c,
+        );
+      }
+    }
+    return (prev, next);
+  }
 }
 
 class _ReaderPageState extends ConsumerState<ReaderPage> {
@@ -475,6 +522,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       });
       _preCacheNextChapter(index, chapters);
       _preloadAdjacentContent(index, chapters);
+      _measureAdjacentChapters(index);
       _fetchSourceInfo();
     } catch (e) {
       if (!mounted || requestId != _chapterRequestId) return;
@@ -506,6 +554,14 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     });
     ref.read(readerSettingsProvider.notifier).state = settings;
     _pageViewController?.updateSettings(settings);
+    // Subtask B.6: 排版字段变化时 PageViewController.updateSettings 已自动清三章
+    // pages，但邻章 paragraphs 也整个清掉了（见 controller 注释 A.4），需要外
+    // 层重新灌一次邻章；再走一次 measure 让 boundaryNextPage / boundaryPrevPage
+    // 在新字号 / 行距下重新就位。滚动模式跳过（_measureAdjacentChapters 内部已
+    // 处理）。
+    if (!settings.isScrollMode) {
+      _measureAdjacentChapters(_currentIndex);
+    }
     if (persist) {
       saveReaderSettingsToDisk(settings);
     }
@@ -1101,6 +1157,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         _loadChapterContent(prevIndex, chapters).then((content) {
           if (content.isNotEmpty) {
             chapters[prevIndex]['content'] = content;
+            // Subtask B.4: 字符串 fetch 成功后立即灌进 controller，让 delegate
+            // 跨章动画期间能拿到刚就绪的邻章首/末页 picture。
+            if (mounted) _measureAdjacentChapters(_currentIndex);
           }
         }).catchError((Object e) {
           debugPrint('[Reader] preload prev chapter failed: $e');
@@ -1114,12 +1173,38 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         _loadChapterContent(nextIndex, chapters).then((content) {
           if (content.isNotEmpty) {
             chapters[nextIndex]['content'] = content;
+            // Subtask B.4: 同上，next 方向。
+            if (mounted) _measureAdjacentChapters(_currentIndex);
           }
         }).catchError((Object e) {
           debugPrint('[Reader] preload next chapter failed: $e');
         });
       }
     }
+  }
+
+  /// Subtask B — 把已预加载的邻章字符串内容灌进 [PageViewController]，让
+  /// PageDelegate 跨章动画期间能渲染邻章首/末页 picture。
+  ///
+  /// 调用时机：
+  ///   - [_openChapter] 完成后（进章触发）
+  ///   - [_loadPageModeChapter] 完成后（章末翻页触发）
+  ///   - [_preloadAdjacentContent] 完成 fetch 字符串后（异步触发）
+  ///   - [_setReaderSettings] 排版字段变化后（重测触发）
+  ///
+  /// 安全语义：
+  ///   - controller 未就绪 → 早 return
+  ///   - 滚动模式 → skip（滚动模式有自己的多章节加载机制
+  ///     `_ensureCurrentChapterInContinuous`，邻章窗口不适用）
+  ///   - 计算逻辑全部委托给 [ReaderPage.computeAdjacentWindows] 静态函数，
+  ///     便于单测；本方法只负责"调度 + 灌 controller"。
+  void _measureAdjacentChapters(int currentIndex) {
+    final ctrl = _pageViewController;
+    if (ctrl == null) return;
+    if (_settings.isScrollMode) return;
+    final (prev, next) =
+        ReaderPage.computeAdjacentWindows(currentIndex, _cachedChapters);
+    ctrl.setNeighborChapter(prev: prev, next: next);
   }
 
   Future<void> _refreshChapter() async {
@@ -1681,6 +1766,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       _pageViewController?.loadChapter(targetIndex, title, content,
           jumpToLast: isPrev);
       _preloadAdjacentContent(targetIndex, chapters);
+      _measureAdjacentChapters(targetIndex);
     } catch (e) {
       if (mounted) setState(() => _isLoadingContent = false);
     }
