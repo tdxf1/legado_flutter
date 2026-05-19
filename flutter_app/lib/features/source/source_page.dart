@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/providers.dart';
 import '../../src/rust/api.dart' as rust_api;
@@ -66,6 +67,12 @@ class _SourcePageState extends ConsumerState<SourcePage> {
                   icon: const Icon(Icons.folder_open),
                   tooltip: '从文件导入',
                   onPressed: () => _importFromFile(context),
+                ),
+                // 批次 20 (05-19): QR 扫码导入。补充入口，原导入按钮保留。
+                IconButton(
+                  icon: const Icon(Icons.qr_code_scanner),
+                  tooltip: '扫码导入',
+                  onPressed: () => context.push('/qr-scan'),
                 ),
                 IconButton(
                   icon: const Icon(Icons.refresh),

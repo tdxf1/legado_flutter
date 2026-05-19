@@ -1,0 +1,13 @@
+{"file": ".trellis/tasks/05-19-qr-import-batch20/prd.md", "reason": "本任务 PRD"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 import_from_json / rule_sub_create+refresh 已有逻辑"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Flutter UI ↔ Rust import 数据流"}
+{"file": "flutter_app/pubspec.yaml", "reason": "加 mobile_scanner 依赖；确认 dio 已在"}
+{"file": "flutter_app/android/app/src/main/AndroidManifest.xml", "reason": "加 CAMERA 权限"}
+{"file": "flutter_app/lib/features/rss/rss_source_manage_page.dart", "reason": "AppBar 加扫码 IconButton 入口"}
+{"file": "flutter_app/lib/features/source/source_page.dart", "reason": "AppBar 加扫码 IconButton 入口"}
+{"file": "flutter_app/lib/features/rule_sub/rule_sub_page.dart", "reason": "AppBar 加扫码 IconButton 入口（批次 19 新建）"}
+{"file": "flutter_app/lib/features/bookshelf/bookshelf_page.dart", "reason": "PopupMenu 加 '扫码导入'"}
+{"file": "flutter_app/lib/core/router.dart", "reason": "注册 /qr-scan"}
+{"file": "flutter_app/lib/src/rust/api.dart", "reason": "确认 importSourcesFromJson / rssSourceImportJson / ruleSubCreate / ruleSubRefresh 调用形态"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-rule-sub-subscription-batch19/prd.md", "reason": "批次 19 RuleSub create/refresh 接口契约"}
+{"file": ".trellis/tasks/05-18-drag-cancel-threshold-md3-followup/research/feature-gap-rss-manga-audio-misc.md", "reason": "QR 扫码 §7.3 + legado:// 协议 §1.2 详情"}

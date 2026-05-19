@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/providers.dart';
 import '../../src/rust/api.dart' as rust_api;
@@ -430,6 +431,12 @@ class _RuleSubPageState extends ConsumerState<RuleSubPage> {
             icon: const Icon(Icons.refresh),
             tooltip: '刷新全部',
             onPressed: _onRefreshAll,
+          ),
+          // 批次 20 (05-19): QR 扫码导入。补充入口，原添加按钮保留。
+          IconButton(
+            icon: const Icon(Icons.qr_code_scanner),
+            tooltip: '扫码导入',
+            onPressed: () => context.push('/qr-scan'),
           ),
           IconButton(
             icon: const Icon(Icons.add),

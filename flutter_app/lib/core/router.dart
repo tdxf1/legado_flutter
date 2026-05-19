@@ -18,6 +18,7 @@ import '../features/rss/rss_article_detail_page.dart';
 import '../features/rss/rss_favorites_page.dart';
 import '../features/rss/rss_source_manage_page.dart';
 import '../features/rule_sub/rule_sub_page.dart';
+import '../features/qr/qr_scan_page.dart';
 
 final router = GoRouter(
   initialLocation: '/bookshelf',
@@ -140,6 +141,13 @@ final router = GoRouter(
     GoRoute(
       path: '/rule-subs',
       builder: (context, state) => const RuleSubPage(),
+    ),
+    // 批次 20 (05-19): QR 扫码导入页。
+    // 入口：bookshelf_page PopupMenu / source_page / rss_source_manage /
+    // rule_sub 各 AppBar IconButton。扫描结果由 page 自己处理 + pop。
+    GoRoute(
+      path: '/qr-scan',
+      builder: (context, state) => const QrScanPage(),
     ),
   ],
 );

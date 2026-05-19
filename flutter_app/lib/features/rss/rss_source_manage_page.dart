@@ -262,6 +262,12 @@ class _RssSourceManagePageState extends ConsumerState<RssSourceManagePage> {
             tooltip: '导入',
             onPressed: _onImport,
           ),
+          // 批次 20 (05-19): QR 扫码导入。补充入口，原导入按钮保留。
+          IconButton(
+            icon: const Icon(Icons.qr_code_scanner),
+            tooltip: '扫码导入',
+            onPressed: () => context.push('/qr-scan'),
+          ),
         ],
       ),
       body: _buildBody(context),

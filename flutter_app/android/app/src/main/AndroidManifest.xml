@@ -1,6 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 批次 20 (05-19): QR 扫码导入需要相机权限。mobile_scanner 5.x
+         运行时通过 permission_handler 自动申请，但 manifest 必须显式声明。 -->
+    <uses-permission android:name="android.permission.CAMERA" />
     <application
         android:label="Legado Reader"
         android:name="${applicationName}"

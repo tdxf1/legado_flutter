@@ -148,6 +148,10 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                 } else if (value == 'rule_subs') {
                   // 批次 19 (05-19): 订阅源页（RuleSub MVP）。
                   if (context.mounted) context.push('/rule-subs');
+                } else if (value == 'qr_scan') {
+                  // 批次 20 (05-19): QR 扫码导入。扫描结果由 qr_scan_page
+                  // 自己处理 + pop 后回到原页。
+                  if (context.mounted) context.push('/qr-scan');
                 }
               },
               itemBuilder: (context) => const [
@@ -212,6 +216,14 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                   child: ListTile(
                     leading: Icon(Icons.cloud_sync_outlined),
                     title: Text('订阅源'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'qr_scan',
+                  child: ListTile(
+                    leading: Icon(Icons.qr_code_scanner),
+                    title: Text('扫码导入'),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),

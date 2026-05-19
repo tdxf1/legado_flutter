@@ -51,6 +51,10 @@ dependencies:
   # 批次 1 (05-18): 屏幕常亮 — 进 reader 默认开 wakelock 防止系统超时熄屏。
   wakelock_plus: ^1.2.10
 
+  # 批次 20 (05-19): QR 扫码导入 — Android/iOS/macOS/web 通用相机扫码插件。
+  # 5.x 版本配套 Flutter ≥ 3.16，Dart SDK ≥ 3.3。
+  mobile_scanner: ^5.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
