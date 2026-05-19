@@ -1,0 +1,18 @@
+{"file": ".trellis/tasks/05-19-rss-detail-favorites-batch18/prd.md", "reason": "本任务 PRD"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 BookSourceParser content 拉取 + RssArticleDao 风格"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Flutter UI ↔ Rust Parser/DAO ↔ DB ↔ WebView 数据流"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-rss-fetch-articles-batch17/prd.md", "reason": "批次 17 PRD（RssParser + RssArticleDao + 路由 / sort_url 切分逻辑）"}
+{"file": "core/core-source/src/rss/mod.rs", "reason": "批次 17 RssParser 入口；本批次实装 fetch_article_content_full"}
+{"file": "core/core-source/src/parser.rs", "reason": "BookSourceParser::get_chapter_content 风格参考（reqwest + AnalyzeRule + replace_regex）"}
+{"file": "core/core-source/src/legado/rule.rs", "reason": "execute_legado_rule 入口；fetch_article_content 走规则路要复用"}
+{"file": "core/core-storage/src/rss_article_dao.rs", "reason": "批次 17 RssArticleDao 风格参考（RssStarDao 沿袭）"}
+{"file": "core/core-storage/src/models.rs", "reason": "RssArticle (批次 17) + RssSource (批次 16)；本批次加 RssStar struct"}
+{"file": "core/core-storage/src/lib.rs", "reason": "pub mod rss_star_dao + 重导出"}
+{"file": "core/bridge/src/api.rs", "reason": "添加 5 个 pub fn (funcId 97-101)"}
+{"file": "core/bridge/build.rs", "reason": "REQUIRED_WIRE_FN_FRAGMENTS + DISPATCHER_FRAGMENTS 加 funcId 97-101"}
+{"file": "flutter_app/lib/features/rss/rss_article_list_page.dart", "reason": "批次 17 文章列表页 — 改 onTap 跳详情而非 SnackBar"}
+{"file": "flutter_app/lib/features/rss/rss_source_manage_page.dart", "reason": "批次 16 源管理页 — 不改但参考测试 hook 风格"}
+{"file": "flutter_app/lib/features/bookshelf/bookshelf_page.dart", "reason": "AppBar PopupMenu 加 'RSS 收藏' 项"}
+{"file": "flutter_app/lib/core/router.dart", "reason": "注册 /rss-articles-detail + /rss-favorites"}
+{"file": "flutter_app/lib/core/platform_webview_executor.dart", "reason": "现有 WebViewController 用法参考（headless 风格，但 API 一样）"}
+{"file": ".trellis/tasks/05-18-drag-cancel-threshold-md3-followup/research/feature-gap-rss-manga-audio-misc.md", "reason": "RSS 详情 §1.4 / 收藏 §1.5 字段映射详情"}

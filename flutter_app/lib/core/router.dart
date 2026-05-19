@@ -14,6 +14,8 @@ import '../features/source/source_page.dart';
 import '../features/download/download_page.dart';
 import '../features/replace_rule/replace_rule_page.dart';
 import '../features/rss/rss_article_list_page.dart';
+import '../features/rss/rss_article_detail_page.dart';
+import '../features/rss/rss_favorites_page.dart';
 import '../features/rss/rss_source_manage_page.dart';
 
 final router = GoRouter(
@@ -118,6 +120,20 @@ final router = GoRouter(
         final sourceUrl = state.uri.queryParameters['sourceUrl'] ?? '';
         return RssArticleListPage(sourceUrl: sourceUrl);
       },
+    ),
+    // 批次 18 (05-19): RSS 文章详情页（WebView 渲染）。从文章列表 / 收藏页进入。
+    GoRoute(
+      path: '/rss-articles-detail',
+      builder: (context, state) {
+        final sourceUrl = state.uri.queryParameters['sourceUrl'] ?? '';
+        final link = state.uri.queryParameters['link'] ?? '';
+        return RssArticleDetailPage(sourceUrl: sourceUrl, link: link);
+      },
+    ),
+    // 批次 18 (05-19): RSS 收藏页。bookshelf_page PopupMenu 入口。
+    GoRoute(
+      path: '/rss-favorites',
+      builder: (context, state) => const RssFavoritesPage(),
     ),
   ],
 );

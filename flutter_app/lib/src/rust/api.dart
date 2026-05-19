@@ -742,3 +742,56 @@ Future<String> rssGetSortTabs(
         {required String dbPath, required String sourceUrl}) =>
     RustLib.instance.api
         .crateApiRssGetSortTabs(dbPath: dbPath, sourceUrl: sourceUrl);
+
+// ============================================================
+// RSS 文章详情 + 收藏（批次 18 / 05-19）— RssStar
+// ============================================================
+
+/// 拉取单篇 RSS 文章的完整正文 HTML。返回 JSON
+/// `{"html": "...", "base_url": "..."}`。
+///
+/// - rule_content 非空 → 走规则路（reqwest GET → AnalyzeRule 抽）
+/// - 否则 fallback 用 article.description 包装成 wrapper HTML
+/// - 失败时透传 ParserError 描述（详情页应展示错误 + 重试按钮）
+Future<String> rssFetchArticleContent(
+        {required String dbPath,
+        required String sourceUrl,
+        required String link}) =>
+    RustLib.instance.api.crateApiRssFetchArticleContent(
+        dbPath: dbPath, sourceUrl: sourceUrl, link: link);
+
+/// 收藏一篇 RSS 文章。`articleJson` 为 [`RssArticle`] 的 JSON 字符串
+/// （detail 页可在 init 时通过 rss_list_articles 拿到完整对象后序列化）。
+/// `sourceName` 来自 RssSource.source_name。
+/// 重复收藏不会失败 — 走 INSERT OR REPLACE 把 star_time 刷新为最新。
+Future<PlatformInt64> rssStarAdd(
+        {required String dbPath,
+        required String articleJson,
+        required String sourceName}) =>
+    RustLib.instance.api.crateApiRssStarAdd(
+        dbPath: dbPath, articleJson: articleJson, sourceName: sourceName);
+
+/// 取消收藏。返回受影响行数（0 表示原本就没收藏，依旧不报错）。
+Future<PlatformInt64> rssStarRemove(
+        {required String dbPath,
+        required String origin,
+        required String link}) =>
+    RustLib.instance.api.crateApiRssStarRemove(
+        dbPath: dbPath, origin: origin, link: link);
+
+/// 是否已收藏。
+Future<bool> rssStarIsStarred(
+        {required String dbPath,
+        required String origin,
+        required String link}) =>
+    RustLib.instance.api.crateApiRssStarIsStarred(
+        dbPath: dbPath, origin: origin, link: link);
+
+/// 列出收藏（按 star_time DESC）。`limit < 0` 表示无分页。
+/// 返回 `Vec<RssStar>` 的 JSON 数组。
+Future<String> rssStarList(
+        {required String dbPath,
+        required PlatformInt64 limit,
+        required PlatformInt64 offset}) =>
+    RustLib.instance.api.crateApiRssStarList(
+        dbPath: dbPath, limit: limit, offset: offset);

@@ -1931,6 +1931,111 @@ pub fn rss_get_sort_tabs(db_path: String, source_url: String) -> Result<String, 
 }
 
 // ============================================================
+// RSS 文章详情 + 收藏 (批次 18 / 05-19)
+// ============================================================
+//
+// 5 个 fn (funcId 97-101)。`rss_fetch_article_content` 为 async（拉取
+// HTML），其它 4 个为 sync（DB 操作）。
+//
+// 设计要点：
+// - rss_fetch_article_content 内部走 RssParser::fetch_article_content_full
+//   返回 `{html, base_url}` JSON，dart 端用 WebViewController.loadHtmlString
+//   渲染（base_url 让 WebView 解析相对链接）。
+// - rss_star_add 接收 `article_json`（RssArticle 的 JSON 字符串）+
+//   `source_name`，在 dart 端方便构造（detail 页拿到 RssArticle 直接序列化）。
+
+/// async：读 source / article → 调 fetch_article_content_full → 返回
+/// 拼装好的 `{html, base_url}` JSON。
+///
+/// 错误：
+/// - source / article 不存在 → Err
+/// - fetch 内部错误 → 透传（参考 ParserError::Display）
+pub async fn rss_fetch_article_content(
+    db_path: String,
+    source_url: String,
+    link: String,
+) -> Result<String, String> {
+    // 1. 取 source（async 前结束 conn lifetime）
+    let (source, article) = {
+        let conn = open_db(&db_path)?;
+        let source = core_storage::rss_source_dao::RssSourceDao::new(&conn)
+            .get_by_url(&source_url)
+            .map_err(|e| format!("查询 RSS 源失败: {}", e))?
+            .ok_or_else(|| format!("RSS 源不存在: {}", source_url))?;
+        let article = core_storage::rss_article_dao::RssArticleDao::new(&conn)
+            .get_by_origin_link(&source_url, &link)
+            .map_err(|e| format!("查询 RSS 文章失败: {}", e))?
+            .ok_or_else(|| format!("RSS 文章不存在: {}", link))?;
+        (source, article)
+    };
+
+    // 2. 拉取
+    let parser = core_source::RssParser::new();
+    let fetched = parser
+        .fetch_article_content_full(&source, &article)
+        .await
+        .map_err(|e| e.to_string())?;
+    serde_json::to_string(&fetched).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// 收藏一篇文章。`article_json` 应为 [`core_storage::models::RssArticle`]
+/// 的 JSON 字符串；`source_name` 来自 [`RssSource::source_name`]。
+/// 重复收藏走 `INSERT OR REPLACE`，star_time 自动刷新。返回受影响行数（i64）。
+pub fn rss_star_add(
+    db_path: String,
+    article_json: String,
+    source_name: String,
+) -> Result<i64, String> {
+    let article: core_storage::models::RssArticle =
+        serde_json::from_str(&article_json).map_err(|e| format!("JSON 解析失败: {}", e))?;
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_star_dao::RssStarDao::new(&conn);
+    dao.add(&article, &source_name)
+        .map(|n| n as i64)
+        .map_err(|e| format!("添加收藏失败: {}", e))
+}
+
+/// 取消收藏。返回受影响行数（0 表示原本就没收藏）。
+pub fn rss_star_remove(
+    db_path: String,
+    origin: String,
+    link: String,
+) -> Result<i64, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_star_dao::RssStarDao::new(&conn);
+    dao.remove(&origin, &link)
+        .map(|n| n as i64)
+        .map_err(|e| format!("取消收藏失败: {}", e))
+}
+
+/// 是否已收藏。
+pub fn rss_star_is_starred(
+    db_path: String,
+    origin: String,
+    link: String,
+) -> Result<bool, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_star_dao::RssStarDao::new(&conn);
+    dao.is_starred(&origin, &link)
+        .map_err(|e| format!("查询收藏状态失败: {}", e))
+}
+
+/// 列出收藏（按 star_time DESC），返回 `Vec<RssStar>` JSON。
+/// `limit < 0` 表示无分页（MVP 收藏页用 limit=-1）。
+pub fn rss_star_list(
+    db_path: String,
+    limit: i64,
+    offset: i64,
+) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_star_dao::RssStarDao::new(&conn);
+    let list = dao
+        .list_all(limit, offset)
+        .map_err(|e| format!("读取收藏失败: {}", e))?;
+    serde_json::to_string(&list).map_err(|e| format!("序列化失败: {}", e))
+}
+
+// ============================================================
 // 内部辅助函数
 // ============================================================
 

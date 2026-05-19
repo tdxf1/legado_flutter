@@ -21,10 +21,23 @@
 pub mod parse_rule;
 pub mod parse_xml;
 
-use crate::legado::{LegadoHttpClient, LegadoUrl};
+use crate::legado::{execute_legado_rule, LegadoHttpClient, LegadoUrl, RuleContext};
 use crate::parser::ParserError;
 use core_storage::{RssArticle, RssSource};
+use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
+
+/// 详情拉取结果（批次 18 / 05-19）。
+///
+/// 上层（bridge / Flutter detail 页）拿到后：
+/// - `html` 直接喂 WebViewController.loadHtmlString
+/// - `base_url` 给 loadHtmlString 第二参数，让 WebView 解析相对 URL
+///   （例如规则路返回的 `<img src="/foo.jpg">` 能正确补全成绝对 URL）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchedContent {
+    pub html: String,
+    pub base_url: String,
+}
 
 /// RSS 解析器。沿袭 [`crate::parser::BookSourceParser`] 风格 — 持有
 /// 共享的 HTTP 客户端，负责拉取 + 路由 + 解析。
@@ -119,14 +132,71 @@ impl RssParser {
         Ok(articles)
     }
 
-    /// **占位**：批次 18 的"文章详情"才真正实装。现在仅返回
-    /// `article.description`（XML 路通常已是全文）。
+    /// 拉取单篇 RSS 文章的完整正文 HTML（批次 18 / 05-19）。
+    ///
+    /// 路由：
+    /// 1. `source.rule_content` 非空 → 规则路：reqwest GET `article.link`
+    ///    → AnalyzeRule 抽 rule_content 结果 → 包成 wrapper HTML
+    /// 2. 否则 → fallback：把 `article.description`（XML 路通常已是
+    ///    全文）作为正文，包同一个 wrapper
+    ///
+    /// 返回 [`FetchedContent`]：含完整 wrapper HTML（带 viewport / 默认
+    /// 样式 / 响应式图片）+ base URL（用 `source.source_url`，让 WebView
+    /// 解析相对链接）。
+    ///
+    /// 错误：[`ParserError::Network`]（HTTP 失败）/
+    /// [`ParserError::Empty`](规则路抽到空 + description 也空) /
+    /// [`ParserError::Parse`](规则解析失败但 fetch 成功)。
     pub async fn fetch_article_content_full(
         &self,
-        _source: &RssSource,
+        source: &RssSource,
         article: &RssArticle,
-    ) -> Result<String, ParserError> {
-        Ok(article.description.clone().unwrap_or_default())
+    ) -> Result<FetchedContent, ParserError> {
+        info!(
+            "拉取 RSS 文章详情: source={} link={}",
+            source.source_name, article.link
+        );
+
+        let rule = source
+            .rule_content
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+
+        let body_text = match rule {
+            Some(rule_str) => {
+                // 规则路：fetch HTML 再抽
+                let body = self
+                    .fetch(source, &article.link, 1)
+                    .await
+                    .map_err(ParserError::Network)?;
+                let context = RuleContext::for_content(&article.link, &body);
+                let result = execute_legado_rule(rule_str, &body, &context)
+                    .map_err(ParserError::Parse)?;
+                let extracted = result.into_iter().collect::<Vec<_>>().join("\n");
+                if extracted.trim().is_empty() {
+                    // 规则没抽到 → 退化用 description 兜底（不当 Parse 错）
+                    article.description.clone().unwrap_or_default()
+                } else {
+                    extracted
+                }
+            }
+            None => article.description.clone().unwrap_or_default(),
+        };
+
+        if body_text.trim().is_empty() {
+            return Err(ParserError::Empty);
+        }
+
+        let html = wrap_article_html(&body_text);
+        // base_url 优先用 source 根 URL；fallback article.link 所在域。
+        // WebView 用 base_url 解析 wrapper 内相对链接（图片 / a href）。
+        let base_url = if !source.source_url.trim().is_empty() {
+            source.source_url.clone()
+        } else {
+            article.link.clone()
+        };
+        Ok(FetchedContent { html, base_url })
     }
 
     async fn fetch(
@@ -191,4 +261,147 @@ fn parse_source_headers(header: Option<&str>) -> Vec<(String, String)> {
 #[allow(dead_code)]
 fn _legado_url_visible(url: &str) -> LegadoUrl {
     crate::legado::url::parse_legado_url(url)
+}
+
+/// 把抽到的正文（可能是 HTML 片段也可能是纯文本）包成完整 HTML 文档。
+/// 加 `<meta viewport>` 让 WebView 在手机端按宽度自适应；style 里
+/// 设置 padding / line-height / 响应式图片避免横滚。
+///
+/// 不做内容白名单 / black list（PRD 明确 out-of-scope）；不注入 JS
+/// （injectJs 留批次 19+）。批次 18 的 wrapper 与 PRD Technical Notes
+/// 章节给的样板一致。
+fn wrap_article_html(body: &str) -> String {
+    format!(
+        "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">\
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\
+<style>body{{padding:16px;font-family:sans-serif;line-height:1.6;font-size:16px;color:#222}}\
+img{{max-width:100%;height:auto}}</style></head><body>{body}</body></html>",
+        body = body
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use httpmock::prelude::*;
+
+    fn make_source(rule_content: Option<&str>, base: &str) -> RssSource {
+        RssSource {
+            source_url: base.to_string(),
+            source_name: "X Feed".into(),
+            source_icon: None,
+            source_group: None,
+            source_comment: None,
+            enabled: true,
+            single_url: true,
+            sort_url: None,
+            article_style: 0,
+            rule_articles: None,
+            rule_next_page: None,
+            rule_title: None,
+            rule_pub_date: None,
+            rule_description: None,
+            rule_image: None,
+            rule_link: None,
+            rule_content: rule_content.map(|s| s.to_string()),
+            last_update_time: 0,
+            custom_order: 0,
+            enable_js: false,
+            load_with_base_url: true,
+            header: None,
+            custom_info_json: None,
+            created_at: Utc::now().timestamp(),
+            updated_at: Utc::now().timestamp(),
+        }
+    }
+
+    fn make_article(origin: &str, link: &str, description: Option<&str>) -> RssArticle {
+        RssArticle {
+            origin: origin.to_string(),
+            sort: String::new(),
+            title: "Title".into(),
+            pub_date: "2024-05-19".into(),
+            link: link.to_string(),
+            image: None,
+            description: description.map(|s| s.to_string()),
+            variable: None,
+            order_num: 0,
+            read_time: 0,
+            star: 0,
+        }
+    }
+
+    /// rule_content 为 None → 用 article.description fallback，
+    /// 包成 wrapper HTML 返回。
+    #[tokio::test]
+    async fn test_fetch_article_content_uses_description_fallback() {
+        let parser = RssParser::new();
+        let source = make_source(None, "https://example.com");
+        let article = make_article(
+            "https://example.com",
+            "https://example.com/article/1",
+            Some("<p>Hello from description</p>"),
+        );
+        let result = parser
+            .fetch_article_content_full(&source, &article)
+            .await
+            .expect("fetch ok");
+        assert!(result.html.contains("Hello from description"));
+        assert!(result.html.contains("<style>"));
+        assert!(result.html.contains("<meta name=\"viewport\""));
+        assert_eq!(result.base_url, "https://example.com");
+    }
+
+    /// 配置了 rule_content → 走规则路：fetch URL → 抽 rule_content
+    /// → wrapper HTML。
+    #[tokio::test]
+    async fn test_fetch_article_content_via_rule_content() {
+        let server = MockServer::start();
+        let html_body = r#"<html><body>
+<header>nav stuff</header>
+<div id="article-body"><p>Real article body here.</p><img src="/pic.jpg"></div>
+<footer>foot</footer>
+</body></html>"#;
+        let mock = server.mock(|when, then| {
+            when.method(GET).path("/article/2");
+            then.status(200)
+                .header("Content-Type", "text/html; charset=utf-8")
+                .body(html_body);
+        });
+
+        let parser = RssParser::new();
+        let source = make_source(Some("#article-body@html"), &server.base_url());
+        let article = make_article(
+            &server.base_url(),
+            &format!("{}/article/2", server.base_url()),
+            Some("description should NOT be used"),
+        );
+        let result = parser
+            .fetch_article_content_full(&source, &article)
+            .await
+            .expect("fetch ok");
+        // 抽出的内容里有正文段落
+        assert!(result.html.contains("Real article body here."));
+        // 不应回落到 description
+        assert!(!result.html.contains("description should NOT be used"));
+        // wrapper 在
+        assert!(result.html.contains("<meta name=\"viewport\""));
+        assert_eq!(result.base_url, server.base_url());
+        mock.assert();
+    }
+
+    /// 规则为空 + description 也空 → ParserError::Empty
+    #[tokio::test]
+    async fn test_fetch_article_content_empty_returns_empty_error() {
+        let parser = RssParser::new();
+        let source = make_source(None, "https://example.com");
+        let article = make_article(
+            "https://example.com",
+            "https://example.com/article/empty",
+            None,
+        );
+        let result = parser.fetch_article_content_full(&source, &article).await;
+        assert!(matches!(result, Err(ParserError::Empty)));
+    }
 }

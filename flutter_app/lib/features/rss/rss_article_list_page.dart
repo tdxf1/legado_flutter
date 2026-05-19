@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/providers.dart';
 import '../../src/rust/api.dart' as rust_api;
@@ -261,30 +262,17 @@ class _RssArticleListPageState extends ConsumerState<RssArticleListPage>
   Future<void> _onArticleTap(Map<String, dynamic> article) async {
     final link = article['link'] as String? ?? '';
     if (link.isEmpty) return;
+    // 批次 18 (05-19): optimistic 已读 dot — 点击立刻消失；mark_read
+    // 真正写入由 detail 页 init 完成（避免列表 + 详情双写）。
     final ts = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    // optimistic：先把 read_time 标到内存里
     setState(() {
       article['read_time'] = ts;
     });
-    try {
-      if (widget.markReadOverride != null) {
-        await widget.markReadOverride!(await _dbPath(), link, ts);
-      } else {
-        await rust_api.rssMarkRead(
-          dbPath: await _dbPath(),
-          link: link,
-          ts: ts,
-        );
-      }
-    } catch (_) {
-      // 失败也保留 optimistic — 下次拉取会以 DB 为准
-    }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('批次 18 实装详情页'),
-        duration: Duration(seconds: 2),
-      ),
+    final encodedSource = Uri.encodeQueryComponent(widget.sourceUrl);
+    final encodedLink = Uri.encodeQueryComponent(link);
+    context.push(
+      '/rss-articles-detail?sourceUrl=$encodedSource&link=$encodedLink',
     );
   }
 

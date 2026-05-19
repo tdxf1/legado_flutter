@@ -533,3 +533,31 @@ pub struct RssReadRecord {
     pub record_time: i64,
     pub read_time: i64,
 }
+
+// ============================================================
+// 批次 18 (05-19) — RSS 收藏 RssStar
+// ============================================================
+
+/// RSS 收藏记录（对应原 Legado `RssStar.kt`）。
+///
+/// 表 `rss_stars`（schema v12 已建，批次 16），主键 `(origin, link)` —
+/// 与 `RssArticle` 同语义；不同的是 RssStar 跨源持久（删源 / 清文章
+/// 都不动收藏）。重复 add 走 `INSERT OR REPLACE` 把 star_time 刷成最新。
+///
+/// 9 个字段加 `star_time`：
+/// - `origin / source_name / sort / title / pub_date / image / link /
+///   description / variable` — 都是从 RssArticle 拷过来 + source_name
+/// - `star_time` 收藏时间戳（秒）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RssStar {
+    pub origin: String,
+    pub source_name: String,
+    pub sort: String,
+    pub title: String,
+    pub pub_date: String,
+    pub image: Option<String>,
+    pub link: String,
+    pub description: Option<String>,
+    pub variable: Option<String>,
+    pub star_time: i64,
+}

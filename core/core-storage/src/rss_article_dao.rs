@@ -141,6 +141,26 @@ impl<'a> RssArticleDao<'a> {
         rows.collect()
     }
 
+    /// 按 (origin, link) 复合主键直接取单条文章；不存在返回 None。
+    /// 批次 18 (05-19) 新增 — 详情页 / 收藏 add 流程要根据 (origin, link)
+    /// 拿完整 RssArticle，避免在 dart 端再 list-then-find。
+    pub fn get_by_origin_link(
+        &self,
+        origin: &str,
+        link: &str,
+    ) -> SqlResult<Option<RssArticle>> {
+        let sql = format!(
+            "SELECT {} FROM rss_articles WHERE origin = ? AND link = ? LIMIT 1",
+            RSS_ARTICLE_COLUMNS
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(params![origin, link], rss_article_from_row)?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
     /// 标记已读：双写 rss_articles.read_time + rss_read_records。
     /// 返回 rss_articles 受影响的行数（按 link 跨 origin 全部更新；
     /// 同一篇文章被多个源收录的话会一起标已读，与原 Legado 行为一致）。
@@ -438,5 +458,35 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[test]
+    fn test_get_by_origin_link() {
+        let (_dir, conn) = setup();
+        let dao = RssArticleDao::new(&conn);
+        let mut a = make_article("https://feed/x", "tech", "link-1", 0);
+        a.title = "Hello".into();
+        a.description = Some("body".into());
+        dao.upsert_batch(&[a]).unwrap();
+
+        let got = dao
+            .get_by_origin_link("https://feed/x", "link-1")
+            .unwrap();
+        assert!(got.is_some());
+        let got = got.unwrap();
+        assert_eq!(got.title, "Hello");
+        assert_eq!(got.description.as_deref(), Some("body"));
+
+        // 不存在 → None
+        let none = dao
+            .get_by_origin_link("https://feed/x", "missing")
+            .unwrap();
+        assert!(none.is_none());
+
+        // 不同 origin 也分隔
+        let none2 = dao
+            .get_by_origin_link("https://feed/other", "link-1")
+            .unwrap();
+        assert!(none2.is_none());
     }
 }

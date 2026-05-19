@@ -432,6 +432,32 @@ abstract class RustLibApi extends BaseApi {
 
   Future<String> crateApiRssGetSortTabs(
       {required String dbPath, required String sourceUrl});
+
+  // 批次 18 — RSS 文章详情 + 收藏
+  Future<String> crateApiRssFetchArticleContent(
+      {required String dbPath,
+      required String sourceUrl,
+      required String link});
+
+  Future<PlatformInt64> crateApiRssStarAdd(
+      {required String dbPath,
+      required String articleJson,
+      required String sourceName});
+
+  Future<PlatformInt64> crateApiRssStarRemove(
+      {required String dbPath,
+      required String origin,
+      required String link});
+
+  Future<bool> crateApiRssStarIsStarred(
+      {required String dbPath,
+      required String origin,
+      required String link});
+
+  Future<String> crateApiRssStarList(
+      {required String dbPath,
+      required PlatformInt64 limit,
+      required PlatformInt64 offset});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -3146,6 +3172,154 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiRssGetSortTabsConstMeta => const TaskConstMeta(
         debugName: "rss_get_sort_tabs",
         argNames: ["dbPath", "sourceUrl"],
+      );
+
+  // 批次 18 — RSS 文章详情 + 收藏 (funcId 97-101)
+
+  @override
+  Future<String> crateApiRssFetchArticleContent(
+      {required String dbPath,
+      required String sourceUrl,
+      required String link}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(sourceUrl, serializer);
+        sse_encode_String(link, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 97, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRssFetchArticleContentConstMeta,
+      argValues: [dbPath, sourceUrl, link],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRssFetchArticleContentConstMeta =>
+      const TaskConstMeta(
+        debugName: "rss_fetch_article_content",
+        argNames: ["dbPath", "sourceUrl", "link"],
+      );
+
+  @override
+  Future<PlatformInt64> crateApiRssStarAdd(
+      {required String dbPath,
+      required String articleJson,
+      required String sourceName}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(articleJson, serializer);
+        sse_encode_String(sourceName, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 98, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_i_64,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRssStarAddConstMeta,
+      argValues: [dbPath, articleJson, sourceName],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRssStarAddConstMeta => const TaskConstMeta(
+        debugName: "rss_star_add",
+        argNames: ["dbPath", "articleJson", "sourceName"],
+      );
+
+  @override
+  Future<PlatformInt64> crateApiRssStarRemove(
+      {required String dbPath,
+      required String origin,
+      required String link}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(origin, serializer);
+        sse_encode_String(link, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 99, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_i_64,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRssStarRemoveConstMeta,
+      argValues: [dbPath, origin, link],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRssStarRemoveConstMeta => const TaskConstMeta(
+        debugName: "rss_star_remove",
+        argNames: ["dbPath", "origin", "link"],
+      );
+
+  @override
+  Future<bool> crateApiRssStarIsStarred(
+      {required String dbPath,
+      required String origin,
+      required String link}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(origin, serializer);
+        sse_encode_String(link, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 100, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_bool,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRssStarIsStarredConstMeta,
+      argValues: [dbPath, origin, link],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRssStarIsStarredConstMeta => const TaskConstMeta(
+        debugName: "rss_star_is_starred",
+        argNames: ["dbPath", "origin", "link"],
+      );
+
+  @override
+  Future<String> crateApiRssStarList(
+      {required String dbPath,
+      required PlatformInt64 limit,
+      required PlatformInt64 offset}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_i_64(limit, serializer);
+        sse_encode_i_64(offset, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 101, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRssStarListConstMeta,
+      argValues: [dbPath, limit, offset],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRssStarListConstMeta => const TaskConstMeta(
+        debugName: "rss_star_list",
+        argNames: ["dbPath", "limit", "offset"],
       );
 
   @protected
