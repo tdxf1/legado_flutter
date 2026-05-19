@@ -92,6 +92,16 @@ const REQUIRED_WIRE_FN_FRAGMENTS: &[&str] = &[
     "wire__crate__api__clear_book_cache_impl",
     // 批次 15 — funcId 81 — clear_all_cache
     "wire__crate__api__clear_all_cache_impl",
+    // 批次 16 (RSS 源管理 schema v12) — 9 个 wire fn (funcId 82-90)
+    "wire__crate__api__rss_source_list_all_impl",
+    "wire__crate__api__rss_source_list_enabled_impl",
+    "wire__crate__api__rss_source_list_by_group_impl",
+    "wire__crate__api__rss_source_list_groups_impl",
+    "wire__crate__api__rss_source_get_impl",
+    "wire__crate__api__rss_source_upsert_impl",
+    "wire__crate__api__rss_source_set_enabled_impl",
+    "wire__crate__api__rss_source_delete_impl",
+    "wire__crate__api__rss_source_import_json_impl",
 ];
 
 const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
@@ -139,6 +149,16 @@ const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
     "        79 =>",
     "        80 =>",
     "        81 =>",
+    // 批次 16 (RSS 源管理 schema v12) 手动 dispatch 注册
+    "        82 =>",
+    "        83 =>",
+    "        84 =>",
+    "        85 =>",
+    "        86 =>",
+    "        87 =>",
+    "        88 =>",
+    "        89 =>",
+    "        90 =>",
 ];
 
 /// R3: the dispatcher default arms must surface the unknown funcId
@@ -199,7 +219,7 @@ fn main() {
             "frb_generated.rs is missing {} hand-edited wire/dispatch fragment(s). \
              A `flutter_rust_bridge_codegen generate` run probably overwrote the manual \
              patches. This guard only covers the funcIds we know were hand-edited \
-             (currently 42-52 plus 54-57 plus 63-65 plus 66-70 plus 71-72 plus 73 plus 74-77 plus 78-81; 53 is intentionally a hole, do not re-introduce), \
+             (currently 42-52 plus 54-57 plus 63-65 plus 66-70 plus 71-72 plus 73 plus 74-77 plus 78-81 plus 82-90; 53 is intentionally a hole, do not re-introduce), \
              plus the R3 informative panic in the dispatcher default arms. \
              funcIds outside that range are produced by codegen and are NOT checked here, \
              so a regression in those needs separate attention. See CURRENT_STATUS.md \

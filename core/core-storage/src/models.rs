@@ -324,3 +324,167 @@ pub struct RuleSub {
     pub created_at: i64,
     pub updated_at: i64,
 }
+
+// ============================================================
+// 批次 16 (v12) 新增：RSS 源管理 schema
+// ============================================================
+
+/// RSS 源（对应原 Legado `RssSource.kt`）。
+///
+/// 原 Legado 共 31 字段，本 struct 保留 23 个核心 SQL 列；剩余 13 个高
+/// 级字段（jsLib / loginUrl / loginUi / loginCheckJs / coverDecodeJs /
+/// contentWhitelist / contentBlacklist / shouldOverrideUrlLoading /
+/// style / injectJs / concurrentRate / enabledCookieJar / variableComment）
+/// 序列化进 [`custom_info_json`] 字符串收纳，导入时不丢信息但 UI 不展示
+/// （MVP）。
+///
+/// 字段语义见 PRD `.trellis/tasks/05-19-rss-source-mgr-batch16/prd.md`。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RssSource {
+    /// 主键，对应原 Legado `sourceUrl`。
+    pub source_url: String,
+    pub source_name: String,
+    pub source_icon: Option<String>,
+    pub source_group: Option<String>,
+    pub source_comment: Option<String>,
+    pub enabled: bool,
+    /// 0 = 多分类（按 sort_url 解析），1 = 单 URL 模式。
+    pub single_url: bool,
+    /// 多分类时 `sortName::sortUrl` 对，多个用 `\n` 分隔。
+    pub sort_url: Option<String>,
+    /// 0 / 1 / 2 三种文章列表 layout。
+    pub article_style: i32,
+    pub rule_articles: Option<String>,
+    pub rule_next_page: Option<String>,
+    pub rule_title: Option<String>,
+    pub rule_pub_date: Option<String>,
+    pub rule_description: Option<String>,
+    pub rule_image: Option<String>,
+    pub rule_link: Option<String>,
+    pub rule_content: Option<String>,
+    pub last_update_time: i64,
+    pub custom_order: i32,
+    pub enable_js: bool,
+    pub load_with_base_url: bool,
+    pub header: Option<String>,
+    /// 高级字段总收纳：JSON 对象字符串，13 个字段塞这里。
+    pub custom_info_json: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl RssSource {
+    /// 把原 Legado 31 字段 JSON 适配到端口 23 字段 + custom_info_json。
+    ///
+    /// 字段映射策略：
+    /// - 23 个 SQL 列直接读 `sourceUrl` / `sourceName` 等驼峰 key
+    /// - 13 个高级字段（见 struct 注释）合并成一个 JSON object 写入
+    ///   `custom_info_json`；空对象时为 None
+    /// - 缺失字段用 struct 默认值（空 / 0 / true / Some / None）
+    /// - 时间戳直接读 `lastUpdateTime`（毫秒），保留毫秒不转秒
+    ///   （与原 Legado 保持一致）
+    pub fn from_legado_json(v: &serde_json::Value) -> Self {
+        let now = Utc::now().timestamp();
+        let s = |k: &str| {
+            v.get(k)
+                .and_then(|x| x.as_str())
+                .map(|x| x.to_string())
+                .filter(|x| !x.is_empty())
+        };
+        let s_or_default = |k: &str| s(k).unwrap_or_default();
+        let b = |k: &str, default: bool| v.get(k).and_then(|x| x.as_bool()).unwrap_or(default);
+        let i = |k: &str, default: i64| v.get(k).and_then(|x| x.as_i64()).unwrap_or(default);
+
+        // 13 个高级字段塞 custom_info_json
+        let mut extras = serde_json::Map::new();
+        for key in [
+            "jsLib",
+            "loginUrl",
+            "loginUi",
+            "loginCheckJs",
+            "coverDecodeJs",
+            "contentWhitelist",
+            "contentBlacklist",
+            "shouldOverrideUrlLoading",
+            "style",
+            "injectJs",
+            "concurrentRate",
+            "enabledCookieJar",
+            "variableComment",
+        ] {
+            if let Some(val) = v.get(key) {
+                if !val.is_null() {
+                    extras.insert(key.to_string(), val.clone());
+                }
+            }
+        }
+        let custom_info_json = if extras.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&serde_json::Value::Object(extras)).ok()
+        };
+
+        // sortUrl: 既支持原 Legado 的 `sortUrl` 字符串（多个 sortName::url
+        // 用 \n 分隔），也兼容 array of {title,url} 的备份格式。
+        let sort_url = match v.get("sortUrl") {
+            Some(serde_json::Value::String(s)) if !s.is_empty() => Some(s.clone()),
+            Some(serde_json::Value::Array(arr)) if !arr.is_empty() => {
+                let parts: Vec<String> = arr
+                    .iter()
+                    .filter_map(|item| {
+                        let title = item.get("title").and_then(|x| x.as_str()).unwrap_or("");
+                        let url = item.get("url").and_then(|x| x.as_str()).unwrap_or("");
+                        if title.is_empty() && url.is_empty() {
+                            None
+                        } else {
+                            Some(format!("{}::{}", title, url))
+                        }
+                    })
+                    .collect();
+                if parts.is_empty() {
+                    None
+                } else {
+                    Some(parts.join("\n"))
+                }
+            }
+            _ => None,
+        };
+
+        Self {
+            source_url: s_or_default("sourceUrl"),
+            source_name: s_or_default("sourceName"),
+            source_icon: s("sourceIcon"),
+            source_group: s("sourceGroup"),
+            source_comment: s("sourceComment"),
+            enabled: b("enabled", true),
+            single_url: b("singleUrl", false),
+            sort_url,
+            article_style: i("articleStyle", 0) as i32,
+            rule_articles: s("ruleArticles"),
+            rule_next_page: s("ruleNextPage"),
+            rule_title: s("ruleTitle"),
+            rule_pub_date: s("rulePubDate"),
+            rule_description: s("ruleDescription"),
+            rule_image: s("ruleImage"),
+            rule_link: s("ruleLink"),
+            rule_content: s("ruleContent"),
+            last_update_time: i("lastUpdateTime", 0),
+            custom_order: i("customOrder", 0) as i32,
+            enable_js: b("enableJs", true),
+            load_with_base_url: b("loadWithBaseUrl", true),
+            header: s("header"),
+            custom_info_json,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+}
+
+/// RSS 源导入摘要（与 [`crate::backup_dao::ImportSummary`] 不同：那个是
+/// 备份 zip 的 5 表合一，本结构仅用于 `RssSourceDao::import_from_json`）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RssImportSummary {
+    pub added: i32,
+    pub updated: i32,
+    pub skipped: i32,
+}

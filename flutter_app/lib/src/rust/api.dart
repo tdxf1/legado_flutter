@@ -633,3 +633,55 @@ Future<PlatformInt64> clearBookCache(
 /// 返回受影响行数。
 Future<PlatformInt64> clearAllCache({required String dbPath}) =>
     RustLib.instance.api.crateApiClearAllCache(dbPath: dbPath);
+
+// ============================================================
+// RSS 源管理（批次 16 / 05-19）— RssSource
+// ============================================================
+
+/// 列出所有 RSS 源（按 custom_order ASC, source_name ASC），返回 JSON 数组。
+Future<String> rssSourceListAll({required String dbPath}) =>
+    RustLib.instance.api.crateApiRssSourceListAll(dbPath: dbPath);
+
+/// 列出已启用的 RSS 源，返回 JSON 数组。
+Future<String> rssSourceListEnabled({required String dbPath}) =>
+    RustLib.instance.api.crateApiRssSourceListEnabled(dbPath: dbPath);
+
+/// 列出指定分组下的 RSS 源（严格按 source_group = ? 匹配）。
+Future<String> rssSourceListByGroup(
+        {required String dbPath, required String group}) =>
+    RustLib.instance.api
+        .crateApiRssSourceListByGroup(dbPath: dbPath, group: group);
+
+/// DISTINCT 分组列表（跳过 NULL/空），返回 JSON 字符串数组。
+Future<String> rssSourceListGroups({required String dbPath}) =>
+    RustLib.instance.api.crateApiRssSourceListGroups(dbPath: dbPath);
+
+/// 按 source_url 取单条 RSS 源，返回 JSON `Option<RssSource>`。
+Future<String> rssSourceGet({required String dbPath, required String url}) =>
+    RustLib.instance.api.crateApiRssSourceGet(dbPath: dbPath, url: url);
+
+/// upsert 单条 RSS 源（sourceJson = `RssSource` 的 JSON），返回受影响行数。
+Future<PlatformInt64> rssSourceUpsert(
+        {required String dbPath, required String sourceJson}) =>
+    RustLib.instance.api
+        .crateApiRssSourceUpsert(dbPath: dbPath, sourceJson: sourceJson);
+
+/// 切换 enabled，返回受影响行数。
+Future<PlatformInt64> rssSourceSetEnabled(
+        {required String dbPath,
+        required String url,
+        required bool enabled}) =>
+    RustLib.instance.api.crateApiRssSourceSetEnabled(
+        dbPath: dbPath, url: url, enabled: enabled);
+
+/// 按 source_url 删除 RSS 源，返回受影响行数。
+Future<PlatformInt64> rssSourceDelete(
+        {required String dbPath, required String url}) =>
+    RustLib.instance.api.crateApiRssSourceDelete(dbPath: dbPath, url: url);
+
+/// 批量导入 RSS 源（端口内部 / 原 Legado 双格式 JSON）。返回
+/// `RssImportSummary` 的 JSON 字符串 (`{added, updated, skipped}`)。
+Future<String> rssSourceImportJson(
+        {required String dbPath, required String json}) =>
+    RustLib.instance.api
+        .crateApiRssSourceImportJson(dbPath: dbPath, json: json);

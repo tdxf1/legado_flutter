@@ -7,7 +7,7 @@ use rusqlite::{Connection, Result as SqlResult};
 use tracing::{debug, info, warn};
 
 /// 数据库版本（用于迁移，通过 PRAGMA user_version 持久化）
-const DB_VERSION: i32 = 11;
+const DB_VERSION: i32 = 12;
 
 /// 初始化数据库
 /// 创建所有必要的表，如果数据库已存在则检查是否需要迁移
@@ -361,6 +361,12 @@ pub fn create_tables(conn: &Connection) -> SqlResult<()> {
     // 批次 6 (v11) 新表索引（必须在 books 含 group_id + 4 张新表创建后调用）
     create_v11_indices(conn)?;
 
+    // ============================================================
+    // 批次 16 (v12) 新增 4 张表 — RSS 源管理 schema 骨架
+    // ============================================================
+    create_rss_tables(conn)?;
+    create_v12_indices(conn)?;
+
     info!("数据库表创建完成");
     Ok(())
 }
@@ -462,6 +468,7 @@ fn migrate_database(conn: &Connection, from_version: i32, to_version: i32) -> Sq
                 9 => migrate_v9(conn)?,
                 10 => migrate_v10(conn)?,
                 11 => migrate_v11(conn)?,
+                12 => migrate_v12(conn)?,
                 _ => {
                     return Err(rusqlite::Error::SqliteFailure(
                         rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
@@ -903,6 +910,147 @@ fn migrate_v11(conn: &Connection) -> SqlResult<()> {
     )?;
 
     info!("v11: 迁移完成（批次 6 schema）");
+    Ok(())
+}
+
+/// 版本 12 迁移：批次 16 — RSS 源管理 schema 骨架。
+///
+/// 新增 4 张表（`rss_sources` / `rss_articles` / `rss_stars` /
+/// `rss_read_records`）+ 4 个索引。本批次只先建表 + RssSourceDao；拉取
+/// 解析、文章列表、收藏、详情 WebView 留批次 17/18 实装。
+///
+/// 防御性写法：
+/// - 全部 `CREATE TABLE IF NOT EXISTS`（幂等）
+/// - 不依赖任何旧表存在（rss_* 是全新独立子系统，不与现有表 FK 关联）
+/// - 索引 `IF NOT EXISTS`，重跑不报错
+///
+/// 字段 / 主键 / 索引设计详见 PRD `.trellis/tasks/05-19-rss-source-mgr-batch16/prd.md`
+/// 第 "Schema v12" 段。
+fn migrate_v12(conn: &Connection) -> SqlResult<()> {
+    info!("v12: 新增 RSS 4 张表（批次 16 schema）");
+    create_rss_tables(conn)?;
+    create_v12_indices(conn)?;
+    info!("v12: 迁移完成（批次 16 schema）");
+    Ok(())
+}
+
+/// 批次 16 (v12) 4 张 RSS 表 — fresh install + migrate 共用。
+///
+/// 全 `IF NOT EXISTS`，可重复调用。表结构对齐原 Legado RssSource (31)
+/// / RssArticle (11) / RssStar (9) / RssReadRecord (2)，但 RssSource 的
+/// 13 个高级字段（jsLib / loginUrl / loginUi / ...）合并塞 custom_info_json，
+/// MVP 仅暴露 23 个核心 SQL 列。
+fn create_rss_tables(conn: &Connection) -> SqlResult<()> {
+    // rss_sources — RSS 源主表（PK = source_url，对齐原 Legado）
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS rss_sources (
+            source_url TEXT PRIMARY KEY,
+            source_name TEXT NOT NULL,
+            source_icon TEXT,
+            source_group TEXT,
+            source_comment TEXT,
+            enabled INTEGER DEFAULT 1,
+            single_url INTEGER DEFAULT 0,
+            sort_url TEXT,
+            article_style INTEGER DEFAULT 0,
+            rule_articles TEXT,
+            rule_next_page TEXT,
+            rule_title TEXT,
+            rule_pub_date TEXT,
+            rule_description TEXT,
+            rule_image TEXT,
+            rule_link TEXT,
+            rule_content TEXT,
+            last_update_time INTEGER DEFAULT 0,
+            custom_order INTEGER DEFAULT 0,
+            enable_js INTEGER DEFAULT 1,
+            load_with_base_url INTEGER DEFAULT 1,
+            header TEXT,
+            custom_info_json TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )",
+        [],
+    )?;
+
+    // rss_articles — 文章列表 / 已读 / 收藏标记（复合 PK (origin, link)）
+    // origin = rss_sources.source_url；不强加 FOREIGN KEY 是为了允许源
+    // 删除后历史文章保留（与原 Legado 行为一致）。
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS rss_articles (
+            origin TEXT NOT NULL,
+            sort TEXT,
+            title TEXT,
+            pub_date TEXT,
+            link TEXT NOT NULL,
+            image TEXT,
+            description TEXT,
+            variable TEXT,
+            order_num INTEGER DEFAULT 0,
+            read_time INTEGER DEFAULT 0,
+            star INTEGER DEFAULT 0,
+            PRIMARY KEY (origin, link)
+        )",
+        [],
+    )?;
+
+    // rss_stars — 跨源持久收藏（独立于 rss_articles，因为收藏要在源
+    // 删除 / 文章列表清理后依旧保留）
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS rss_stars (
+            origin TEXT NOT NULL,
+            source_name TEXT,
+            sort TEXT,
+            title TEXT,
+            pub_date TEXT,
+            image TEXT,
+            link TEXT NOT NULL,
+            description TEXT,
+            variable TEXT,
+            star_time INTEGER NOT NULL,
+            PRIMARY KEY (origin, link)
+        )",
+        [],
+    )?;
+
+    // rss_read_records — 已读记录（按 link 主键，全局去重）
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS rss_read_records (
+            link TEXT PRIMARY KEY,
+            record_time INTEGER,
+            read_time INTEGER
+        )",
+        [],
+    )?;
+
+    Ok(())
+}
+
+/// 批次 16 (v12) 索引 — fresh install + migrate 共用。
+fn create_v12_indices(conn: &Connection) -> SqlResult<()> {
+    if table_exists(conn, "rss_sources")? {
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rss_sources_group ON rss_sources(source_group)",
+            [],
+        )?;
+    }
+    if table_exists(conn, "rss_articles")? {
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rss_articles_origin_sort \
+             ON rss_articles(origin, sort)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rss_articles_unread ON rss_articles(read_time)",
+            [],
+        )?;
+    }
+    if table_exists(conn, "rss_stars")? {
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rss_stars_time ON rss_stars(star_time DESC)",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -2016,5 +2164,137 @@ mod tests {
         assert_eq!(got.book_author.as_deref(), Some("Author"));
         assert_eq!(got.chapter_name.as_deref(), Some("第 4 章"));
         assert_eq!(got.book_text.as_deref(), Some("片段"));
+    }
+
+    // ============================================================
+    // 批次 16 (v12) 迁移测试 — RSS 4 张表 schema 骨架
+    // ============================================================
+
+    /// fresh install + v11 → v12 迁移都要建好 4 张 RSS 表 + 4 个索引。
+    #[test]
+    fn test_migrate_v12_creates_rss_tables() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir
+            .path()
+            .join("test_migrate_v12.db")
+            .to_string_lossy()
+            .to_string();
+
+        let conn = init_database(&db_path).unwrap();
+        assert_eq!(get_db_version(&conn).unwrap(), DB_VERSION);
+
+        // 4 张 RSS 表存在
+        for table in &[
+            "rss_sources",
+            "rss_articles",
+            "rss_stars",
+            "rss_read_records",
+        ] {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name = ?1",
+                    rusqlite::params![table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(exists, "table {} should exist after v12", table);
+        }
+
+        // 4 个索引存在
+        for idx in &[
+            "idx_rss_sources_group",
+            "idx_rss_articles_origin_sort",
+            "idx_rss_articles_unread",
+            "idx_rss_stars_time",
+        ] {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='index' AND name = ?1",
+                    rusqlite::params![idx],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(exists, "index {} should exist after v12", idx);
+        }
+
+        // 各表能基本 INSERT + SELECT
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO rss_sources (source_url, source_name, created_at, updated_at) \
+             VALUES ('https://r1.example/feed', '示例 RSS', ?1, ?1)",
+            rusqlite::params![now],
+        )
+        .unwrap();
+        let sources_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM rss_sources", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(sources_count, 1);
+
+        conn.execute(
+            "INSERT INTO rss_articles (origin, link, title) \
+             VALUES ('https://r1.example/feed', 'https://r1.example/post/1', '标题')",
+            [],
+        )
+        .unwrap();
+        let articles_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM rss_articles", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(articles_count, 1);
+
+        conn.execute(
+            "INSERT INTO rss_stars (origin, link, star_time) \
+             VALUES ('https://r1.example/feed', 'https://r1.example/post/1', ?1)",
+            rusqlite::params![now],
+        )
+        .unwrap();
+        let stars_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM rss_stars", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(stars_count, 1);
+
+        conn.execute(
+            "INSERT INTO rss_read_records (link, record_time, read_time) \
+             VALUES ('https://r1.example/post/1', ?1, ?1)",
+            rusqlite::params![now],
+        )
+        .unwrap();
+        let records_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM rss_read_records", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(records_count, 1);
+    }
+
+    /// v12 迁移幂等：手动重跑 migrate_v12 不报错。
+    #[test]
+    fn test_migrate_v12_idempotent() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir
+            .path()
+            .join("test_migrate_v12_idempotent.db")
+            .to_string_lossy()
+            .to_string();
+
+        let conn = init_database(&db_path).unwrap();
+        // 第一次（fresh install 已经建过表）后再次直接调 migrate_v12
+        migrate_v12(&conn).unwrap();
+        // 重跑两次也不报错
+        migrate_v12(&conn).unwrap();
+
+        // 表 / 索引依旧在
+        for table in &[
+            "rss_sources",
+            "rss_articles",
+            "rss_stars",
+            "rss_read_records",
+        ] {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name = ?1",
+                    rusqlite::params![table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(exists);
+        }
     }
 }

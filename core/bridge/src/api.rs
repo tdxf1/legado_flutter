@@ -1681,6 +1681,107 @@ pub fn clear_all_cache(db_path: String) -> Result<i64, String> {
 }
 
 // ============================================================
+// RSS 源管理 (批次 16 / 05-19) — RssSource
+// ============================================================
+//
+// 对齐原 Legado RssSource CRUD。schema 在批次 16 (v12) 新增
+// (`rss_sources` 表 + 4 个索引)，DAO 在 [`core_storage::rss_source_dao`]。
+// 本节仅做"源管理"骨架；拉取 / 解析 / 文章列表 / 收藏 UI 留批次 17/18。
+
+/// 列出所有 RSS 源（按 custom_order ASC, source_name ASC），返回 JSON 数组。
+pub fn rss_source_list_all(db_path: String) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_source_dao::RssSourceDao::new(&conn);
+    let list = dao
+        .list_all()
+        .map_err(|e| format!("获取 RSS 源列表失败: {}", e))?;
+    serde_json::to_string(&list).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// 列出已启用的 RSS 源。
+pub fn rss_source_list_enabled(db_path: String) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_source_dao::RssSourceDao::new(&conn);
+    let list = dao
+        .list_enabled()
+        .map_err(|e| format!("获取已启用 RSS 源失败: {}", e))?;
+    serde_json::to_string(&list).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// 列出指定分组下的 RSS 源（严格按 source_group = ? 匹配）。
+pub fn rss_source_list_by_group(db_path: String, group: String) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_source_dao::RssSourceDao::new(&conn);
+    let list = dao
+        .list_by_group(&group)
+        .map_err(|e| format!("按分组获取 RSS 源失败: {}", e))?;
+    serde_json::to_string(&list).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// DISTINCT 分组列表（跳过 NULL/空），返回 JSON 字符串数组。
+pub fn rss_source_list_groups(db_path: String) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_source_dao::RssSourceDao::new(&conn);
+    let groups = dao
+        .list_groups()
+        .map_err(|e| format!("获取 RSS 分组失败: {}", e))?;
+    serde_json::to_string(&groups).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// 按 source_url 取单条 RSS 源，返回 JSON `Option<RssSource>`。
+pub fn rss_source_get(db_path: String, url: String) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_source_dao::RssSourceDao::new(&conn);
+    let s = dao
+        .get_by_url(&url)
+        .map_err(|e| format!("查询 RSS 源失败: {}", e))?;
+    serde_json::to_string(&s).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// upsert 单条 RSS 源（source_json = `RssSource` 的 JSON），返回受影响行数。
+pub fn rss_source_upsert(db_path: String, source_json: String) -> Result<i64, String> {
+    let conn = open_db(&db_path)?;
+    let source: core_storage::models::RssSource =
+        serde_json::from_str(&source_json).map_err(|e| format!("JSON 解析失败: {}", e))?;
+    let dao = core_storage::rss_source_dao::RssSourceDao::new(&conn);
+    dao.upsert(&source)
+        .map(|n| n as i64)
+        .map_err(|e| format!("写入 RSS 源失败: {}", e))
+}
+
+/// 切换 enabled，返回受影响行数。
+pub fn rss_source_set_enabled(
+    db_path: String,
+    url: String,
+    enabled: bool,
+) -> Result<i64, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_source_dao::RssSourceDao::new(&conn);
+    dao.set_enabled(&url, enabled)
+        .map(|n| n as i64)
+        .map_err(|e| format!("更新 RSS 源状态失败: {}", e))
+}
+
+/// 按 source_url 删除 RSS 源，返回受影响行数。
+pub fn rss_source_delete(db_path: String, url: String) -> Result<i64, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_source_dao::RssSourceDao::new(&conn);
+    dao.delete_by_url(&url)
+        .map(|n| n as i64)
+        .map_err(|e| format!("删除 RSS 源失败: {}", e))
+}
+
+/// 从 JSON 批量导入 RSS 源（支持端口内部 / 原 Legado 双格式）。返回
+/// [`core_storage::models::RssImportSummary`] 的 JSON 字符串
+/// （`{added, updated, skipped}`）。
+pub fn rss_source_import_json(db_path: String, json: String) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_source_dao::RssSourceDao::new(&conn);
+    let summary = dao.import_from_json(&json)?;
+    serde_json::to_string(&summary).map_err(|e| format!("序列化 RssImportSummary 失败: {}", e))
+}
+
+// ============================================================
 // 内部辅助函数
 // ============================================================
 

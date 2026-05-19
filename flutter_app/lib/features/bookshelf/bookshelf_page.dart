@@ -139,6 +139,9 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                 } else if (value == 'cache_management') {
                   // 批次 15 (05-19): 缓存管理页。
                   if (context.mounted) context.push('/cache-management');
+                } else if (value == 'rss_source_manage') {
+                  // 批次 16 (05-19): RSS 源管理页。
+                  if (context.mounted) context.push('/rss-source-manage');
                 }
               },
               itemBuilder: (context) => const [
@@ -179,6 +182,14 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                   child: ListTile(
                     leading: Icon(Icons.cleaning_services_outlined),
                     title: Text('缓存管理'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'rss_source_manage',
+                  child: ListTile(
+                    leading: Icon(Icons.rss_feed),
+                    title: Text('RSS 源管理'),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),

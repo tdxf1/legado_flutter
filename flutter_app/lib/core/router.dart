@@ -13,6 +13,7 @@ import '../features/settings/webdav_config_page.dart';
 import '../features/source/source_page.dart';
 import '../features/download/download_page.dart';
 import '../features/replace_rule/replace_rule_page.dart';
+import '../features/rss/rss_source_manage_page.dart';
 
 final router = GoRouter(
   initialLocation: '/bookshelf',
@@ -103,6 +104,11 @@ final router = GoRouter(
     GoRoute(
       path: '/cache-management',
       builder: (context, state) => const CacheManagementPage(),
+    ),
+    // 批次 16 (05-19): RSS 源管理页。bookshelf_page PopupMenu 入口。
+    GoRoute(
+      path: '/rss-source-manage',
+      builder: (context, state) => const RssSourceManagePage(),
     ),
   ],
 );

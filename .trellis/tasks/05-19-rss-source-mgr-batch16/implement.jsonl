@@ -1,0 +1,13 @@
+{"file": ".trellis/tasks/05-19-rss-source-mgr-batch16/prd.md", "reason": "本任务 PRD"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 BookSourceDao 风格 / 现有 dao 模式"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Flutter UI ↔ Rust DAO ↔ DB 数据流"}
+{"file": "core/core-storage/src/database.rs", "reason": "DB_VERSION + migrate_v11 风格参考；新增 migrate_v12"}
+{"file": "core/core-storage/src/source_dao.rs", "reason": "BookSourceDao import_from_json + ImportSummary 模式参考"}
+{"file": "core/core-storage/src/cache_stats_dao.rs", "reason": "批次 15 最新 DAO 风格示例"}
+{"file": "core/core-storage/src/models.rs", "reason": "BookSource struct 风格参考；新增 RssSource"}
+{"file": "core/bridge/src/api.rs", "reason": "新增 9 个 pub fn 入口；批次 15 添加风格"}
+{"file": "core/bridge/build.rs", "reason": "REQUIRED_WIRE_FN_FRAGMENTS / DISPATCHER_FRAGMENTS 守护"}
+{"file": "flutter_app/lib/features/settings/cache_management_page.dart", "reason": "ConsumerStatefulWidget + 测试 hook 模式参考（批次 15）"}
+{"file": "flutter_app/lib/features/bookshelf/bookshelf_page.dart", "reason": "AppBar PopupMenu 加项（批次 15 后状态）"}
+{"file": ".trellis/tasks/05-18-drag-cancel-threshold-md3-followup/research/feature-gap-rss-manga-audio-misc.md", "reason": "RSS 字段调研 §1.1；本批次唯一权威参考"}
+{"file": ".trellis/tasks/05-19-book-info-edit-batch09/research/legado-backup-format.md", "reason": "rssSources.json §2.5 / rssStar.json §2.6 JSON 格式"}

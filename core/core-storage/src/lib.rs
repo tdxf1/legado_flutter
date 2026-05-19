@@ -17,6 +17,7 @@ pub mod models;
 pub mod progress_dao;
 pub mod read_record_dao;
 pub mod replace_rule_dao;
+pub mod rss_source_dao;
 pub mod source_dao;
 
 // 重新导出主要类型，方便上层调用
@@ -28,11 +29,12 @@ pub use chapter_dao::ChapterDao;
 pub use download_dao::DownloadDao;
 pub use models::{
     Book, BookGroup, BookProgress, BookSource, Bookmark, Chapter, Cookie, DownloadChapter,
-    DownloadTask, ReadRecord, ReplaceRule, RuleSub,
+    DownloadTask, ReadRecord, ReplaceRule, RssImportSummary, RssSource, RuleSub,
 };
 pub use progress_dao::ProgressDao;
 pub use read_record_dao::ReadRecordDao;
 pub use replace_rule_dao::ReplaceRuleDao;
+pub use rss_source_dao::RssSourceDao;
 pub use source_dao::SourceDao;
 
 use database::init_database as db_init;
