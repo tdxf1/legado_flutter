@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/providers.dart';
 import '../../src/rust/api.dart' as rust_api;
@@ -326,6 +327,14 @@ class _RssSourceManagePageState extends ConsumerState<RssSourceManagePage> {
     final url = record['source_url'] as String? ?? '';
     final enabled = record['enabled'] as bool? ?? false;
     return ListTile(
+      // 批次 17 (05-19): 整个 ListTile 可点击 → 进入文章列表页。
+      // Switch 仍由 onChanged 处理（widget 子树的手势优先于 ListTile.onTap）。
+      onTap: url.isEmpty
+          ? null
+          : () {
+              final encoded = Uri.encodeQueryComponent(url);
+              context.push('/rss-articles?sourceUrl=$encoded');
+            },
       leading: Switch(
         value: enabled,
         onChanged: (v) => _onToggleEnabled(record, v),

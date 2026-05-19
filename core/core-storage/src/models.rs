@@ -488,3 +488,48 @@ pub struct RssImportSummary {
     pub updated: i32,
     pub skipped: i32,
 }
+
+// ============================================================
+// 批次 17 (05-19) — RSS 文章 / 已读记录
+// ============================================================
+
+/// RSS 文章（对应原 Legado `RssArticle.kt`）。
+///
+/// 复合主键 `(origin, link)`：origin = `rss_sources.source_url`，link
+/// 是文章绝对 URL。pub_date 保留**原 String 格式**（不解析时间戳，
+/// 避免时区 / 格式分歧；上游 RSS 各家格式不一）。
+///
+/// `read_time = 0` 表示未读；上层 UI 用此判定是否显示未读 dot。
+/// `star = 0` 表示未收藏；批次 18 才把收藏接到 `rss_stars` 表。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RssArticle {
+    /// 关联 `rss_sources.source_url`（不强加 FK，便于源删除后保留历史）。
+    pub origin: String,
+    /// 分类 sortName；单 URL 模式空字符串。
+    pub sort: String,
+    pub title: String,
+    /// 原始字符串日期（不解析）。
+    pub pub_date: String,
+    pub link: String,
+    pub image: Option<String>,
+    pub description: Option<String>,
+    /// 规则路解析时可塞翻页 URL 等扩展信息（MVP 仅记录，不实装翻页）。
+    pub variable: Option<String>,
+    /// 列表显示顺序（拉取时按 0..N 计），UI 排序按此。
+    pub order_num: i32,
+    /// 已读时间戳（秒）；0 = 未读。
+    pub read_time: i64,
+    /// 收藏标志；批次 18 启用。
+    pub star: i32,
+}
+
+/// RSS 已读记录（对应原 Legado `RssReadRecord.kt`）。
+///
+/// 表 `rss_read_records` 主键 `link`，全局去重 — 同一篇文章被多个 RSS
+/// 源收录时跨源已读探测的依据。`read_time` 与 `record_time` MVP 同值。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RssReadRecord {
+    pub link: String,
+    pub record_time: i64,
+    pub read_time: i64,
+}

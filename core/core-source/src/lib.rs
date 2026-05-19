@@ -6,6 +6,7 @@
 
 pub mod legado;
 pub mod parser;
+pub mod rss;
 pub mod rule_engine;
 pub mod types;
 pub mod utils;
@@ -15,6 +16,7 @@ pub use parser::{
     BookDetail, BookSourceParser, ChapterContent, ChapterInfo, ExploreEntry, ParserError,
     SearchResult,
 };
+pub use rss::RssParser;
 pub use rule_engine::{RuleEngine, RuleError, RuleExpression, RuleType};
 pub use types::{BookInfoRule, BookSource, ContentRule, ExtractType, SearchRule, TocRule};
 

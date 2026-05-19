@@ -13,6 +13,7 @@ import '../features/settings/webdav_config_page.dart';
 import '../features/source/source_page.dart';
 import '../features/download/download_page.dart';
 import '../features/replace_rule/replace_rule_page.dart';
+import '../features/rss/rss_article_list_page.dart';
 import '../features/rss/rss_source_manage_page.dart';
 
 final router = GoRouter(
@@ -109,6 +110,14 @@ final router = GoRouter(
     GoRoute(
       path: '/rss-source-manage',
       builder: (context, state) => const RssSourceManagePage(),
+    ),
+    // 批次 17 (05-19): RSS 文章列表页。从源管理页 ListTile 点击进入。
+    GoRoute(
+      path: '/rss-articles',
+      builder: (context, state) {
+        final sourceUrl = state.uri.queryParameters['sourceUrl'] ?? '';
+        return RssArticleListPage(sourceUrl: sourceUrl);
+      },
     ),
   ],
 );

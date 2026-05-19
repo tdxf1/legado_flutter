@@ -685,3 +685,60 @@ Future<String> rssSourceImportJson(
         {required String dbPath, required String json}) =>
     RustLib.instance.api
         .crateApiRssSourceImportJson(dbPath: dbPath, json: json);
+
+// ============================================================
+// RSS 拉取 + 文章列表（批次 17 / 05-19）— RssArticle
+// ============================================================
+
+/// 拉取 RSS 源、解析、upsert 入库，返回 DB 排序后的文章列表 JSON。
+///
+/// - `sortName` / `sortUrl` 单 URL 模式可空字符串
+/// - `page` MVP 仅取第 1 页（保留参数为批次 18 备用）
+/// - 返回 JSON 数组：`[{origin, sort, title, pub_date, link, image,
+///   description, variable, order_num, read_time, star}, ...]`
+Future<String> rssGetArticles(
+        {required String dbPath,
+        required String sourceUrl,
+        required String sortName,
+        required String sortUrl,
+        required int page}) =>
+    RustLib.instance.api.crateApiRssGetArticles(
+        dbPath: dbPath,
+        sourceUrl: sourceUrl,
+        sortName: sortName,
+        sortUrl: sortUrl,
+        page: page);
+
+/// 列出 DB 已有的 RSS 文章（不拉取）。UI 切 sort tab 时用。
+/// `sort = null/空` 表示不过滤分类。
+Future<String> rssListArticles(
+        {required String dbPath, required String sourceUrl, String? sort}) =>
+    RustLib.instance.api.crateApiRssListArticles(
+        dbPath: dbPath, sourceUrl: sourceUrl, sort: sort);
+
+/// 标记文章已读（双写 rss_articles + rss_read_records），返回受影响行数。
+Future<PlatformInt64> rssMarkRead(
+        {required String dbPath,
+        required String link,
+        required PlatformInt64 ts}) =>
+    RustLib.instance.api
+        .crateApiRssMarkRead(dbPath: dbPath, link: link, ts: ts);
+
+/// 某 RSS 源未读文章数。
+Future<PlatformInt64> rssCountUnread(
+        {required String dbPath, required String sourceUrl}) =>
+    RustLib.instance.api
+        .crateApiRssCountUnread(dbPath: dbPath, sourceUrl: sourceUrl);
+
+/// 删除某 RSS 源下的全部文章（删源时清理）。
+Future<PlatformInt64> rssDeleteArticlesBySource(
+        {required String dbPath, required String sourceUrl}) =>
+    RustLib.instance.api.crateApiRssDeleteArticlesBySource(
+        dbPath: dbPath, sourceUrl: sourceUrl);
+
+/// 解析 source.sort_url → `[{name, url}]` JSON。
+/// 单 URL 模式 / 缺源 / 空字符串返回 `[]`。
+Future<String> rssGetSortTabs(
+        {required String dbPath, required String sourceUrl}) =>
+    RustLib.instance.api
+        .crateApiRssGetSortTabs(dbPath: dbPath, sourceUrl: sourceUrl);

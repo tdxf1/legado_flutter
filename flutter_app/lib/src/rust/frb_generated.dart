@@ -409,6 +409,29 @@ abstract class RustLibApi extends BaseApi {
 
   Future<String> crateApiRssSourceImportJson(
       {required String dbPath, required String json});
+
+  // 批次 17 — RSS 拉取 + 文章列表
+  Future<String> crateApiRssGetArticles(
+      {required String dbPath,
+      required String sourceUrl,
+      required String sortName,
+      required String sortUrl,
+      required int page});
+
+  Future<String> crateApiRssListArticles(
+      {required String dbPath, required String sourceUrl, String? sort});
+
+  Future<PlatformInt64> crateApiRssMarkRead(
+      {required String dbPath, required String link, required PlatformInt64 ts});
+
+  Future<PlatformInt64> crateApiRssCountUnread(
+      {required String dbPath, required String sourceUrl});
+
+  Future<PlatformInt64> crateApiRssDeleteArticlesBySource(
+      {required String dbPath, required String sourceUrl});
+
+  Future<String> crateApiRssGetSortTabs(
+      {required String dbPath, required String sourceUrl});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -2953,6 +2976,176 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(
         debugName: "rss_source_import_json",
         argNames: ["dbPath", "json"],
+      );
+
+  // 批次 17 — RSS 拉取 + 文章列表 (funcId 91-96)
+
+  @override
+  Future<String> crateApiRssGetArticles(
+      {required String dbPath,
+      required String sourceUrl,
+      required String sortName,
+      required String sortUrl,
+      required int page}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(sourceUrl, serializer);
+        sse_encode_String(sortName, serializer);
+        sse_encode_String(sortUrl, serializer);
+        sse_encode_i_32(page, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 91, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRssGetArticlesConstMeta,
+      argValues: [dbPath, sourceUrl, sortName, sortUrl, page],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRssGetArticlesConstMeta => const TaskConstMeta(
+        debugName: "rss_get_articles",
+        argNames: ["dbPath", "sourceUrl", "sortName", "sortUrl", "page"],
+      );
+
+  @override
+  Future<String> crateApiRssListArticles(
+      {required String dbPath, required String sourceUrl, String? sort}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(sourceUrl, serializer);
+        sse_encode_opt_String(sort, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 92, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRssListArticlesConstMeta,
+      argValues: [dbPath, sourceUrl, sort],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRssListArticlesConstMeta => const TaskConstMeta(
+        debugName: "rss_list_articles",
+        argNames: ["dbPath", "sourceUrl", "sort"],
+      );
+
+  @override
+  Future<PlatformInt64> crateApiRssMarkRead(
+      {required String dbPath,
+      required String link,
+      required PlatformInt64 ts}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(link, serializer);
+        sse_encode_i_64(ts, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 93, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_i_64,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRssMarkReadConstMeta,
+      argValues: [dbPath, link, ts],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRssMarkReadConstMeta => const TaskConstMeta(
+        debugName: "rss_mark_read",
+        argNames: ["dbPath", "link", "ts"],
+      );
+
+  @override
+  Future<PlatformInt64> crateApiRssCountUnread(
+      {required String dbPath, required String sourceUrl}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(sourceUrl, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 94, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_i_64,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRssCountUnreadConstMeta,
+      argValues: [dbPath, sourceUrl],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRssCountUnreadConstMeta => const TaskConstMeta(
+        debugName: "rss_count_unread",
+        argNames: ["dbPath", "sourceUrl"],
+      );
+
+  @override
+  Future<PlatformInt64> crateApiRssDeleteArticlesBySource(
+      {required String dbPath, required String sourceUrl}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(sourceUrl, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 95, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_i_64,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRssDeleteArticlesBySourceConstMeta,
+      argValues: [dbPath, sourceUrl],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRssDeleteArticlesBySourceConstMeta =>
+      const TaskConstMeta(
+        debugName: "rss_delete_articles_by_source",
+        argNames: ["dbPath", "sourceUrl"],
+      );
+
+  @override
+  Future<String> crateApiRssGetSortTabs(
+      {required String dbPath, required String sourceUrl}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(sourceUrl, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 96, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRssGetSortTabsConstMeta,
+      argValues: [dbPath, sourceUrl],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRssGetSortTabsConstMeta => const TaskConstMeta(
+        debugName: "rss_get_sort_tabs",
+        argNames: ["dbPath", "sourceUrl"],
       );
 
   @protected

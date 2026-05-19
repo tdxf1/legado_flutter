@@ -1782,6 +1782,155 @@ pub fn rss_source_import_json(db_path: String, json: String) -> Result<String, S
 }
 
 // ============================================================
+// RSS 拉取 + 文章列表 (批次 17 / 05-19)
+// ============================================================
+//
+// 6 个 fn (funcId 91-96) — 沿袭 RssSource CRUD（批次 16）/ webdav 异步
+// (批次 11) 的格式。`rss_get_articles` 为 async：拉取 + 解析 + upsert
+// 入库 + 返回排序后的列表；其它 5 个为 sync。
+
+/// async 拉取 + 解析 + upsert + 返回入库后排序的列表。
+///
+/// 工作流：
+/// 1. 从 DB 取 RssSource（不存在 → Err）
+/// 2. 调 RssParser::get_articles 拉取 + 解析（XML 路 / 规则路自适应）
+/// 3. RssArticleDao::upsert_batch（保留每条已有 read_time/star）
+/// 4. RssArticleDao::list_by_origin_sort 返回 sorted Vec<RssArticle> 的 JSON
+///
+/// 注意：本实现**不**把 ParserError::Empty 转 `[]`，而是返回 Err 让
+/// UI 层显示"暂无文章"。这里区分自 search_books_online 的处理 — RSS
+/// "暂无文章"是 UI 友好提示，不是搜索结果空集。
+pub async fn rss_get_articles(
+    db_path: String,
+    source_url: String,
+    sort_name: String,
+    sort_url: String,
+    page: i32,
+) -> Result<String, String> {
+    // 1. 取 source（在 await 前结束 conn 的 lifetime）
+    let source = {
+        let conn = open_db(&db_path)?;
+        let dao = core_storage::rss_source_dao::RssSourceDao::new(&conn);
+        dao.get_by_url(&source_url)
+            .map_err(|e| format!("查询 RSS 源失败: {}", e))?
+            .ok_or_else(|| format!("RSS 源不存在: {}", source_url))?
+    };
+
+    // 2. 拉取 + 解析
+    let parser = core_source::RssParser::new();
+    let mut articles = match parser
+        .get_articles(&source, &sort_name, &sort_url, page)
+        .await
+    {
+        Ok(a) => a,
+        Err(core_source::ParserError::Empty) => Vec::new(),
+        Err(e) => return Err(e.to_string()),
+    };
+
+    // 3. order_num 重排（确保从 0 开始）
+    for (i, a) in articles.iter_mut().enumerate() {
+        a.order_num = i as i32;
+    }
+
+    // 4. upsert + 重读
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_article_dao::RssArticleDao::new(&conn);
+    if !articles.is_empty() {
+        dao.upsert_batch(&articles)
+            .map_err(|e| format!("写入 RSS 文章失败: {}", e))?;
+    }
+    // 重读 — 拿到 DB 已有 read_time/star 的最终结果
+    let sort_filter = if sort_name.trim().is_empty() {
+        None
+    } else {
+        Some(sort_name.as_str())
+    };
+    let final_list = dao
+        .list_by_origin_sort(&source.source_url, sort_filter, -1, 0)
+        .map_err(|e| format!("读取 RSS 文章失败: {}", e))?;
+    serde_json::to_string(&final_list).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// 列出 DB 中已有的 RSS 文章（不拉取）。UI 切 sort tab 时用，避免
+/// 每次切换都 round-trip 网络。
+pub fn rss_list_articles(
+    db_path: String,
+    source_url: String,
+    sort: Option<String>,
+) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_article_dao::RssArticleDao::new(&conn);
+    let sort_filter = sort.as_deref().filter(|s| !s.trim().is_empty());
+    let articles = dao
+        .list_by_origin_sort(&source_url, sort_filter, -1, 0)
+        .map_err(|e| format!("读取 RSS 文章失败: {}", e))?;
+    serde_json::to_string(&articles).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// 标记文章已读：双写 rss_articles + rss_read_records，返回受影响行数。
+pub fn rss_mark_read(db_path: String, link: String, ts: i64) -> Result<i64, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_article_dao::RssArticleDao::new(&conn);
+    dao.mark_read(&link, ts)
+        .map(|n| n as i64)
+        .map_err(|e| format!("标记已读失败: {}", e))
+}
+
+/// 某 RSS 源的未读文章数。
+pub fn rss_count_unread(db_path: String, source_url: String) -> Result<i64, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_article_dao::RssArticleDao::new(&conn);
+    dao.count_unread_by_origin(&source_url)
+        .map_err(|e| format!("统计未读失败: {}", e))
+}
+
+/// 删除某 RSS 源下的全部文章（删源时清理）。
+pub fn rss_delete_articles_by_source(
+    db_path: String,
+    source_url: String,
+) -> Result<i64, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_article_dao::RssArticleDao::new(&conn);
+    dao.delete_by_origin(&source_url)
+        .map(|n| n as i64)
+        .map_err(|e| format!("清理 RSS 文章失败: {}", e))
+}
+
+/// 解析 source.sort_url → `[{name, url}]` JSON。空字符串 / 缺源都返回 `[]`。
+///
+/// `sort_url` 格式（与原 Legado 同）：`name1::url1\nname2::url2` —
+/// 单 URL 模式可空。
+pub fn rss_get_sort_tabs(db_path: String, source_url: String) -> Result<String, String> {
+    let source = {
+        let conn = open_db(&db_path)?;
+        let dao = core_storage::rss_source_dao::RssSourceDao::new(&conn);
+        dao.get_by_url(&source_url)
+            .map_err(|e| format!("查询 RSS 源失败: {}", e))?
+    };
+    let mut tabs: Vec<serde_json::Value> = Vec::new();
+    if let Some(s) = source.as_ref().and_then(|s| s.sort_url.as_deref()) {
+        for line in s.split('\n') {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Some((name, url)) = line.split_once("::") {
+                let name = name.trim();
+                let url = url.trim();
+                if name.is_empty() && url.is_empty() {
+                    continue;
+                }
+                tabs.push(serde_json::json!({"name": name, "url": url}));
+            } else {
+                // 没有 :: 分隔，把整行当 name + 空 url（兼容退化格式）
+                tabs.push(serde_json::json!({"name": line, "url": ""}));
+            }
+        }
+    }
+    serde_json::to_string(&tabs).map_err(|e| format!("序列化失败: {}", e))
+}
+
+// ============================================================
 // 内部辅助函数
 // ============================================================
 

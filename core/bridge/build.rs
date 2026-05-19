@@ -102,6 +102,13 @@ const REQUIRED_WIRE_FN_FRAGMENTS: &[&str] = &[
     "wire__crate__api__rss_source_set_enabled_impl",
     "wire__crate__api__rss_source_delete_impl",
     "wire__crate__api__rss_source_import_json_impl",
+    // 批次 17 (RSS 拉取 + 文章列表) — 6 个 wire fn (funcId 91-96)
+    "wire__crate__api__rss_get_articles_impl",
+    "wire__crate__api__rss_list_articles_impl",
+    "wire__crate__api__rss_mark_read_impl",
+    "wire__crate__api__rss_count_unread_impl",
+    "wire__crate__api__rss_delete_articles_by_source_impl",
+    "wire__crate__api__rss_get_sort_tabs_impl",
 ];
 
 const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
@@ -159,6 +166,13 @@ const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
     "        88 =>",
     "        89 =>",
     "        90 =>",
+    // 批次 17 (RSS 拉取 + 文章列表) 手动 dispatch 注册
+    "        91 =>",
+    "        92 =>",
+    "        93 =>",
+    "        94 =>",
+    "        95 =>",
+    "        96 =>",
 ];
 
 /// R3: the dispatcher default arms must surface the unknown funcId
@@ -219,7 +233,7 @@ fn main() {
             "frb_generated.rs is missing {} hand-edited wire/dispatch fragment(s). \
              A `flutter_rust_bridge_codegen generate` run probably overwrote the manual \
              patches. This guard only covers the funcIds we know were hand-edited \
-             (currently 42-52 plus 54-57 plus 63-65 plus 66-70 plus 71-72 plus 73 plus 74-77 plus 78-81 plus 82-90; 53 is intentionally a hole, do not re-introduce), \
+             (currently 42-52 plus 54-57 plus 63-65 plus 66-70 plus 71-72 plus 73 plus 74-77 plus 78-81 plus 82-90 plus 91-96; 53 is intentionally a hole, do not re-introduce), \
              plus the R3 informative panic in the dispatcher default arms. \
              funcIds outside that range are produced by codegen and are NOT checked here, \
              so a regression in those needs separate attention. See CURRENT_STATUS.md \
