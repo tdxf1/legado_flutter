@@ -1,0 +1,13 @@
+{"file": ".trellis/tasks/05-20-fix-batch-06-cargo-deps/prd.md", "reason": "本批次 PRD：缩范围决策 + 7 个 Cargo.toml 详细改动 + TODO 标记规范"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-cross-config.md", "reason": "Wave 3 详细 findings（F-W3-011/012/017/020/030/039/040/043 完整描述）"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-06-cargo-workspace-deps-cleanup.md", "reason": "路线图原 BATCH-06 文档（含 8 节模板与原始 4 条 finding 范围）"}
+{"file": "core/Cargo.toml", "reason": "操作目标 1：新增 [workspace.package] / [workspace.dependencies] / [workspace.lints]"}
+{"file": "core/bridge/Cargo.toml", "reason": "操作目标 2：改 workspace = true，删 dev-deps tempfile 冗余"}
+{"file": "core/core-net/Cargo.toml", "reason": "操作目标 3：改 workspace = true（base64/urlencoding 升级）"}
+{"file": "core/core-parser/Cargo.toml", "reason": "操作目标 4：改 workspace = true，标 zip TODO"}
+{"file": "core/core-source/Cargo.toml", "reason": "操作目标 5：改 workspace = true，标 md5/zip/core-storage 三处 TODO"}
+{"file": "core/core-storage/Cargo.toml", "reason": "操作目标 6：改 workspace = true（base64 升级 0.21→0.22；保留 md-5 / zip=2 inline）"}
+{"file": "core/api-server/Cargo.toml", "reason": "操作目标 7：改 workspace = true（base64 已是 0.22 OK）"}
+{"file": "flutter_app/pubspec.yaml", "reason": "操作目标 8：sdk 下限 >=3.3.0"}
+{"file": "flutter_app/pubspec.lock", "reason": "操作目标 9：git add -f 入库"}
+{"file": ".gitignore", "reason": "确认 pubspec.lock 没被排除（已确认无）"}

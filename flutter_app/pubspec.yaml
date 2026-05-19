@@ -4,7 +4,9 @@ publish_to: 'none'
 version: 0.1.0+1
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  # 批次 BATCH-06: sdk 下限 3.0.0 → 3.3.0，与 mobile_scanner 5.x 要求对齐
+  # （F-W3-043 P3）。pubspec.lock 已 commit，进一步固定运行时版本。
+  sdk: '>=3.3.0 <4.0.0'
   flutter: ">=3.35.0"
 
 dependencies:

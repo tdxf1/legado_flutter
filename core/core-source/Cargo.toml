@@ -1,17 +1,20 @@
 [package]
 name = "core-source"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
 # HTML 解析
-scraper = "0.20"
+scraper = { workspace = true }
 # 正则
-regex = "1.11"
+regex = { workspace = true }
 # XML 解析
-quick-xml = { version = "0.37", features = ["serialize"] }
+quick-xml = { workspace = true }
 # HTTP 客户端（用于请求书源）
 # ureq: simple blocking HTTP client, avoids tokio/DNS issues on Android
 # HTTP 客户端
@@ -24,26 +27,33 @@ hickory-resolver = "0.25"
 rquickjs = { version = "0.8", optional = true }
 boa_engine = { version = "0.21", optional = true }
 # 日志
-tracing = "0.1"
+tracing = { workspace = true }
 # 异步支持
-tokio = { version = "1", features = ["full"] }
+tokio = { workspace = true }
 # 编码处理
-encoding_rs = "0.8"
+encoding_rs = { workspace = true }
 # URL 解析和编码
 url = "2.5"
-urlencoding = "2.1"
-base64 = "0.22"
-sha2 = "0.10"
+urlencoding = { workspace = true }
+base64 = { workspace = true }
+sha2 = { workspace = true }
+# TODO(BATCH-06b: cargo-md5-unify): 统一到 md-5 (RustCrypto)，需改
+# core-source/src/legado/js_runtime.rs:852 调用从 md5::compute() 改为
+# Md5::new() + update + finalize 模式。当前与 core-storage 的 md-5 是
+# 两个完全不同的 crate（API 不兼容），cargo 会同时编译两份。
 md5 = "0.7"
-aes = "0.8"
+aes = { workspace = true }
 cbc = { version = "0.1", features = ["alloc"] }
 ecb = { version = "0.1", features = ["alloc"] }
 block-padding = "0.3"
+# TODO(BATCH-06c: cargo-zip-upgrade): 升级到 zip = "2" 与 core-storage 对齐，
+# 需改 core-source/src/legado/js_runtime.rs ZipArchive::new 调用
+# （0.6 与 2.x API 有破坏性变化）。
 zip = { version = "0.6", default-features = false }
 # UUID 生成
-uuid = { version = "1.10", features = ["v4", "serde"] }
+uuid = { workspace = true }
 # 时间处理
-chrono = "0.4"
+chrono = { workspace = true }
 # XPath 引擎
 sxd-document = "0.3"
 sxd-xpath = "0.4"
@@ -52,7 +62,10 @@ jsonpath_lib = "0.3"
 # TTF 字体解析 (用于字体反爬)
 ttf-parser = "0.25"
 # SQLite (用于缓存持久化)
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { workspace = true }
+# TODO(BATCH-06d: arch-core-source-cache-trait): 抽 Cache trait 由 caller
+# (bridge / api-server) 注入，移除 core-source → core-storage 反向依赖
+# （破坏分层）。当前留作便利。
 core-storage = { path = "../core-storage" }
 
 [features]
@@ -62,4 +75,7 @@ js-boa = ["dep:boa_engine"]
 
 [dev-dependencies]
 httpmock = "0.7"
-tempfile = "3"
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,7 +1,10 @@
 [package]
 name = "bridge"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
@@ -12,14 +15,17 @@ core-net = { path = "../core-net" }
 core-source = { path = "../core-source" }
 core-storage = { path = "../core-storage" }
 core-parser = { path = "../core-parser" }
-serde_json = "1"
-rusqlite = { version = "0.31", features = ["bundled"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
-regex = "1.11"
-tracing = "0.1"
-tempfile = "3"
-uuid = { version = "1.10", features = ["v4"] }
-chrono = "0.4"
+serde_json = { workspace = true }
+# bridge 用最小 feature 子集（rt + rt-multi-thread）；workspace 上限 features=["full"]
+# 已含这俩，cargo 会按需链接。
+rusqlite = { workspace = true }
+tokio = { workspace = true }
+regex = { workspace = true }
+tracing = { workspace = true }
+# tempfile 同时是 build-time / test 用，统一进 [dependencies] 即够；dev-deps 不再重复。
+tempfile = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
 
-[dev-dependencies]
-tempfile = "3"
+[lints]
+workspace = true

@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/05-20-fix-batch-06-cargo-deps/prd.md", "reason": "PRD Acceptance Criteria + Definition of Done 是 check 依据"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings.md", "reason": "master report，验证 finding 主题边界（主题 9 Cargo workspace 治理）"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-cross-config.md", "reason": "Wave 3 详细 findings 校验"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-06-cargo-workspace-deps-cleanup.md", "reason": "本批次自身验收清单"}
+{"file": "core/Cargo.toml", "reason": "确认三段元数据齐全（package / dependencies / lints）"}
+{"file": "core/core-source/Cargo.toml", "reason": "确认 md5 / zip / core-storage 三处 TODO 注释存在"}
+{"file": "flutter_app/pubspec.yaml", "reason": "确认 sdk 下限收紧"}
