@@ -1,0 +1,11 @@
+# Release Keystore 配置（实际文件需重命名为 key.properties，已 gitignore）
+#
+# 生成 keystore（一次性）：
+#   keytool -genkey -v -keystore release.keystore \
+#     -alias legado_release -keyalg RSA -keysize 2048 -validity 10000
+#
+# 然后把 release.keystore 放到 flutter_app/android/，并填写下面 4 项：
+storeFile=release.keystore
+storePassword=YOUR_STORE_PASSWORD
+keyAlias=legado_release
+keyPassword=YOUR_KEY_PASSWORD

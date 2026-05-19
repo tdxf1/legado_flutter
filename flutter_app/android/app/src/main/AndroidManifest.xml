@@ -8,7 +8,13 @@
         android:label="Legado Reader"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
         android:networkSecurityConfig="@xml/network_security_config">
+        <!-- taskAffinity="" 让 MainActivity 不与其它 app 共享 task stack。
+             原因：避免与原 Legado / Legado-MD3 应用 (io.legado.app namespace)
+             被 Android 系统按相同 affinity 合并到同一 recents stack；同时降低
+             Strandhogg 类劫持风险（exported=true 的 launcher activity 是常见
+             跳板）。如要恢复默认行为可改为 android:taskAffinity="${applicationId}"。-->
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -1,3 +1,17 @@
+import java.util.Properties
+import java.io.FileInputStream
+
+// BATCH-02 (F-W3-013): release keystore 基础设施。
+// 若 flutter_app/android/key.properties 存在，加载其中的签名信息；
+// 否则保持 hasReleaseKeystore = false，buildTypes.release 会 fallback
+// 到 debug keystore 并在控制台 println 警告。模板见 key.properties.example。
+val keystorePropertiesFile = rootProject.file("key.properties")
+val keystoreProperties = Properties()
+val hasReleaseKeystore = keystorePropertiesFile.exists()
+if (hasReleaseKeystore) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+}
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -28,7 +42,6 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "io.legado.app.flutter"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
@@ -45,11 +58,28 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            if (hasReleaseKeystore) {
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+            }
+            // 若 key.properties 不存在，本 config 保持 unconfigured；
+            // buildTypes.release 下方会做条件 fallback。
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                println("⚠️  flutter_app/android/key.properties 不存在；release 仍用 debug keystore 签名（不可上架，也无法做受信升级）")
+                println("    生成 release keystore 见 flutter_app/android/key.properties.example")
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }

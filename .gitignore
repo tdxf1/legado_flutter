@@ -18,3 +18,8 @@ flutter_app/android/app/src/main/jniLibs/
 # Trellis: per-developer workspace (journals, session traces)
 .trellis/workspace/
 
+# Android release signing：本地 keystore + properties 不入版本库
+flutter_app/android/key.properties
+flutter_app/android/*.keystore
+flutter_app/android/*.jks
+

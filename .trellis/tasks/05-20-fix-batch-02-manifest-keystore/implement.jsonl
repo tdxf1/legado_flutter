@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/05-20-fix-batch-02-manifest-keystore/prd.md", "reason": "本批次 PRD：scope / 步骤 / ADR / 验收（含路线图缩范围决策）"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-cross-config.md", "reason": "Wave 3 详细 findings（F-W3-002 / F-W3-004 / F-W3-013 / F-W3-027 完整描述与建议）"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-02-harden-android-build-and-manifest.md", "reason": "路线图原 BATCH-02 文档（含 8 节模板与原始 4 条 finding 范围）"}
+{"file": "flutter_app/android/app/src/main/AndroidManifest.xml", "reason": "操作目标 1：加 allowBackup=false + taskAffinity 注释"}
+{"file": "flutter_app/android/app/build.gradle.kts", "reason": "操作目标 2：删 TODO + 加 signingConfigs.release + buildTypes.release 条件签名"}
+{"file": "flutter_app/android/build.gradle.kts", "reason": "上下文：项目级 gradle，确认本批不需要改"}
+{"file": ".gitignore", "reason": "操作目标 3：加 key.properties / *.keystore / *.jks 排除"}
+{"file": "flutter_app/android/app/src/main/kotlin/io/legado/app/flutter/MainActivity.kt", "reason": "上下文：JavascriptInterface 类名（BATCH-02b R8 keep rules 需要，本批仅做参考确认 namespace 没变）"}

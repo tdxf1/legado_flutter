@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/05-20-fix-batch-02-manifest-keystore/prd.md", "reason": "PRD Acceptance Criteria + Definition of Done 是 check 依据"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings.md", "reason": "master report，验证 finding 主题边界"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-cross-config.md", "reason": "Wave 3 详细 findings 校验所有相关条目"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-02-harden-android-build-and-manifest.md", "reason": "本批次自身验收清单 + 缩范围决策依据"}
+{"file": "flutter_app/android/app/src/main/AndroidManifest.xml", "reason": "确认 allowBackup=false + taskAffinity 注释已加"}
+{"file": "flutter_app/android/app/build.gradle.kts", "reason": "确认 signingConfigs / buildTypes 条件签名 + TODO 删除"}
+{"file": "flutter_app/android/key.properties.example", "reason": "确认模板文件存在且含 keytool 注释"}
+{"file": ".gitignore", "reason": "确认 key.properties / *.keystore / *.jks 已加 ignore"}

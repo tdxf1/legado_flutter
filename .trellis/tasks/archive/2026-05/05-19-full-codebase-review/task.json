@@ -19,7 +19,8 @@
   "pr_url": null,
   "subtasks": [],
   "children": [
-    "05-20-fix-batch-01-jnilibs"
+    "05-20-fix-batch-01-jnilibs",
+    "05-20-fix-batch-02-manifest-keystore"
   ],
   "parent": null,
   "relatedFiles": [],
