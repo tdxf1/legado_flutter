@@ -22,6 +22,8 @@ echo "[1/3] Cross-compiling Rust bridge crate..."
 cargo build --manifest-path core/bridge/Cargo.toml --release --target aarch64-linux-android
 
 echo "[2/3] Copying libbridge.so to jniLibs..."
+# 先清理旧 .so 保证幂等性：避免上次构建残留与本次产物混淆
+rm -f flutter_app/android/app/src/main/jniLibs/arm64-v8a/libbridge.so
 cp core/target/aarch64-linux-android/release/libbridge.so \
    flutter_app/android/app/src/main/jniLibs/arm64-v8a/libbridge.so
 

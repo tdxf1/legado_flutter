@@ -9,6 +9,12 @@ dist/
 flutter_app/build/
 flutter_app/.dart_tool/
 
+# Android jniLibs：build 产物，不入版本库
+# 由 cargo build --release --target aarch64-linux-android 生成，
+# 再由 build_android_*.sh 脚本拷贝过来；现有 *.so 全局规则对已 tracked
+# 文件无效，因此显式加目录级规则做防御。
+flutter_app/android/app/src/main/jniLibs/
+
 # Trellis: per-developer workspace (journals, session traces)
 .trellis/workspace/
 

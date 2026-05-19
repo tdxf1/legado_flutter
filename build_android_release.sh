@@ -34,39 +34,43 @@ DIST_DIR="$SCRIPT_DIR/dist"
 mkdir -p "$DIST_DIR"
 APK_OUT="$DIST_DIR/legado-arm64-release-v${VERSION_NAME}-${COMMIT_SHORT}.apk"
 
-# ── 工作区检查 ──────────────────────────────────────────────────
-if [[ -n "$(git status --porcelain 2>/dev/null | grep -v '^??')" ]]; then
-    echo "⚠️  警告：工作区有未提交修改"
+# ── 工作区检查（reproducible build 强制要求干净工作区） ───────────
+# release artefact 文件名携带 ${COMMIT_SHORT}，必须保证 APK 内容与该 commit
+# 严格对应；任何 unstaged / staged 改动都会让 hash 失去可复现性。
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "❌ 工作区有未提交改动，release 构建要求干净的工作区"
+    echo "请先 commit 或 stash 后再试"
     git status --short | head -10
-    read -p "继续构建？[y/N] " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
+    exit 1
 fi
 
-# ── 1/4 Rust 交叉编译 release ─────────────────────────────────────
+# ── 1/4 Flutter analyze + test（quality gate 在前，artefact 在后） ──
+# 必须先全绿再去 cargo build + cp，否则失败时 jniLibs 已经被覆盖，破坏幂等。
 echo ""
-echo "[1/4] Cross-compiling Rust bridge crate (release)..."
+echo "[1/4] Running flutter analyze + test (release 必跑)..."
+cd flutter_app
+flutter --no-version-check analyze
+xvfb-run -a flutter --no-version-check test
+cd "$SCRIPT_DIR"
+
+# ── 2/4 Rust 交叉编译 release ─────────────────────────────────────
+echo ""
+echo "[2/4] Cross-compiling Rust bridge crate (release)..."
 cargo build --manifest-path core/bridge/Cargo.toml --release --target aarch64-linux-android
 
-# ── 2/4 拷贝 libbridge.so ─────────────────────────────────────────
+# ── 3/4 拷贝 libbridge.so ─────────────────────────────────────────
 echo ""
-echo "[2/4] Copying libbridge.so to jniLibs..."
+echo "[3/4] Copying libbridge.so to jniLibs..."
+# 先清理旧 .so 保证幂等性
+rm -f flutter_app/android/app/src/main/jniLibs/arm64-v8a/libbridge.so
 cp core/target/aarch64-linux-android/release/libbridge.so \
    flutter_app/android/app/src/main/jniLibs/arm64-v8a/libbridge.so
 ls -lh flutter_app/android/app/src/main/jniLibs/arm64-v8a/libbridge.so
 
-# ── 3/4 Flutter analyze + test（release 不允许失败） ──────────────
-echo ""
-echo "[3/4] Running flutter analyze + test (release 必跑)..."
-cd flutter_app
-flutter --no-version-check analyze
-xvfb-run -a flutter --no-version-check test
-
 # ── 4/4 构建 release APK ─────────────────────────────────────────
 echo ""
 echo "[4/4] Building Flutter release APK (arm64-v8a only)..."
+cd flutter_app
 flutter build apk --release --target-platform android-arm64
 
 cd "$SCRIPT_DIR"

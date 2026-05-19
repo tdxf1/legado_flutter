@@ -18,7 +18,9 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "05-20-fix-batch-01-jnilibs"
+  ],
   "parent": null,
   "relatedFiles": [],
   "notes": "",

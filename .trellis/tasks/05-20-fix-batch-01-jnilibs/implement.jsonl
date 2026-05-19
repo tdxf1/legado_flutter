@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/05-20-fix-batch-01-jnilibs/prd.md", "reason": "本批次 PRD：scope / 步骤 / ADR / 验收"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-cross-config.md", "reason": "Wave 3 详细 findings（F-W3-001/016/018 完整描述与建议）"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-01-cleanup-stale-jnilibs.md", "reason": "路线图批次文档原文，含 8 节模板与验收 checkbox"}
+{"file": "build_android_release.sh", "reason": "release 构建脚本，需要重排顺序 + 强化脏检查（步骤 3 操作目标）"}
+{"file": "build_android_debug.sh", "reason": "debug 构建脚本，cp 前需 rm 旧 .so 保证幂等性（步骤 4 操作目标）"}
+{"file": ".gitignore", "reason": "新增 jniLibs 目录级规则（步骤 2 操作目标）"}
+{"file": "flutter_app/android/app/build.gradle.kts", "reason": "确认 abiFilters 只 arm64-v8a 的预期，校准 .gitignore 规则范围"}
+{"file": "README.md", "reason": "确认快速开始已要求 cargo build --release，本批次不破坏现有约定"}

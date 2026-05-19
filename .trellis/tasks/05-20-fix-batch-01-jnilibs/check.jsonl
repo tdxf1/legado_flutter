@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/05-20-fix-batch-01-jnilibs/prd.md", "reason": "PRD Acceptance Criteria + Definition of Done 是 check 的依据"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings.md", "reason": "master report，验证 finding 主题边界（F-W3-001/016/018 状态确认）"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-cross-config.md", "reason": "Wave 3 详细 findings 校验所有相关条目均已修复"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-01-cleanup-stale-jnilibs.md", "reason": "本批次自身验收清单（6 节验收 checkbox）"}
+{"file": ".gitignore", "reason": "确认新规则生效，jniLibs 已被 ignore"}
+{"file": "build_android_release.sh", "reason": "确认顺序与脏检查严格化"}
+{"file": "build_android_debug.sh", "reason": "确认 cp 前 rm 旧 .so 幂等性"}
