@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
-import 'api/dto.dart';
+import 'dto.dart';
 
 class WebViewExecutionResult {
   final String content;

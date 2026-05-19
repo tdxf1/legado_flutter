@@ -70,11 +70,10 @@ pub fn save_book(db_path: String, book_json: String) -> Result<(), String> {
 
 /// 从书架删除一本书（同时级联删除该书籍的章节和阅读进度）
 pub fn delete_book(db_path: String, id: String) -> Result<(), String> {
-    let mut conn = open_db(&db_path)?;
-    // 先删除章节和进度（子记录）
-    let _ = core_storage::chapter_dao::ChapterDao::new(&mut conn).delete_by_book(&id);
-    let _ = core_storage::progress_dao::ProgressDao::new(&conn).delete(&id);
-    // 再删除书籍本身
+    // chapters / progress / read_records / bookmarks 表均通过 schema 的
+    // ON DELETE CASCADE 自动级联删除（见 core-storage/src/database.rs
+    // L162 等），无需在 bridge 层显式调用各 dao。
+    let conn = open_db(&db_path)?;
     let book_dao = core_storage::book_dao::BookDao::new(&conn);
     book_dao.delete(&id).map_err(|e| format!("删除失败: {}", e))
 }

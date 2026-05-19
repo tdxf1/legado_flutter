@@ -894,7 +894,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 name = "core-net"
 version = "0.1.0"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.22.1",
  "cookie_store 0.21.1",
  "encoding_rs",
  "httpmock",
@@ -970,7 +970,7 @@ name = "core-storage"
 version = "0.1.0"
 dependencies = [
  "aes",
- "base64 0.21.7",
+ "base64 0.22.1",
  "chrono",
  "md-5",
  "rusqlite",

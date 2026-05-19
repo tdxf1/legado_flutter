@@ -11,59 +11,38 @@ import 'refresh_rate_controller.dart';
 import 'transport.dart';
 import '../src/rust/api.dart' as rust_api;
 
-import 'api/api_client.dart';
-import 'api/reader_api.dart';
-import 'api/bookshelf_api.dart';
-import 'api/search_api.dart';
-import 'api/source_api.dart';
-
 // HTTP mode is retained only for future/debug clients. Android app data
 // providers below intentionally use FRB so reads and writes share one store.
+//
+// BATCH-18a (05-20): 死代码清理。删除 `core/api/` 整目录（5 个 Dio 客户端
+// 薄壳类 + dto.dart 中 5 个仅 Dio 路径用的 DTO）+ 7 个零消费者 provider
+// （apiClientProvider / readerApiProvider / bookshelfApiProvider /
+// sourceApiProvider / searchApiProvider / apiBaseUrlProvider /
+// apiTokenProvider）。仅 [PlatformRequest] DTO 仍被 reader_page 真用，
+// 已迁到 `core/dto.dart`。`BackendMode` enum + [transportProvider] +
+// [HttpTransport] 保留——SSE 路径在 search_page 仍引用，是否真死留
+// BATCH-18b 专项确认。
 enum BackendMode { frb, http }
 
 final backendModeProvider = StateProvider<BackendMode>((ref) => BackendMode.frb);
 
-final apiBaseUrlProvider = StateProvider<String>((ref) => 'http://localhost:3000');
-
-final apiTokenProvider = StateProvider<String?>((ref) => null);
-
-final apiClientProvider = Provider<ApiClient>((ref) {
-  final baseUrl = ref.watch(apiBaseUrlProvider);
-  final token = ref.watch(apiTokenProvider);
-  return ApiClient(baseUrl: baseUrl, token: token);
-});
-
-final readerApiProvider = Provider<ReaderApi>((ref) {
-  final client = ref.watch(apiClientProvider);
-  return ReaderApi(client);
-});
-
-final bookshelfApiProvider = Provider<BookshelfApi>((ref) {
-  final client = ref.watch(apiClientProvider);
-  return BookshelfApi(client);
-});
-
-final sourceApiProvider = Provider<SourceApi>((ref) {
-  final client = ref.watch(apiClientProvider);
-  return SourceApi(client);
-});
-
-final searchApiProvider = Provider<SearchApi>((ref) {
-  final client = ref.watch(apiClientProvider);
-  return SearchApi(client);
-});
-
 /// 统一传输层。在 [BackendMode.frb] 下返回 LocalTransport 占位；
 /// 在 [BackendMode.http] 下返回 HttpTransport（含 SSE 能力）。
+///
+/// HTTP 模式当前仅保留给未来/调试客户端使用；base URL 与 token 暂硬编码
+/// 默认值（原 apiBaseUrlProvider / apiTokenProvider 在 BATCH-18a 中作为
+/// 零消费者一并清理）。如果 BATCH-18b 决定保留 HTTP 路径，再把这两项
+/// 重新提成可配置 provider。
 final transportProvider = Provider<Transport>((ref) {
   final mode = ref.watch(backendModeProvider);
   switch (mode) {
     case BackendMode.frb:
       return const LocalTransport();
     case BackendMode.http:
-      final baseUrl = ref.watch(apiBaseUrlProvider);
-      final token = ref.watch(apiTokenProvider);
-      final t = HttpTransport(baseUrl: baseUrl, token: token);
+      final t = HttpTransport(
+        baseUrl: 'http://localhost:3000',
+        token: null,
+      );
       ref.onDispose(t.close);
       return t;
   }

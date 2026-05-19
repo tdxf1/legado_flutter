@@ -11,7 +11,7 @@ import 'package:screen_brightness/screen_brightness.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
-import '../../core/api/dto.dart';
+import '../../core/dto.dart';
 import '../../core/download_runner.dart';
 import '../../core/platform_webview_executor.dart';
 import '../../core/providers.dart';
