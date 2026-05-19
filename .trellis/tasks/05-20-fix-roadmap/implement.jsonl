@@ -1,0 +1,10 @@
+{"file": ".trellis/tasks/05-20-fix-roadmap/prd.md", "reason": "本任务 PRD：路线图组织策略（按风险分级）、批次硬约束（2-10 条/≤800 行）、文档目录结构、强耦合规则、覆盖度审计要求"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings.md", "reason": "上一任务 master 索引：包含 132 P0+P1 完整列表 + 10 主题汇总 + 8 条已推荐第一批修复（路线图必须 100% 覆盖此列表）"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-rust-data.md", "reason": "Wave 1A 详细 finding 文档：core-storage / bridge / api-server (54 条)；判断同文件耦合时需读详细描述"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-rust-logic.md", "reason": "Wave 1B 详细 finding 文档：core-source / core-net / core-parser (73 条)；JS 沙箱主题 P0 集中地"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-core.md", "reason": "Wave 2A 详细 finding 文档：Flutter core + reader (80 条)；reader 主题 P1 集中地"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-features.md", "reason": "Wave 2B 详细 finding 文档：9 个 feature (70 条)；WebDAV / QR P0 在此"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-cross-config.md", "reason": "Wave 3 详细 finding 文档：跨层 + Android 配置 + 构建脚本 + 依赖 (43 条)；libbridge.so / keystore / Cargo workspace P1 集中地"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/prd.md", "reason": "上一任务 PRD（含 Findings Summary 与第一批修复推荐表）：路线图前 8 批应与 Summary 推荐对齐或显式说明偏离原因"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层思考指南：用于判断 FFI 边界 / 跨语言修复是否能合批，避免 Rust + Dart 同批的硬约束被违反"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "代码复用思考指南：用于识别多条 finding 共用同一基础设施（如凭据保险柜），合批时优先打包"}

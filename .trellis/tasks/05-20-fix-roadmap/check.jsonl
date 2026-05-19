@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/05-20-fix-roadmap/prd.md", "reason": "PRD Acceptance Criteria + Definition of Done 是 check 主要依据：覆盖度 100%、批次大小 2-10 条、effort 标记一致、jsonl 草稿合法"}
+{"file": ".trellis/tasks/05-20-fix-roadmap/plan/roadmap.md", "reason": "主路线图本体：检查批次总览表、依赖图、启动命令模板是否存在、是否自洽"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings.md", "reason": "上一任务 master：检查路线图覆盖度时与 P0+P1 索引做集合对比（132 条全部包含）"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "check 时验证跨语言批次硬约束（Rust/Dart 不混批，FFI 例外需显式标注）是否被遵守"}
