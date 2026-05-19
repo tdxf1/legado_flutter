@@ -1,0 +1,10 @@
+{"file": ".trellis/tasks/05-19-full-codebase-review/prd.md", "reason": "本任务的审查范围、5 维度分类、严重度分级、报告格式模板、in/out scope 全部在此；sub-agent 必读"}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend spec 入口，用于了解项目 5 份 backend guideline 的状态（均为 placeholder），明确审查产出可作为后续填充事实依据"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "B 维度（正确性）审查时对照现有错误处理约定（虽是 placeholder，仍需读取确认）"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "E 维度（代码异味）审查的现有约定基准"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "审查 Rust tracing / Dart debugPrint 一致性时参考"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "审查 core-storage SQLite 层时参考；现有约定（若有）作为对照基准"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "A 维度（架构/分层）审查时对照现有目录约定"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "审查 FFI 边界（Rust ↔ Dart）和跨 feature 数据流时的思考框架，本次审查 FFI 是专项重点"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "E 维度审查重复实现/可复用模式时的思考框架"}
+{"file": "README.md", "reason": "了解项目技术架构图、参考来源（legado-with-MD3 / Legado-Tauri）和 FRB 桥接关系；审查时遇到设计意图疑问可对照"}
