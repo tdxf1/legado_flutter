@@ -795,3 +795,50 @@ Future<String> rssStarList(
         required PlatformInt64 offset}) =>
     RustLib.instance.api.crateApiRssStarList(
         dbPath: dbPath, limit: limit, offset: offset);
+
+// ============================================================
+// 订阅源 RuleSub MVP（批次 19 / 05-19）
+// ============================================================
+
+/// 列出所有订阅源（custom_order ASC, name ASC），返回 JSON 数组。
+Future<String> ruleSubListAll({required String dbPath}) =>
+    RustLib.instance.api.crateApiRuleSubListAll(dbPath: dbPath);
+
+/// 新建订阅源 — Rust 端自动生成 UUID + 时间戳。返回新 RuleSub JSON。
+/// `subType`：0=书源 / 1=RSS / 2=替换规则。
+Future<String> ruleSubCreate(
+        {required String dbPath,
+        required String name,
+        required String url,
+        required int subType}) =>
+    RustLib.instance.api.crateApiRuleSubCreate(
+        dbPath: dbPath, name: name, url: url, subType: subType);
+
+/// 更新已有订阅源（id 必须存在），返回受影响行数。
+Future<PlatformInt64> ruleSubUpdate(
+        {required String dbPath,
+        required String id,
+        required String name,
+        required String url,
+        required int subType}) =>
+    RustLib.instance.api.crateApiRuleSubUpdate(
+        dbPath: dbPath, id: id, name: name, url: url, subType: subType);
+
+/// 删除订阅源，返回受影响行数（0 表示原本就不存在）。
+Future<PlatformInt64> ruleSubDelete(
+        {required String dbPath, required String id}) =>
+    RustLib.instance.api.crateApiRuleSubDelete(dbPath: dbPath, id: id);
+
+/// 单条订阅源刷新（async）— 拉远端 JSON 并按 sub_type 路由 import。
+/// 返回 JSON：`{"sub_type":N, "count":N | "summary":{...} | "error":"..."}`。
+Future<String> ruleSubRefresh({required String dbPath, required String id}) =>
+    RustLib.instance.api.crateApiRuleSubRefresh(dbPath: dbPath, id: id);
+
+/// 全部订阅源刷新（async）— 单条失败不打断其它，返回 JSON 数组：
+/// `[{"id":..., "name":..., "sub_type":N, "ok":bool, "message":"..."}]`。
+Future<String> ruleSubRefreshAll({required String dbPath}) =>
+    RustLib.instance.api.crateApiRuleSubRefreshAll(dbPath: dbPath);
+
+/// 按 id 取单条订阅源，返回 JSON `Option<RuleSub>`（不存在为 `null`）。
+Future<String> ruleSubGet({required String dbPath, required String id}) =>
+    RustLib.instance.api.crateApiRuleSubGet(dbPath: dbPath, id: id);

@@ -21,6 +21,7 @@ pub mod rss_article_dao;
 pub mod rss_read_record_dao;
 pub mod rss_source_dao;
 pub mod rss_star_dao;
+pub mod rule_sub_dao;
 pub mod source_dao;
 
 // 重新导出主要类型，方便上层调用
@@ -42,6 +43,7 @@ pub use rss_article_dao::RssArticleDao;
 pub use rss_read_record_dao::RssReadRecordDao;
 pub use rss_source_dao::RssSourceDao;
 pub use rss_star_dao::RssStarDao;
+pub use rule_sub_dao::RuleSubDao;
 pub use source_dao::SourceDao;
 
 use database::init_database as db_init;

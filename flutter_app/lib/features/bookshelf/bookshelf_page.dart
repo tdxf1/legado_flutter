@@ -145,6 +145,9 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                 } else if (value == 'rss_favorites') {
                   // 批次 18 (05-19): RSS 收藏页。
                   if (context.mounted) context.push('/rss-favorites');
+                } else if (value == 'rule_subs') {
+                  // 批次 19 (05-19): 订阅源页（RuleSub MVP）。
+                  if (context.mounted) context.push('/rule-subs');
                 }
               },
               itemBuilder: (context) => const [
@@ -201,6 +204,14 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                   child: ListTile(
                     leading: Icon(Icons.star_outline),
                     title: Text('RSS 收藏'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'rule_subs',
+                  child: ListTile(
+                    leading: Icon(Icons.cloud_sync_outlined),
+                    title: Text('订阅源'),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),

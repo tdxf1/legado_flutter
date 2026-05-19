@@ -2036,6 +2036,236 @@ pub fn rss_star_list(
 }
 
 // ============================================================
+// 订阅源 RuleSub (批次 19 / 05-19)
+// ============================================================
+//
+// 7 个 fn (funcId 102-108)。CRUD 全 sync，refresh / refresh_all 异步
+// (因为要 reqwest GET)。沿袭 RssSource 源管理（批次 16）+ webdav
+// 异步 (批次 11) 风格。
+//
+// 设计要点：
+// - rule_sub_create 内部生成 UUID + now() 时间戳，dart 端只需传 name/url/sub_type
+// - rule_sub_refresh 按 sub_type 路由到 SourceDao::import_from_json /
+//   RssSourceDao::import_from_json；sub_type=2 (替换规则) 暂占位返回
+//   `{"sub_type":2,"error":"替换规则订阅暂未实装"}`，保留批次 21+ 实装
+// - rule_sub_refresh_all 遍历所有订阅，单个失败不打断其它，每条结果
+//   带 ok / message，方便 UI 滚动 SnackBar 汇总
+
+/// 列出所有订阅源（custom_order ASC, name ASC），返回 JSON 数组。
+pub fn rule_sub_list_all(db_path: String) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rule_sub_dao::RuleSubDao::new(&conn);
+    let list = dao
+        .list_all()
+        .map_err(|e| format!("获取订阅源列表失败: {}", e))?;
+    serde_json::to_string(&list).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// 按 id 取单条订阅源，返回 JSON `Option<RuleSub>`。
+pub fn rule_sub_get(db_path: String, id: String) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rule_sub_dao::RuleSubDao::new(&conn);
+    let s = dao
+        .get_by_id(&id)
+        .map_err(|e| format!("查询订阅源失败: {}", e))?;
+    serde_json::to_string(&s).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// 新建订阅源 — 自动生成 UUID + 时间戳。返回新 RuleSub JSON。
+///
+/// `sub_type`：0=书源 / 1=RSS 源 / 2=替换规则（替换规则当前刷新会
+/// 返回占位错误，但条目本身可以正常建）。
+pub fn rule_sub_create(
+    db_path: String,
+    name: String,
+    url: String,
+    sub_type: i32,
+) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let now = chrono::Utc::now().timestamp();
+    let sub = core_storage::models::RuleSub {
+        id: uuid::Uuid::new_v4().to_string(),
+        name,
+        url,
+        sub_type,
+        custom_order: 0,
+        created_at: now,
+        updated_at: now,
+    };
+    let dao = core_storage::rule_sub_dao::RuleSubDao::new(&conn);
+    dao.upsert(&sub)
+        .map_err(|e| format!("创建订阅源失败: {}", e))?;
+    serde_json::to_string(&sub).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// 更新已有订阅源（id 必须存在）。返回受影响行数。
+///
+/// 调用方应先 get 已有 RuleSub 取出 created_at / custom_order，
+/// 但本接口为简化 UI 调用，仅接收 4 个最常改字段（name/url/sub_type）：
+/// 内部先 get_by_id 取 created_at + custom_order，再 upsert。
+pub fn rule_sub_update(
+    db_path: String,
+    id: String,
+    name: String,
+    url: String,
+    sub_type: i32,
+) -> Result<i64, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rule_sub_dao::RuleSubDao::new(&conn);
+    let mut existing = dao
+        .get_by_id(&id)
+        .map_err(|e| format!("查询订阅源失败: {}", e))?
+        .ok_or_else(|| format!("订阅源不存在: {}", id))?;
+    let now = chrono::Utc::now().timestamp();
+    existing.name = name;
+    existing.url = url;
+    existing.sub_type = sub_type;
+    existing.updated_at = now;
+    dao.upsert(&existing)
+        .map(|n| n as i64)
+        .map_err(|e| format!("更新订阅源失败: {}", e))
+}
+
+/// 删除订阅源，返回受影响行数（0 表示原本就不存在）。
+pub fn rule_sub_delete(db_path: String, id: String) -> Result<i64, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rule_sub_dao::RuleSubDao::new(&conn);
+    dao.delete_by_id(&id)
+        .map(|n| n as i64)
+        .map_err(|e| format!("删除订阅源失败: {}", e))
+}
+
+/// async：刷新单条订阅 — 拉 sub.url → 按 sub_type 路由到对应 import。
+///
+/// 返回 JSON：
+/// - `sub_type=0`：`{"sub_type":0, "count": N}` (导入书源数)
+/// - `sub_type=1`：`{"sub_type":1, "summary": {added,updated,skipped}}`
+/// - `sub_type=2`：`{"sub_type":2, "error": "替换规则订阅暂未实装"}`
+///   （仍属"成功响应"，仅 error 字段提示，便于 UI 区分实现差距 vs 网络错）
+pub async fn rule_sub_refresh(db_path: String, id: String) -> Result<String, String> {
+    // 1. 取订阅条目（async 前先结束 conn lifetime）
+    let sub = {
+        let conn = open_db(&db_path)?;
+        let dao = core_storage::rule_sub_dao::RuleSubDao::new(&conn);
+        dao.get_by_id(&id)
+            .map_err(|e| format!("查询订阅源失败: {}", e))?
+            .ok_or_else(|| format!("订阅源不存在: {}", id))?
+    };
+
+    // 2. sub_type=2 直接占位返回（不发起 HTTP）
+    if sub.sub_type == 2 {
+        return Ok(serde_json::json!({
+            "sub_type": 2,
+            "error": "替换规则订阅暂未实装",
+        })
+        .to_string());
+    }
+
+    // 3. 拉远端 JSON（用 core_net::HttpClient 复用 cookie/重试/超时配置）
+    let body = fetch_subscription_body(&sub.url).await?;
+
+    // 4. 按 sub_type 路由 import
+    match sub.sub_type {
+        0 => {
+            // 书源：SourceDao::import_from_json 需要 &mut Connection
+            let mut conn = open_db(&db_path)?;
+            let mut dao = core_storage::source_dao::SourceDao::new(&mut conn);
+            let count = dao
+                .import_from_json(&body)
+                .map_err(|e| format!("导入书源失败: {}", e))?;
+            Ok(serde_json::json!({
+                "sub_type": 0,
+                "count": count as i64,
+            })
+            .to_string())
+        }
+        1 => {
+            // RSS 源：RssSourceDao::import_from_json 只需 &Connection
+            let conn = open_db(&db_path)?;
+            let dao = core_storage::rss_source_dao::RssSourceDao::new(&conn);
+            let summary = dao
+                .import_from_json(&body)
+                .map_err(|e| format!("导入 RSS 源失败: {}", e))?;
+            Ok(serde_json::json!({
+                "sub_type": 1,
+                "summary": summary,
+            })
+            .to_string())
+        }
+        other => Err(format!("未知 sub_type: {}", other)),
+    }
+}
+
+/// async：刷新全部订阅源。每条独立处理，单个失败不打断其它。
+///
+/// 返回 JSON 数组：
+/// `[{"id":..., "name":..., "sub_type":N, "ok":true/false, "message":"..."}]`
+pub async fn rule_sub_refresh_all(db_path: String) -> Result<String, String> {
+    let subs = {
+        let conn = open_db(&db_path)?;
+        let dao = core_storage::rule_sub_dao::RuleSubDao::new(&conn);
+        dao.list_all()
+            .map_err(|e| format!("获取订阅源列表失败: {}", e))?
+    };
+
+    let mut results: Vec<serde_json::Value> = Vec::with_capacity(subs.len());
+    for sub in subs {
+        // 整条 try/catch — 单条失败不抛
+        let item = match rule_sub_refresh(db_path.clone(), sub.id.clone()).await {
+            Ok(json) => {
+                // 把 refresh 返回的内嵌字段揉进去
+                let inner: serde_json::Value =
+                    serde_json::from_str(&json).unwrap_or(serde_json::Value::Null);
+                let message = if let Some(err) = inner.get("error").and_then(|v| v.as_str()) {
+                    err.to_string()
+                } else if let Some(count) = inner.get("count").and_then(|v| v.as_i64()) {
+                    format!("已导入 {} 个书源", count)
+                } else if let Some(summary) = inner.get("summary") {
+                    let added = summary.get("added").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let updated = summary.get("updated").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let skipped = summary.get("skipped").and_then(|v| v.as_i64()).unwrap_or(0);
+                    format!(
+                        "新增 {}，更新 {}，跳过 {}",
+                        added, updated, skipped
+                    )
+                } else {
+                    "已刷新".to_string()
+                };
+                let ok = inner.get("error").is_none();
+                serde_json::json!({
+                    "id": sub.id,
+                    "name": sub.name,
+                    "sub_type": sub.sub_type,
+                    "ok": ok,
+                    "message": message,
+                })
+            }
+            Err(e) => serde_json::json!({
+                "id": sub.id,
+                "name": sub.name,
+                "sub_type": sub.sub_type,
+                "ok": false,
+                "message": e,
+            }),
+        };
+        results.push(item);
+    }
+    serde_json::to_string(&results).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// 用 core_net::HttpClient 拉订阅 URL 的 JSON 文本。
+/// 复用项目统一的 cookie/重试/超时/UA 配置；失败时把 reqwest 错误转
+/// 成中文描述方便 UI 直接 SnackBar。
+async fn fetch_subscription_body(url: &str) -> Result<String, String> {
+    let client = core_net::HttpClient::new(core_net::HttpClientConfig::default())
+        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+    client
+        .get_text(url)
+        .await
+        .map_err(|e| format!("拉取订阅源失败: {}", e))
+}
+
+// ============================================================
 // 内部辅助函数
 // ============================================================
 

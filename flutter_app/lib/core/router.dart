@@ -17,6 +17,7 @@ import '../features/rss/rss_article_list_page.dart';
 import '../features/rss/rss_article_detail_page.dart';
 import '../features/rss/rss_favorites_page.dart';
 import '../features/rss/rss_source_manage_page.dart';
+import '../features/rule_sub/rule_sub_page.dart';
 
 final router = GoRouter(
   initialLocation: '/bookshelf',
@@ -134,6 +135,11 @@ final router = GoRouter(
     GoRoute(
       path: '/rss-favorites',
       builder: (context, state) => const RssFavoritesPage(),
+    ),
+    // 批次 19 (05-19): 订阅源页（RuleSub MVP）。bookshelf_page PopupMenu 入口。
+    GoRoute(
+      path: '/rule-subs',
+      builder: (context, state) => const RuleSubPage(),
     ),
   ],
 );

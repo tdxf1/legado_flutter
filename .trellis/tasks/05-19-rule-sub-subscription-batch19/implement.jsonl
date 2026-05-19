@@ -1,0 +1,15 @@
+{"file": ".trellis/tasks/05-19-rule-sub-subscription-batch19/prd.md", "reason": "本任务 PRD"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 RssSourceDao import_from_json / RssArticleDao 风格"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Flutter UI ↔ Rust DAO ↔ async fetch ↔ DB 数据流"}
+{"file": "core/core-storage/src/database.rs", "reason": "确认 rule_subs schema (v11) — 7 字段不动"}
+{"file": "core/core-storage/src/models.rs", "reason": "RuleSub struct (批次 6 已加)"}
+{"file": "core/core-storage/src/lib.rs", "reason": "pub mod rule_sub_dao + 重导出"}
+{"file": "core/core-storage/src/rss_source_dao.rs", "reason": "import_from_json 风格 + 双格式探测参考（DAO 风格沿袭）"}
+{"file": "core/core-storage/src/source_dao.rs", "reason": "BookSourceDao import_from_json 入口"}
+{"file": "core/core-storage/src/replace_rule_dao.rs", "reason": "替换规则 DAO 占位（sub_type=2 暂不实装）"}
+{"file": "core/bridge/src/api.rs", "reason": "添加 7 个 pub fn (funcId 102-108)"}
+{"file": "core/bridge/build.rs", "reason": "REQUIRED_WIRE_FN_FRAGMENTS / DISPATCHER_FRAGMENTS 加 funcId 102-108"}
+{"file": "flutter_app/lib/features/rss/rss_source_manage_page.dart", "reason": "ConsumerStatefulWidget + 列表 / 弹窗 / 测试钩子模式（最近批次风格）"}
+{"file": "flutter_app/lib/features/bookshelf/bookshelf_page.dart", "reason": "AppBar PopupMenu 加 '订阅源'"}
+{"file": "flutter_app/lib/core/router.dart", "reason": "注册 /rule-subs"}
+{"file": ".trellis/tasks/05-18-drag-cancel-threshold-md3-followup/research/feature-gap-rss-manga-audio-misc.md", "reason": "RuleSub §5 / RuleSubActivity 字段映射详情"}

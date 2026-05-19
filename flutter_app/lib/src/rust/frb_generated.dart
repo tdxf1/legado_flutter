@@ -458,6 +458,33 @@ abstract class RustLibApi extends BaseApi {
       {required String dbPath,
       required PlatformInt64 limit,
       required PlatformInt64 offset});
+
+  // 批次 19 — 订阅源 RuleSub MVP
+  Future<String> crateApiRuleSubListAll({required String dbPath});
+
+  Future<String> crateApiRuleSubCreate(
+      {required String dbPath,
+      required String name,
+      required String url,
+      required int subType});
+
+  Future<PlatformInt64> crateApiRuleSubUpdate(
+      {required String dbPath,
+      required String id,
+      required String name,
+      required String url,
+      required int subType});
+
+  Future<PlatformInt64> crateApiRuleSubDelete(
+      {required String dbPath, required String id});
+
+  Future<String> crateApiRuleSubRefresh(
+      {required String dbPath, required String id});
+
+  Future<String> crateApiRuleSubRefreshAll({required String dbPath});
+
+  Future<String> crateApiRuleSubGet(
+      {required String dbPath, required String id});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -3320,6 +3347,200 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiRssStarListConstMeta => const TaskConstMeta(
         debugName: "rss_star_list",
         argNames: ["dbPath", "limit", "offset"],
+      );
+
+  // ============================================================
+  // 批次 19 — 订阅源 RuleSub MVP
+  // ============================================================
+
+  @override
+  Future<String> crateApiRuleSubListAll({required String dbPath}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 102, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRuleSubListAllConstMeta,
+      argValues: [dbPath],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRuleSubListAllConstMeta => const TaskConstMeta(
+        debugName: "rule_sub_list_all",
+        argNames: ["dbPath"],
+      );
+
+  @override
+  Future<String> crateApiRuleSubCreate(
+      {required String dbPath,
+      required String name,
+      required String url,
+      required int subType}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(name, serializer);
+        sse_encode_String(url, serializer);
+        sse_encode_i_32(subType, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 103, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRuleSubCreateConstMeta,
+      argValues: [dbPath, name, url, subType],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRuleSubCreateConstMeta => const TaskConstMeta(
+        debugName: "rule_sub_create",
+        argNames: ["dbPath", "name", "url", "subType"],
+      );
+
+  @override
+  Future<PlatformInt64> crateApiRuleSubUpdate(
+      {required String dbPath,
+      required String id,
+      required String name,
+      required String url,
+      required int subType}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(id, serializer);
+        sse_encode_String(name, serializer);
+        sse_encode_String(url, serializer);
+        sse_encode_i_32(subType, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 104, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_i_64,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRuleSubUpdateConstMeta,
+      argValues: [dbPath, id, name, url, subType],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRuleSubUpdateConstMeta => const TaskConstMeta(
+        debugName: "rule_sub_update",
+        argNames: ["dbPath", "id", "name", "url", "subType"],
+      );
+
+  @override
+  Future<PlatformInt64> crateApiRuleSubDelete(
+      {required String dbPath, required String id}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(id, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 105, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_i_64,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRuleSubDeleteConstMeta,
+      argValues: [dbPath, id],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRuleSubDeleteConstMeta => const TaskConstMeta(
+        debugName: "rule_sub_delete",
+        argNames: ["dbPath", "id"],
+      );
+
+  @override
+  Future<String> crateApiRuleSubRefresh(
+      {required String dbPath, required String id}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(id, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 106, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRuleSubRefreshConstMeta,
+      argValues: [dbPath, id],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRuleSubRefreshConstMeta => const TaskConstMeta(
+        debugName: "rule_sub_refresh",
+        argNames: ["dbPath", "id"],
+      );
+
+  @override
+  Future<String> crateApiRuleSubRefreshAll({required String dbPath}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 107, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRuleSubRefreshAllConstMeta,
+      argValues: [dbPath],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRuleSubRefreshAllConstMeta => const TaskConstMeta(
+        debugName: "rule_sub_refresh_all",
+        argNames: ["dbPath"],
+      );
+
+  @override
+  Future<String> crateApiRuleSubGet(
+      {required String dbPath, required String id}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(id, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 108, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRuleSubGetConstMeta,
+      argValues: [dbPath, id],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRuleSubGetConstMeta => const TaskConstMeta(
+        debugName: "rule_sub_get",
+        argNames: ["dbPath", "id"],
       );
 
   @protected
