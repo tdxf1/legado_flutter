@@ -870,6 +870,31 @@ pub fn validate_source_from_db(db_path: String, source_id: String) -> Result<Str
     serde_json::to_string(&issues).map_err(|e| format!("序列化失败: {}", e))
 }
 
+/// 实跑 live test — 在静态校验之上 顺序跑 search / book_info / toc / content
+/// 4 路 (批次 21 / 05-19, funcId 109)。
+///
+/// 返回 [`core_source::LiveTestReport`] 的 JSON 字符串。任一阶段失败不
+/// 短路，4 个 stages 一定都会出现在结果里 — 失败的 stage 用 `error` 字段
+/// 标明原因（[`ParserError::Display`] 字符串）。
+///
+/// `keyword` 由 UI 端传入，建议默认 `"测试"` / `"test"`。
+pub async fn validate_source_live(
+    db_path: String,
+    source_id: String,
+    keyword: String,
+) -> Result<String, String> {
+    let storage_source = {
+        let mut conn = open_db(&db_path)?;
+        let dao = core_storage::source_dao::SourceDao::new(&mut conn);
+        dao.get_by_id(&source_id)
+            .map_err(|e| format!("查询书源失败: {}", e))?
+            .ok_or_else(|| format!("书源不存在: {}", source_id))?
+    };
+    let source = storage_to_source_book_source(&storage_source)?;
+    let report = core_source::run_live_test(&source, &keyword).await;
+    serde_json::to_string(&report).map_err(|e| format!("序列化失败: {}", e))
+}
+
 /// 导出所有书源为 Legado 兼容 JSON 数组（camelCase 格式）
 pub fn export_all_sources(db_path: String) -> Result<String, String> {
     let mut conn = open_db(&db_path)?;

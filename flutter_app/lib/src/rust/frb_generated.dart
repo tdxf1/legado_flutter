@@ -485,6 +485,11 @@ abstract class RustLibApi extends BaseApi {
 
   Future<String> crateApiRuleSubGet(
       {required String dbPath, required String id});
+
+  Future<String> crateApiValidateSourceLive(
+      {required String dbPath,
+      required String sourceId,
+      required String keyword});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -3541,6 +3546,36 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiRuleSubGetConstMeta => const TaskConstMeta(
         debugName: "rule_sub_get",
         argNames: ["dbPath", "id"],
+      );
+
+  @override
+  Future<String> crateApiValidateSourceLive(
+      {required String dbPath,
+      required String sourceId,
+      required String keyword}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(sourceId, serializer);
+        sse_encode_String(keyword, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 109, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiValidateSourceLiveConstMeta,
+      argValues: [dbPath, sourceId, keyword],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiValidateSourceLiveConstMeta =>
+      const TaskConstMeta(
+        debugName: "validate_source_live",
+        argNames: ["dbPath", "sourceId", "keyword"],
       );
 
   @protected

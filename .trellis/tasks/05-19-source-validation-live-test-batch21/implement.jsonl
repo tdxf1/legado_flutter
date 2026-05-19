@@ -1,0 +1,9 @@
+{"file": ".trellis/tasks/05-19-source-validation-live-test-batch21/prd.md", "reason": "本任务 PRD"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 BookSourceParser 4 个 fn / validate_book_source / Display ParserError"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Flutter UI ↔ Rust async test 数据流 + JSON 契约"}
+{"file": "core/core-source/src/lib.rs", "reason": "validate_book_source 现有静态校验入口；LiveTestReport struct 加这里"}
+{"file": "core/core-source/src/parser.rs", "reason": "BookSourceParser::search/get_book_info/get_chapters/get_chapter_content 4 个 async fn — live test 沿用"}
+{"file": "core/bridge/src/api.rs", "reason": "添加 1 个 pub async fn (funcId 109) validate_source_live"}
+{"file": "core/bridge/build.rs", "reason": "REQUIRED_WIRE_FN_FRAGMENTS / DISPATCHER_FRAGMENTS 加 funcId 109"}
+{"file": "flutter_app/lib/features/source/source_page.dart", "reason": "改 _showValidateDialog 加'实跑测试'按钮 + 新 _LiveTestDialog"}
+{"file": "flutter_app/lib/src/rust/api.dart", "reason": "加 validateSourceLive wrapper"}

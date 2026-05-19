@@ -20,7 +20,7 @@ pub use rss::RssParser;
 pub use rule_engine::{RuleEngine, RuleError, RuleExpression, RuleType};
 pub use types::{BookInfoRule, BookSource, ContentRule, ExtractType, SearchRule, TocRule};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use jsonpath_lib as jsonpath;
 use sxd_xpath::Factory;
@@ -30,11 +30,39 @@ pub fn parse_book_source(json: &str) -> Result<BookSource, String> {
     serde_json::from_str(json).map_err(|e| format!("解析书源失败: {}", e))
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationIssue {
     pub field: String,
     pub severity: String, // "error" | "warning" | "info"
     pub message: String,
+}
+
+/// 实跑 live test 的单阶段结果（批次 21 / 05-19）。对应 4 路：
+/// `search` / `book_info` / `toc` / `content`。
+///
+/// `latency_ms` 用 `Instant::now()` + `elapsed().as_millis()` 计；
+/// `sample` 是该阶段抓到的代表性数据（搜索第一本书名 / 章节预览前
+/// 200 字符 等），便于 UI 卡片直接展示而不需要再调一次接口。
+/// `error` 仅在 `ok=false` 时填，写入 `ParserError::Display` 的字符串。
+///
+/// `Deserialize` 是为了 Rust 单测做 JSON round-trip + 后续给其它 caller
+/// 复用同一模型。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiveTestStage {
+    pub stage: String,
+    pub ok: bool,
+    pub latency_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// 实跑 live test 的整体报告 — 4 个 stages + 静态校验 issues。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiveTestReport {
+    pub stages: Vec<LiveTestStage>,
+    pub static_issues: Vec<ValidationIssue>,
 }
 
 /// 验证书源配置是否有效，返回结构化结果
@@ -69,6 +97,149 @@ pub fn validate_book_source(source: &BookSource) -> Vec<ValidationIssue> {
     validate_rule_expressions(source, &mut issues);
 
     issues
+}
+
+/// 实跑 live test — 在静态规则校验之上，依次跑 search / book_info /
+/// toc / content 4 路网络请求，每一阶段都计时 + 收集 sample / error，
+/// 最终返回完整 [`LiveTestReport`]。
+///
+/// 设计要点（批次 21 / 05-19）：
+/// 1. **顺序执行**，不并行 — 避免对书源造成压力，也方便用上一阶段
+///    成功抓到的 url 喂给下一阶段。
+/// 2. **失败不短路** — 任一阶段抛 [`ParserError`]，依然继续跑剩下的；
+///    没拿到上游 url 时用一个 fallback dummy url（`source.url + "/book/test"`），
+///    让后续阶段的规则路径至少能跑一次，把 RuleConfig / Network 错误暴露给用户。
+/// 3. **sample 长度截断** — content 仅取前 200 字符，避免 UI 渲染巨型 payload。
+/// 4. **每阶段独立计时** — `Instant::now()` + `elapsed().as_millis() as i64`。
+pub async fn run_live_test(source: &BookSource, keyword: &str) -> LiveTestReport {
+    let static_issues = validate_book_source(source);
+    let parser = BookSourceParser::new();
+    let mut stages: Vec<LiveTestStage> = Vec::new();
+
+    // ===== Stage 1: search =====
+    let t = std::time::Instant::now();
+    let mut next_book_url: Option<String> = None;
+    match parser.search(source, keyword).await {
+        Ok(results) if !results.is_empty() => {
+            let r = &results[0];
+            next_book_url = Some(r.book_url.clone());
+            stages.push(LiveTestStage {
+                stage: "search".into(),
+                ok: true,
+                latency_ms: t.elapsed().as_millis() as i64,
+                sample: Some(format!("第一本: {} / {}", r.name, r.author)),
+                error: None,
+            });
+        }
+        Ok(_) => stages.push(LiveTestStage {
+            stage: "search".into(),
+            ok: false,
+            latency_ms: t.elapsed().as_millis() as i64,
+            sample: None,
+            error: Some("无搜索结果".into()),
+        }),
+        Err(e) => stages.push(LiveTestStage {
+            stage: "search".into(),
+            ok: false,
+            latency_ms: t.elapsed().as_millis() as i64,
+            sample: None,
+            error: Some(e.to_string()),
+        }),
+    }
+
+    // ===== Stage 2: book_info =====
+    // fallback: 如果 search 没拿到 book_url，用 `source.url + "/book/test"`
+    // 让规则路至少跑一次，把 RuleConfig / Network 错误暴露出来。
+    let book_url_for_info = next_book_url.clone().unwrap_or_else(|| {
+        format!("{}/book/test", source.url.trim_end_matches('/'))
+    });
+    let t = std::time::Instant::now();
+    let mut next_chapters_url: Option<String> = None;
+    match parser.get_book_info(source, &book_url_for_info).await {
+        Ok(detail) => {
+            next_chapters_url = detail.chapters_url.clone();
+            stages.push(LiveTestStage {
+                stage: "book_info".into(),
+                ok: true,
+                latency_ms: t.elapsed().as_millis() as i64,
+                sample: Some(format!("{} / {}", detail.name, detail.author)),
+                error: None,
+            });
+        }
+        Err(e) => stages.push(LiveTestStage {
+            stage: "book_info".into(),
+            ok: false,
+            latency_ms: t.elapsed().as_millis() as i64,
+            sample: None,
+            error: Some(e.to_string()),
+        }),
+    }
+
+    // ===== Stage 3: toc =====
+    let toc_url = next_chapters_url
+        .clone()
+        .unwrap_or_else(|| book_url_for_info.clone());
+    let t = std::time::Instant::now();
+    let mut next_chapter_url: Option<String> = None;
+    match parser.get_chapters(source, &toc_url).await {
+        Ok(chs) if !chs.is_empty() => {
+            next_chapter_url = Some(chs[0].url.clone());
+            stages.push(LiveTestStage {
+                stage: "toc".into(),
+                ok: true,
+                latency_ms: t.elapsed().as_millis() as i64,
+                sample: Some(format!(
+                    "第一章: {} (共 {} 章)",
+                    chs[0].title,
+                    chs.len()
+                )),
+                error: None,
+            });
+        }
+        Ok(_) => stages.push(LiveTestStage {
+            stage: "toc".into(),
+            ok: false,
+            latency_ms: t.elapsed().as_millis() as i64,
+            sample: None,
+            error: Some("章节列表为空".into()),
+        }),
+        Err(e) => stages.push(LiveTestStage {
+            stage: "toc".into(),
+            ok: false,
+            latency_ms: t.elapsed().as_millis() as i64,
+            sample: None,
+            error: Some(e.to_string()),
+        }),
+    }
+
+    // ===== Stage 4: content =====
+    let chapter_url = next_chapter_url.unwrap_or_else(|| toc_url.clone());
+    let t = std::time::Instant::now();
+    match parser.get_chapter_content(source, &chapter_url).await {
+        Ok(content) => {
+            // 仅取前 200 字符做 sample，避免 UI 渲染巨型 payload。
+            let preview = content.content.chars().take(200).collect::<String>();
+            stages.push(LiveTestStage {
+                stage: "content".into(),
+                ok: true,
+                latency_ms: t.elapsed().as_millis() as i64,
+                sample: Some(preview),
+                error: None,
+            });
+        }
+        Err(e) => stages.push(LiveTestStage {
+            stage: "content".into(),
+            ok: false,
+            latency_ms: t.elapsed().as_millis() as i64,
+            sample: None,
+            error: Some(e.to_string()),
+        }),
+    }
+
+    LiveTestReport {
+        stages,
+        static_issues,
+    }
 }
 
 fn validate_search_rules(source: &BookSource, issues: &mut Vec<ValidationIssue>) {
@@ -707,5 +878,258 @@ mod tests {
             "CSS with @attribute suffix and property selectors should not produce error, got: {:?}",
             issues
         );
+    }
+
+    // ── 批次 21 (05-19): run_live_test ─────────────────────────────────────
+
+    /// 构造一个 4 路完整规则的 BookSource，base_url 由 caller 传入
+    /// 以便对接 httpmock。规则均使用静态校验合法的 CSS / `@attr` 表达式。
+    fn make_full_source(base_url: &str) -> BookSource {
+        BookSource {
+            id: "live-test-source".into(),
+            name: "Live Test".into(),
+            url: base_url.to_string(),
+            source_type: 0,
+            enabled: true,
+            group_name: None,
+            custom_order: 0,
+            weight: 0,
+            rule_search: Some(SearchRule {
+                search_url: Some("/search?keyword={{keyword}}".into()),
+                book_list: Some(".book-item".into()),
+                name: Some(".title@text".into()),
+                author: Some(".author@text".into()),
+                book_url: Some("a@href".into()),
+                cover_url: None,
+                kind: None,
+                last_chapter: None,
+                ..Default::default()
+            }),
+            rule_book_info: Some(BookInfoRule {
+                name: Some(".book-name@text".into()),
+                author: Some(".book-author@text".into()),
+                intro: None,
+                cover_url: None,
+                kind: None,
+                last_chapter: None,
+                toc_url: Some("a.toc-link@href".into()),
+                ..Default::default()
+            }),
+            rule_toc: Some(TocRule {
+                chapter_list: Some("ul.chapters@li".into()),
+                chapter_name: Some("a@text".into()),
+                chapter_url: Some("a@href".into()),
+                ..Default::default()
+            }),
+            rule_content: Some(ContentRule {
+                content: Some("div.content@text".into()),
+                next_content_url: None,
+                ..Default::default()
+            }),
+            rule_review: None,
+            login_url: None,
+            login_ui: None,
+            login_check_js: None,
+            header: None,
+            js_lib: None,
+            cover_decode_js: None,
+            explore_url: None,
+            rule_explore: None,
+            book_url_pattern: None,
+            enabled_explore: true,
+            last_update_time: 0,
+            book_source_comment: None,
+            concurrent_rate: None,
+            variable_comment: None,
+            explore_screen: None,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_run_live_test_all_pass() {
+        use httpmock::prelude::*;
+
+        let server = MockServer::start();
+        let _search = server.mock(|when, then| {
+            when.method(GET).path("/search");
+            then.status(200)
+                .header("Content-Type", "text/html; charset=utf-8")
+                .body(
+                    r#"<html><body>
+                    <div class="book-item">
+                        <span class="title">三体</span>
+                        <span class="author">刘慈欣</span>
+                        <a href="/book/1">详情</a>
+                    </div>
+                    </body></html>"#,
+                );
+        });
+        let _book_info = server.mock(|when, then| {
+            when.method(GET).path("/book/1");
+            then.status(200)
+                .header("Content-Type", "text/html; charset=utf-8")
+                .body(
+                    r#"<html><body>
+                    <h1 class="book-name">三体</h1>
+                    <span class="book-author">刘慈欣</span>
+                    <a class="toc-link" href="/book/1/toc">目录</a>
+                    </body></html>"#,
+                );
+        });
+        let _toc = server.mock(|when, then| {
+            when.method(GET).path("/book/1/toc");
+            then.status(200)
+                .header("Content-Type", "text/html; charset=utf-8")
+                .body(
+                    r#"<html><body>
+                    <ul class="chapters">
+                        <li><a href="/book/1/ch1">第一章</a></li>
+                        <li><a href="/book/1/ch2">第二章</a></li>
+                    </ul>
+                    </body></html>"#,
+                );
+        });
+        let _content = server.mock(|when, then| {
+            when.method(GET).path("/book/1/ch1");
+            then.status(200)
+                .header("Content-Type", "text/html; charset=utf-8")
+                .body(
+                    r#"<html><body>
+                    <div class="content">这是第一章的正文内容，足够长以验证 sample 截断逻辑。</div>
+                    </body></html>"#,
+                );
+        });
+
+        let source = make_full_source(&server.base_url());
+        let report = run_live_test(&source, "三体").await;
+
+        assert_eq!(report.stages.len(), 4, "应该有 4 个 stage");
+        for s in &report.stages {
+            assert!(s.ok, "stage {} should be ok, error={:?}", s.stage, s.error);
+        }
+        assert_eq!(report.stages[0].stage, "search");
+        assert_eq!(report.stages[1].stage, "book_info");
+        assert_eq!(report.stages[2].stage, "toc");
+        assert_eq!(report.stages[3].stage, "content");
+        assert!(report.stages[0].sample.as_deref().unwrap_or("").contains("三体"));
+        assert!(report.stages[2]
+            .sample
+            .as_deref()
+            .unwrap_or("")
+            .contains("第一章"));
+        assert!(report.stages[3]
+            .sample
+            .as_deref()
+            .unwrap_or("")
+            .contains("第一章的正文"));
+    }
+
+    #[tokio::test]
+    async fn test_run_live_test_search_fail() {
+        use httpmock::prelude::*;
+
+        let server = MockServer::start();
+        // search 直接 500 → ParserError::Network
+        let _search = server.mock(|when, then| {
+            when.method(GET).path("/search");
+            then.status(500).body("internal error");
+        });
+
+        let source = make_full_source(&server.base_url());
+        let report = run_live_test(&source, "test").await;
+
+        assert_eq!(report.stages.len(), 4);
+        assert_eq!(report.stages[0].stage, "search");
+        assert!(!report.stages[0].ok, "search 应该失败");
+        assert!(report.stages[0].error.is_some());
+
+        // 后续 stages 仍然尝试 — book_info 用 fallback url，
+        // 也会因为 mock server 没有匹配的 path 而失败。但每个 stage
+        // 都被独立执行（不短路）。
+        for s in &report.stages[1..] {
+            assert!(!s.ok, "stage {} should fail when search failed", s.stage);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_run_live_test_static_issues_included() {
+        // rule_search 缺失：static_issues 非空，4 个 stages 全 RuleConfig
+        let mut source = make_full_source("https://example.invalid");
+        source.rule_search = None;
+
+        let report = run_live_test(&source, "test").await;
+
+        // 静态校验应该 catch 到 rule_search 缺失
+        assert!(
+            !report.static_issues.is_empty(),
+            "static_issues 不应为空，至少应包含 rule_search 缺失的 warning"
+        );
+        let has_rule_search_warning = report
+            .static_issues
+            .iter()
+            .any(|i| i.field == "rule_search");
+        assert!(
+            has_rule_search_warning,
+            "static_issues 应包含 rule_search 字段的告警，实际: {:?}",
+            report.static_issues
+        );
+
+        // 4 个 stages 全失败，且 search stage 的错误应反映 RuleConfig
+        // 路径（书源 未配置 rule_search）。
+        assert_eq!(report.stages.len(), 4);
+        assert!(!report.stages[0].ok);
+        let search_err = report.stages[0].error.as_deref().unwrap_or("");
+        assert!(
+            search_err.contains("rule_search") || search_err.contains("规则配置"),
+            "search stage error 应反映 RuleConfig，实际: {}",
+            search_err
+        );
+    }
+
+    #[test]
+    fn test_live_test_report_json_round_trip() {
+        let report = LiveTestReport {
+            stages: vec![
+                LiveTestStage {
+                    stage: "search".into(),
+                    ok: true,
+                    latency_ms: 123,
+                    sample: Some("第一本: 三体 / 刘慈欣".into()),
+                    error: None,
+                },
+                LiveTestStage {
+                    stage: "book_info".into(),
+                    ok: false,
+                    latency_ms: 456,
+                    sample: None,
+                    error: Some("网络请求失败: timeout".into()),
+                },
+            ],
+            static_issues: vec![ValidationIssue {
+                field: "rule_search".into(),
+                severity: "warning".into(),
+                message: "未配置搜索规则".into(),
+            }],
+        };
+
+        let json = serde_json::to_string(&report).expect("serialize");
+        let parsed: LiveTestReport = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.stages.len(), 2);
+        assert_eq!(parsed.stages[0].stage, "search");
+        assert!(parsed.stages[0].ok);
+        assert_eq!(parsed.stages[0].latency_ms, 123);
+        assert_eq!(parsed.stages[0].sample.as_deref(), Some("第一本: 三体 / 刘慈欣"));
+        assert!(parsed.stages[0].error.is_none());
+        assert_eq!(parsed.stages[1].stage, "book_info");
+        assert!(!parsed.stages[1].ok);
+        assert!(parsed.stages[1].sample.is_none());
+        assert_eq!(
+            parsed.stages[1].error.as_deref(),
+            Some("网络请求失败: timeout")
+        );
+        assert_eq!(parsed.static_issues.len(), 1);
+        assert_eq!(parsed.static_issues[0].field, "rule_search");
     }
 }

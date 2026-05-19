@@ -842,3 +842,22 @@ Future<String> ruleSubRefreshAll({required String dbPath}) =>
 /// 按 id 取单条订阅源，返回 JSON `Option<RuleSub>`（不存在为 `null`）。
 Future<String> ruleSubGet({required String dbPath, required String id}) =>
     RustLib.instance.api.crateApiRuleSubGet(dbPath: dbPath, id: id);
+
+// ============================================================
+// 书源实跑 LiveTest（批次 21 / 05-19）
+// ============================================================
+
+/// 实跑 4 路 live test：search → book_info → toc → content。返回
+/// [`LiveTestReport`] 的 JSON 字符串：
+/// `{"stages": [{"stage", "ok", "latency_ms", "sample?", "error?"}, ...],
+///   "static_issues": [{"field", "severity", "message"}, ...]}`
+///
+/// `keyword` 由 UI 输入；建议默认 `"测试"` 或 `"test"`。任一阶段失败
+/// 不短路，4 个 stages 一定都会出现，失败的 stage 用 `error` 字段标明
+/// 原因（[`ParserError::Display`] 字符串）。
+Future<String> validateSourceLive(
+        {required String dbPath,
+        required String sourceId,
+        required String keyword}) =>
+    RustLib.instance.api.crateApiValidateSourceLive(
+        dbPath: dbPath, sourceId: sourceId, keyword: keyword);
