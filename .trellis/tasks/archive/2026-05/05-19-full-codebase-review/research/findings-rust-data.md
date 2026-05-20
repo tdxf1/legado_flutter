@@ -57,6 +57,8 @@
 
 **建议**: (1) 对外文档/UI 文案明确"备份密码不是加密强度保护，仅为 Legado 互兼容标记"；(2) 引入额外 AES-GCM + Argon2id 派生的"强加密备份" 选项，旧格式仅保留作 fallback 互兼容；(3) 严格审查所有"已加密"措辞避免误导用户。
 
+**Resolution (BATCH-09, 2026-05-21，缩范围)**: legado_aes.rs 模块顶部 doc 加完整安全警告章节（"⚠ 弱混淆而非真加密"），罗列 ECB/MD5/PKCS7/空密码 4 个具体弱点；`encrypt_legado_aes` / `decrypt_legado_aes` 函数 doc 加 weak 标记 + 引用 finding；模块加 `static WEAK_CRYPTO_WARNED: Once`，首次调 encrypt/decrypt 时打印一次 `tracing::warn!` 提醒运维 / 开发者，避免日志污染。**未做** v2 强加密（AES-GCM + Argon2id）— audit 揭示 legado_aes 模块当前**未投产**（backup_dao 导出明文 JSON，未调 encrypt_legado_aes），零真实用户密文存量场景下提前做 v2 是 over-engineering，留 BATCH-09b 等真正接入加密备份功能时再做。
+
 ---
 
 ### F-W1A-002 [P0 严重][B-正确性][bridge/api]
@@ -80,6 +82,8 @@
 **详细**: 注释里也承认"错密码也能'解出'看似合法的 PKCS7 字节流"。`try_decrypt_or_passthrough_array` 在解密失败时还做 `is_array()` fallback，攻击者只要让明文头是 `[`，就能绕过解密路径。配合 P0-001 弱算法，备份 zip 完整性几乎无保障。
 
 **建议**: 短期：在解密成功后强制 JSON parse，失败即视为密文损坏；长期：见 P0-001 引入 AES-GCM。
+
+**Resolution (BATCH-09, 2026-05-21)**: `try_decrypt_or_passthrough_array` 在 `decrypt_legado_aes` 解密成功后追加强制 JSON Array 校验：(1) `serde_json::from_str` 解析为 `Value`，失败即返回 Err；(2) 若解出非 Array，返回 Err 含具体类型名（Object/String/Number/...）。这把"PKCS7+UTF-8 双过但解出乱码"的攻击窗口完全关上 — servers.json 业务合约就是 Array，解出非 Array 必然密码错或密文损坏。+ 2 单测：`test_try_decrypt_rejects_non_array_after_successful_decrypt`（正确密码加密 Object，解出非 Array → Err）+ `test_try_decrypt_rejects_garbage_when_padding_passes`（9 个错密码全部 Err，不返回乱码字符串）。`decrypt_legado_aes` 本体保留低层比特互通能力不动。
 
 ---
 
@@ -195,6 +199,8 @@
 
 **建议**: 在 `read_to_string` 前先 check `entry.size()` (压缩前) 和 `entry.compressed_size()`，超过 50 MB 单文件 / 500 MB 总量就拒绝；或者改成流式解析（serde_json::from_reader）。
 
+**Resolution (BATCH-09, 2026-05-21)**: `import_from_zip` 加双层 cap 防 zip-bomb：(1) `entry.size()` 预检 — central directory 字段做快速拒绝（攻击者可篡改但快路径有效）；(2) `Read::take(MAX_ZIP_ENTRY_SIZE + 1)` 实读 cap — 兜底 size 字段被篡改的场景，实际读出超 50MB 即拒；(3) accumulator `total_decompressed` 用 `saturating_add` 防溢出，超 500MB 总限即拒。两层缺一不可。常量公开 `MAX_ZIP_ENTRY_SIZE = 50 * 1024 * 1024` / `MAX_ZIP_TOTAL_SIZE = 500 * 1024 * 1024`。+ 2 单测：60MB 单 entry zip 应拒（验证单 cap）+ 5 个 KNOWN entry 各 2B 正常 zip 应过（验证 accumulator 不误触）。
+
 ---
 
 ### F-W1A-013 [P1 主要][A-架构][core-storage/legado_field_map]
@@ -300,6 +306,8 @@
 **详细**: 注释里说"replace_all 在 lock 外跑"是好的，但 lock 内还有 `get_or_load_rules` 的 `||` 闭包会执行 SQL（DB io 在 mutex 内），第一次冷启动几十 ms 阻塞所有并行 reader。FRB Mode `Sync` 调用走 Dart UI worker，长时间 lock 会卡主线程。
 
 **建议**: 把 `get_or_load_rules` 内的 SQL 调用移到 lock 外（先释放 lock 拿规则列表，再加锁更新缓存）；或者用 `parking_lot::RwLock` 让多读者并发。
+
+**Resolution (BATCH-09, 2026-05-21)**: `apply_replace_rules_impl` 重构为三阶段 SQL-out-of-lock 模式：(1) Phase 1 —— 加锁 + `try_get_rules` 只读 probe，命中即返回 `Some(Arc)` 释放锁；(2) Phase 2 —— 锁外跑 SQL（`open_db` + `dao.get_enabled`）；(3) Phase 3 —— 重新加锁 + double-check（其它线程可能在 SQL 期间已填好同 generation 的 cache）→ 用别人的或 `store_rules` 存自己的 + `ensure_regex_generation` + 编译 regex。`ReplaceRulesCache` 加新方法 `try_get_rules`（只读 probe，不分配不写）+ `store_rules`（只写）；旧 `get_or_load_rules` 标 `#[cfg(test)]` 保留供 cache_concurrency_tests 复用。所有 16 个 bridge tests 通过，**关键 generation 隔离不变量** `unified_cache_keeps_generations_isolated` 仍过。生产路径 SQL 不再持锁，章节切换 burst 时 reader 主线程不再串行化。
 
 ---
 

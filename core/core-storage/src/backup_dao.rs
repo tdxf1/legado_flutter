@@ -68,6 +68,18 @@ pub const KNOWN_FILE_NAMES: &[&str] = &[
     FILE_BOOK_SOURCE,
 ];
 
+/// 单 zip entry 解压后大小硬上限（50 MB）。超此大小认为是 zip-bomb 拒绝
+/// 导入（F-W1A-012, BATCH-09）。
+///
+/// Legado 真实备份单文件量级一般 <几 MB（5 张表 JSON 文本）。50 MB 给
+/// 高密度用户（几千本书 / 几万条书签）留 10x 余量。
+pub const MAX_ZIP_ENTRY_SIZE: u64 = 50 * 1024 * 1024;
+
+/// zip 整体识别 entry 累计解压大小硬上限（500 MB）。即便每条 entry 都
+/// 卡在 50 MB 之下，5 张表加起来也有可能爆内存（恶意 5×100MB 构造）。
+/// 累计 500 MB 兜底（F-W1A-012, BATCH-09）。
+pub const MAX_ZIP_TOTAL_SIZE: u64 = 500 * 1024 * 1024;
+
 /// 导入摘要（Flutter 侧 SnackBar 显示用）
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ImportSummary {
@@ -200,7 +212,14 @@ pub fn import_from_zip(conn: &mut Connection, zip_path: &str) -> Result<ImportSu
     // 先一次性把每个识别到的 JSON 文件读到内存（zip 顺序不保证，得
     // 确保 sources 先读完才能给 books 用 sources_url_to_id 映射）。
     // 5 张表 JSON 全在一个 zip 里，量级一般 <几 MB，全 RAM 可接受。
+    //
+    // **F-W1A-012 加固（2026-05-21, BATCH-09）**：双层大小 cap 防 zip-bomb：
+    // 1. `entry.size()` 预检：来自 zip central directory，攻击者可篡改；
+    //    快路径快速拒绝合法构造的恶意 zip。
+    // 2. `Read::take(MAX + 1)` 实读 cap：兜底 size 字段被篡改的情况，
+    //    实际读出超过 MAX 字节即拒绝。两层缺一不可。
     let mut payloads: HashMap<String, String> = HashMap::new();
+    let mut total_decompressed: u64 = 0;
     for i in 0..archive.len() {
         let mut entry = archive
             .by_index(i)
@@ -209,10 +228,33 @@ pub fn import_from_zip(conn: &mut Connection, zip_path: &str) -> Result<ImportSu
         if !KNOWN_FILE_NAMES.contains(&name.as_str()) {
             continue;
         }
+        // 第 1 层：信 size 字段做快速拒绝
+        let declared = entry.size();
+        if declared > MAX_ZIP_ENTRY_SIZE {
+            return Err(format!(
+                "zip entry {} 声明大小 {} 字节超过单文件限制 {} 字节（疑似 zip-bomb）",
+                name, declared, MAX_ZIP_ENTRY_SIZE
+            ));
+        }
+        total_decompressed = total_decompressed.saturating_add(declared);
+        if total_decompressed > MAX_ZIP_TOTAL_SIZE {
+            return Err(format!(
+                "zip 累计解压大小已超过总限制 {} 字节（疑似 zip-bomb）",
+                MAX_ZIP_TOTAL_SIZE
+            ));
+        }
+        // 第 2 层：take(MAX + 1) 实读 cap，兜底 size 字段被篡改
         let mut buf = String::new();
-        entry
+        let mut limited = (&mut entry).take(MAX_ZIP_ENTRY_SIZE + 1);
+        limited
             .read_to_string(&mut buf)
             .map_err(|e| format!("读取 {} 失败: {}", name, e))?;
+        if buf.len() as u64 > MAX_ZIP_ENTRY_SIZE {
+            return Err(format!(
+                "zip entry {} 实读字节超过单文件限制 {} 字节（声明 size 字段被篡改）",
+                name, MAX_ZIP_ENTRY_SIZE
+            ));
+        }
         payloads.insert(name, buf);
     }
 
@@ -942,5 +984,73 @@ mod tests {
         let _ = dir;
         // params 用一下避免 unused 提示
         let _ = params![1];
+    }
+
+    /// F-W1A-012 zip-bomb 防御：单 entry 解压后超过 50MB 应被拒绝（实读 cap）。
+    ///
+    /// 构造法：把一个 60MB 的 bookshelf.json 写进 zip。zip 用 deflate 压缩
+    /// 重复字符可压到几 KB，central directory 的 size 字段会写实际 60MB。
+    /// 我们的 entry size 预检应在第 1 层（信 size 字段）就拒绝。
+    #[test]
+    fn test_import_zip_rejects_oversized_single_entry() {
+        let (dir, mut conn) = setup();
+        let zip_path = dir.path().join("oversized.zip");
+        // 60 MB 重复 'a'，能高效 deflate 压缩，central size 字段写 60MB。
+        let payload = "a".repeat(60 * 1024 * 1024);
+        let f = File::create(&zip_path).unwrap();
+        let mut zip = ZipWriter::new(f);
+        zip.start_file(FILE_BOOKSHELF, SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(payload.as_bytes()).unwrap();
+        zip.finish().unwrap();
+
+        let result = import_from_zip(&mut conn, zip_path.to_str().unwrap());
+        assert!(
+            result.is_err(),
+            "60MB 单 entry zip 应被拒绝，实际返回 Ok({:?})",
+            result.ok()
+        );
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("超过单文件限制") || msg.contains("zip-bomb"),
+            "错误信息应说明单 entry 超限：{}",
+            msg
+        );
+
+        let _ = dir;
+    }
+
+    /// F-W1A-012 zip-bomb 防御正常路径：5 个 KNOWN entry 各 1KB 累计远低于
+    /// total cap 时应正常导入（验证 accumulator 不误触）。本测试是 sanity
+    /// check —— 让 accumulator 走全条件路径但不触发 cap，确认 cap 机制不
+    /// 把正常备份误判为攻击。
+    #[test]
+    fn test_import_zip_normal_size_passes_cap_check() {
+        let (dir, mut conn) = setup();
+        let zip_path = dir.path().join("normal.zip");
+        // 5 个 KNOWN 文件名各塞一个空 JSON Array（极小，远低于 cap）。
+        let f = File::create(&zip_path).unwrap();
+        let mut zip = ZipWriter::new(f);
+        for name in [
+            FILE_BOOK_SOURCE,
+            FILE_BOOK_GROUP,
+            FILE_BOOKSHELF,
+            FILE_BOOKMARK,
+            FILE_REPLACE_RULE,
+        ] {
+            zip.start_file(name, SimpleFileOptions::default()).unwrap();
+            zip.write_all(b"[]").unwrap();
+        }
+        zip.finish().unwrap();
+
+        let result = import_from_zip(&mut conn, zip_path.to_str().unwrap());
+        // 不关心导入数据正确性，只看 cap 机制不误触
+        assert!(
+            result.is_ok(),
+            "正常大小 zip 应通过 cap 检查，实际 Err: {:?}",
+            result.err()
+        );
+
+        let _ = dir;
     }
 }

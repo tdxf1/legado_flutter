@@ -1030,17 +1030,58 @@ fn apply_replace_rules_impl(
     // R24: filter by scope (book_name / book_origin substring match) +
     // scope_title vs scope_content before compiling, so unrelated rules
     // don't even hit the regex cache.
+    //
+    // **F-W1A-019 加固（2026-05-21, BATCH-09）**：cache miss 时的 SQL
+    // 调用（`open_db` + `dao.get_enabled`）从 mutex 内移出，改为两阶段：
+    // 1. Phase 1 (lock)：probe cache，命中即 Some(Arc)；未命中 drop lock
+    // 2. Phase 2 (lock-free)：跑 SQL 加载规则
+    // 3. Phase 3 (lock)：double-check（其它线程可能在 SQL 期间已填好
+    //    cache）→ 用别人的或存自己的；同时 ensure_regex_generation +
+    //    compile regexes
+    //
+    // 这把 SQL（典型几十 ms 冷启动）从全局锁里移出来，章节切换 burst
+    // 时不再串行化 reader 主线程。double-check 保持 generation 隔离不
+    // 变量（`unified_cache_keeps_generations_isolated` 仍过）。
     let compiled: Vec<(Regex, String)> = {
+        // Phase 1: probe cache 是否已命中（仅持锁很短一瞬）
+        let cached_rules: Option<std::sync::Arc<Vec<core_storage::models::ReplaceRule>>> = {
+            let cache = REPLACE_RULES_CACHE
+                .lock()
+                .map_err(|e| format!("replace rules cache lock poisoned: {e}"))?;
+            cache.try_get_rules(db_path, cache_generation)
+        }; // lock 在此释放，下面跑 SQL 不持锁
+
+        // Phase 2: 不持锁跑 SQL（仅 cache miss 时；命中走 None 分支）
+        let freshly_loaded: Option<std::sync::Arc<Vec<core_storage::models::ReplaceRule>>> =
+            if cached_rules.is_some() {
+                None
+            } else {
+                let mut conn = open_db(db_path)?;
+                let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(&mut conn);
+                let fresh = dao
+                    .get_enabled()
+                    .map_err(|e| format!("加载替换规则失败: {}", e))?;
+                Some(std::sync::Arc::new(fresh))
+            };
+
+        // Phase 3: 重新加锁，double-check，写入或采用别人的，编译 regex
         let mut cache = REPLACE_RULES_CACHE
             .lock()
             .map_err(|e| format!("replace rules cache lock poisoned: {e}"))?;
-
-        let rules = cache.get_or_load_rules(db_path, cache_generation, || {
-            let mut conn = open_db(db_path)?;
-            let dao = core_storage::replace_rule_dao::ReplaceRuleDao::new(&mut conn);
-            dao.get_enabled()
-                .map_err(|e| format!("加载替换规则失败: {}", e))
-        })?;
+        let rules = match cached_rules {
+            Some(arc) => arc,
+            None => {
+                // 别的线程可能在我们跑 SQL 时已填好 cache（同 generation 同 db_path）。
+                // 优先用它的 — 两份 generation 一致，业务上等价；少一次写入降抖。
+                if let Some(other) = cache.try_get_rules(db_path, cache_generation) {
+                    other
+                } else {
+                    let arc = freshly_loaded.expect("freshly_loaded must be Some on cache miss");
+                    cache.store_rules(db_path, cache_generation, arc.clone());
+                    arc
+                }
+            }
+        };
         cache.ensure_regex_generation(cache_generation);
 
         // `rules` is an Arc — clone bumps the refcount only, but the
@@ -1158,6 +1199,12 @@ impl ReplaceRulesCache {
     /// for calling [`Self::ensure_regex_generation`] right after — this
     /// method intentionally does NOT touch the regex side so that callers
     /// observe both halves in a single critical section.
+    ///
+    /// **保留供 cache_concurrency_tests 等单测复用**。生产路径
+    /// `apply_replace_rules_impl` 已迁移到 [`Self::try_get_rules`] +
+    /// [`Self::store_rules`] 两阶段 API（F-W1A-019, BATCH-09）—— SQL 移出
+    /// 全局锁，章节切换 burst 时不再串行化 reader 主线程。
+    #[cfg(test)]
     fn get_or_load_rules<F>(
         &mut self,
         db_path: &str,
@@ -1176,6 +1223,38 @@ impl ReplaceRulesCache {
         let arc = std::sync::Arc::new(fresh);
         self.rule_list = Some((db_path.to_string(), generation, arc.clone()));
         Ok(arc)
+    }
+
+    /// **F-W1A-019 阶段 1（probe-only）**：只读检查 `(db_path, generation)`
+    /// 是否命中；命中返回 `Some(Arc)`，未命中返回 `None`。caller 拿到 None
+    /// 后应该 drop lock 后跑 SQL，再用 [`Self::store_rules`] 写回。
+    ///
+    /// 关键：本方法不跑 SQL、不分配、不写 cache，只读 — 适合在 lock 内
+    /// 跑亚毫秒级检查。
+    fn try_get_rules(
+        &self,
+        db_path: &str,
+        generation: i64,
+    ) -> Option<std::sync::Arc<Vec<core_storage::models::ReplaceRule>>> {
+        if let Some((ref cached_path, gen, ref rules)) = self.rule_list {
+            if gen == generation && cached_path == db_path {
+                return Some(rules.clone());
+            }
+        }
+        None
+    }
+
+    /// **F-W1A-019 阶段 3（store-only）**：写入 SQL 加载好的 fresh rules。
+    /// 调用 caller 在 lock-free 跑完 SQL 后重新加锁 + double-check 后调本
+    /// 方法。覆盖任何已有的不同 `(db_path, generation)` 组合 — generation
+    /// 单调推进语义不变。
+    fn store_rules(
+        &mut self,
+        db_path: &str,
+        generation: i64,
+        rules: std::sync::Arc<Vec<core_storage::models::ReplaceRule>>,
+    ) {
+        self.rule_list = Some((db_path.to_string(), generation, rules));
     }
 
     /// Drop cached regex entries when the caller's generation changes.
