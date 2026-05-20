@@ -26,7 +26,7 @@ pub fn init_database(db_path: &str) -> SqlResult<Connection> {
         }
     }
 
-    let conn = Connection::open(db_path)?;
+    let mut conn = Connection::open(db_path)?;
 
     // 启用外键约束
     conn.execute("PRAGMA foreign_keys = ON", [])?;
@@ -40,7 +40,7 @@ pub fn init_database(db_path: &str) -> SqlResult<Connection> {
         create_tables(&conn)?;
         set_db_version(&conn, DB_VERSION)?;
     } else if version < DB_VERSION {
-        migrate_database(&conn, version, DB_VERSION)?;
+        migrate_database(&mut conn, version, DB_VERSION)?;
     } else if version > DB_VERSION {
         warn!(
             "数据库版本 {} 高于当前版本 {}，跳过迁移",
@@ -450,48 +450,41 @@ fn set_db_version(conn: &Connection, version: i32) -> SqlResult<()> {
 }
 
 /// 数据库迁移 — 按版本逐步迁移，包装在事务中
-fn migrate_database(conn: &Connection, from_version: i32, to_version: i32) -> SqlResult<()> {
+///
+/// 用 [`Connection::transaction`] 的 RAII guard：迁移过程中任何 `?` 早返
+/// 都会让 `tx` 在 Drop 时自动 rollback；只有走到 `tx.commit()` 才落盘，比
+/// 之前手写 `BEGIN/COMMIT/ROLLBACK` 的两段式更可靠（panic 安全 + 不可能漏
+/// rollback）。
+fn migrate_database(conn: &mut Connection, from_version: i32, to_version: i32) -> SqlResult<()> {
     info!("数据库迁移: {} -> {}", from_version, to_version);
-    conn.execute_batch("BEGIN")?;
-    let result = (|| -> SqlResult<()> {
-        for v in (from_version + 1)..=to_version {
-            debug!("执行版本 {} 迁移", v);
-            match v {
-                1 => migrate_v1(conn)?,
-                2 => migrate_v2(conn)?,
-                3 => migrate_v3(conn)?,
-                4 => migrate_v4(conn)?,
-                5 => migrate_v5(conn)?,
-                6 => migrate_v6(conn)?,
-                7 => migrate_v7(conn)?,
-                8 => migrate_v8(conn)?,
-                9 => migrate_v9(conn)?,
-                10 => migrate_v10(conn)?,
-                11 => migrate_v11(conn)?,
-                12 => migrate_v12(conn)?,
-                _ => {
-                    return Err(rusqlite::Error::SqliteFailure(
-                        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
-                        Some(format!("未知的数据库版本: {}", v)),
-                    ));
-                }
+    let tx = conn.transaction()?;
+    for v in (from_version + 1)..=to_version {
+        debug!("执行版本 {} 迁移", v);
+        match v {
+            1 => migrate_v1(&tx)?,
+            2 => migrate_v2(&tx)?,
+            3 => migrate_v3(&tx)?,
+            4 => migrate_v4(&tx)?,
+            5 => migrate_v5(&tx)?,
+            6 => migrate_v6(&tx)?,
+            7 => migrate_v7(&tx)?,
+            8 => migrate_v8(&tx)?,
+            9 => migrate_v9(&tx)?,
+            10 => migrate_v10(&tx)?,
+            11 => migrate_v11(&tx)?,
+            12 => migrate_v12(&tx)?,
+            _ => {
+                return Err(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+                    Some(format!("未知的数据库版本: {}", v)),
+                ));
             }
         }
-        set_db_version(conn, to_version)?;
-        Ok(())
-    })();
-    match result {
-        Ok(()) => {
-            conn.execute_batch("COMMIT")?;
-            info!("数据库迁移完成");
-            Ok(())
-        }
-        Err(e) => {
-            let _ = conn.execute_batch("ROLLBACK");
-            warn!("数据库迁移失败，已回滚: {}", e);
-            Err(e)
-        }
     }
+    set_db_version(&tx, to_version)?;
+    tx.commit()?;
+    info!("数据库迁移完成");
+    Ok(())
 }
 
 /// 版本 1 迁移：创建初始表结构
@@ -782,7 +775,7 @@ fn migrate_v10(conn: &Connection) -> SqlResult<()> {
 ///    精简 schema 没有 books/bookmarks 表（例如只测 replace_rules 迁移），
 ///    迁移链跑过 v11 时不能因这种缺表崩。
 /// 3. CREATE TABLE 都用 `IF NOT EXISTS`
-/// 4. 整个迁移由 `migrate_database` 包在 BEGIN/COMMIT 事务里，失败回滚
+/// 4. 整个迁移由 `migrate_database` 包在 RAII transaction 中，失败回滚
 fn migrate_v11(conn: &Connection) -> SqlResult<()> {
     info!("v11: 补齐 books/bookmarks 字段 + 新增 4 张表（批次 6 schema）");
 

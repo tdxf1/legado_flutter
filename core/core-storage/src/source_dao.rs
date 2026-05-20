@@ -193,12 +193,17 @@ impl<'a> SourceDao<'a> {
     }
 
     /// 批量删除书源
-    pub fn delete_batch(&self, ids: &[String]) -> SqlResult<()> {
+    ///
+    /// 整批包在单个 transaction 内：N 条删除走一次 commit / fsync，避免
+    /// 之前 for 循环逐条 `execute(DELETE)` 每次落盘的 N 次 IO（用户批量删
+    /// 50 个书源时差异显著）。同时任意一条失败时整批回滚，保持原子性。
+    pub fn delete_batch(&mut self, ids: &[String]) -> SqlResult<()> {
         info!("批量删除 {} 个书源", ids.len());
+        let tx = self.conn.transaction()?;
         for id in ids {
-            self.conn
-                .execute("DELETE FROM book_sources WHERE id = ?", params![id])?;
+            tx.execute("DELETE FROM book_sources WHERE id = ?", params![id])?;
         }
+        tx.commit()?;
         Ok(())
     }
 

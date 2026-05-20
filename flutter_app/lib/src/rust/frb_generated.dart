@@ -143,12 +143,6 @@ abstract class RustLibApi extends BaseApi {
       required String chapterUrl,
       required String downloadDir});
 
-  Future<String> crateApiExplore(
-      {required String dbPath,
-      required String sourceId,
-      required String exploreUrl,
-      required int page});
-
   Future<String> crateApiExportAllSources({required String dbPath});
 
   Future<String> crateApiGetAllBooks(
@@ -187,9 +181,6 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiGetDownloadTasks({required String dbPath});
 
   Future<String> crateApiGetEnabledSources({required String dbPath});
-
-  Future<String> crateApiGetExploreEntries(
-      {required String dbPath, required String sourceId});
 
   Future<String> crateApiGetReadingProgress(
       {required String dbPath, required String bookId});
@@ -984,37 +975,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<String> crateApiExplore(
-      {required String dbPath,
-      required String sourceId,
-      required String exploreUrl,
-      required int page}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(dbPath, serializer);
-        sse_encode_String(sourceId, serializer);
-        sse_encode_String(exploreUrl, serializer);
-        sse_encode_i_32(page, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 17, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
-        decodeErrorData: sse_decode_String,
-      ),
-      constMeta: kCrateApiExploreConstMeta,
-      argValues: [dbPath, sourceId, exploreUrl, page],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateApiExploreConstMeta => const TaskConstMeta(
-        debugName: "explore",
-        argNames: ["dbPath", "sourceId", "exploreUrl", "page"],
-      );
-
-  @override
   Future<String> crateApiExportAllSources({required String dbPath}) {
     return handler.executeNormal(NormalTask(
       callFfi: (port_) {
@@ -1374,32 +1334,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiGetEnabledSourcesConstMeta => const TaskConstMeta(
         debugName: "get_enabled_sources",
         argNames: ["dbPath"],
-      );
-
-  @override
-  Future<String> crateApiGetExploreEntries(
-      {required String dbPath, required String sourceId}) {
-    return handler.executeNormal(NormalTask(
-      callFfi: (port_) {
-        final serializer = SseSerializer(generalizedFrbRustBinding);
-        sse_encode_String(dbPath, serializer);
-        sse_encode_String(sourceId, serializer);
-        pdeCallFfi(generalizedFrbRustBinding, serializer,
-            funcId: 32, port: port_);
-      },
-      codec: SseCodec(
-        decodeSuccessData: sse_decode_String,
-        decodeErrorData: sse_decode_String,
-      ),
-      constMeta: kCrateApiGetExploreEntriesConstMeta,
-      argValues: [dbPath, sourceId],
-      apiImpl: this,
-    ));
-  }
-
-  TaskConstMeta get kCrateApiGetExploreEntriesConstMeta => const TaskConstMeta(
-        debugName: "get_explore_entries",
-        argNames: ["dbPath", "sourceId"],
       );
 
   @override

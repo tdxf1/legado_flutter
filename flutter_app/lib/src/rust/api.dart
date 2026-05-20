@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_replace_rules_impl`, `block_on_explore`, `ensure_regex_generation`, `get_or_compile_regex`, `get_or_load_rules`, `matches_scope`, `new`, `open_db`, `recompute_download_task_status`, `resolve_download_root`, `safe_download_file_name`, `storage_to_source_book_source`
+// These functions are ignored because they are not marked as `pub`: `apply_replace_rules_impl`, `ensure_regex_generation`, `get_or_compile_regex`, `get_or_load_rules`, `mark_chapter_failed`, `matches_scope`, `new`, `open_db`, `recompute_download_task_status`, `resolve_download_root`, `safe_download_file_name`, `storage_to_source_book_source`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ReplaceRulesCache`
 
 /// Smoke test — 验证桥接是否正常工作
@@ -394,21 +394,6 @@ Future<String> validateSourceFromDb(
 /// 导出所有书源为 Legado 兼容 JSON 数组（camelCase 格式）
 Future<String> exportAllSources({required String dbPath}) =>
     RustLib.instance.api.crateApiExportAllSources(dbPath: dbPath);
-
-/// 获取书源的发现入口列表
-Future<String> getExploreEntries(
-        {required String dbPath, required String sourceId}) =>
-    RustLib.instance.api
-        .crateApiGetExploreEntries(dbPath: dbPath, sourceId: sourceId);
-
-/// 执行发现页请求，获取书籍列表
-Future<String> explore(
-        {required String dbPath,
-        required String sourceId,
-        required String exploreUrl,
-        required int page}) =>
-    RustLib.instance.api.crateApiExplore(
-        dbPath: dbPath, sourceId: sourceId, exploreUrl: exploreUrl, page: page);
 
 /// 获取所有替换规则，返回 JSON 数组
 Future<String> getReplaceRules({required String dbPath}) =>

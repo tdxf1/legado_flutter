@@ -48,10 +48,11 @@ const REQUIRED_WIRE_FN_FRAGMENTS: &[&str] = &[
     "wire__crate__api__search_with_source_from_db_v2_impl",
     // funcId 54 — batch source deletion
     "wire__crate__api__delete_sources_batch_impl",
-    // funcId 55 — explore entries listing
-    "wire__crate__api__get_explore_entries_impl",
-    // funcId 56 — explore page fetch
-    "wire__crate__api__explore_impl",
+    // funcIds 55 / 56 (originally explore entries / page fetch) — DELETED in
+    // BATCH-07a. The two wire fns and their dispatcher arms were removed
+    // along with the underlying `pub fn explore` / `get_explore_entries` in
+    // bridge/src/api.rs (zero Flutter-side consumers, see batch PRD). Do
+    // not re-introduce these guards.
     // funcId 57 — apply_replace_rules (P1-7)
     "wire__crate__api__apply_replace_rules_impl",
     // 批次 10 — funcId 63 — export_backup_zip
@@ -265,7 +266,7 @@ fn main() {
             "frb_generated.rs is missing {} hand-edited wire/dispatch fragment(s). \
              A `flutter_rust_bridge_codegen generate` run probably overwrote the manual \
              patches. This guard only covers the funcIds we know were hand-edited \
-             (currently 42-52 plus 54-57 plus 63-65 plus 66-70 plus 71-72 plus 73 plus 74-77 plus 78-81 plus 82-90 plus 91-96 plus 97-101 plus 102-108 plus 109; 53 is intentionally a hole, do not re-introduce), \
+             (currently 42-52 plus 54 and 57 plus 63-65 plus 66-70 plus 71-72 plus 73 plus 74-77 plus 78-81 plus 82-90 plus 91-96 plus 97-101 plus 102-108 plus 109; 53/55/56 are intentionally holes — 53 was never registered, 55/56 were deleted with `explore` / `get_explore_entries` in BATCH-07a, do not re-introduce), \
              plus the R3 informative panic in the dispatcher default arms. \
              funcIds outside that range are produced by codegen and are NOT checked here, \
              so a regression in those needs separate attention. See CURRENT_STATUS.md \

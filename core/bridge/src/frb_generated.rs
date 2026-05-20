@@ -634,43 +634,6 @@ fn wire__crate__api__download_and_save_chapter_impl(
         },
     )
 }
-fn wire__crate__api__explore_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "explore",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_db_path = <String>::sse_decode(&mut deserializer);
-            let api_source_id = <String>::sse_decode(&mut deserializer);
-            let api_explore_url = <String>::sse_decode(&mut deserializer);
-            let api_page = <i32>::sse_decode(&mut deserializer);
-            deserializer.end();
-            move |context| {
-                transform_result_sse::<_, String>((move || {
-                    let output_ok =
-                        crate::api::explore(api_db_path, api_source_id, api_explore_url, api_page)?;
-                    Ok(output_ok)
-                })())
-            }
-        },
-    )
-}
 fn wire__crate__api__export_all_sources_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -2949,40 +2912,6 @@ fn wire__crate__api__get_enabled_sources_impl(
         },
     )
 }
-fn wire__crate__api__get_explore_entries_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "get_explore_entries",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_db_path = <String>::sse_decode(&mut deserializer);
-            let api_source_id = <String>::sse_decode(&mut deserializer);
-            deserializer.end();
-            move |context| {
-                transform_result_sse::<_, String>((move || {
-                    let output_ok = crate::api::get_explore_entries(api_db_path, api_source_id)?;
-                    Ok(output_ok)
-                })())
-            }
-        },
-    )
-}
 fn wire__crate__api__get_reading_progress_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -4184,7 +4113,7 @@ fn pde_ffi_dispatcher_primary_impl(
         14 => wire__crate__api__delete_source_impl(port, ptr, rust_vec_len, data_len),
         15 => wire__crate__api__delete_sources_batch_impl(port, ptr, rust_vec_len, data_len),
         16 => wire__crate__api__download_and_save_chapter_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__explore_impl(port, ptr, rust_vec_len, data_len),
+        // 17 — explore (deleted in BATCH-07a; funcId is now a hole, do not re-introduce)
         18 => wire__crate__api__export_all_sources_impl(port, ptr, rust_vec_len, data_len),
         19 => wire__crate__api__get_all_books_impl(port, ptr, rust_vec_len, data_len),
         20 => wire__crate__api__get_all_sources_impl(port, ptr, rust_vec_len, data_len),
@@ -4204,7 +4133,7 @@ fn pde_ffi_dispatcher_primary_impl(
         29 => wire__crate__api__get_download_task_by_book_impl(port, ptr, rust_vec_len, data_len),
         30 => wire__crate__api__get_download_tasks_impl(port, ptr, rust_vec_len, data_len),
         31 => wire__crate__api__get_enabled_sources_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__get_explore_entries_impl(port, ptr, rust_vec_len, data_len),
+        // 32 — get_explore_entries (deleted in BATCH-07a; funcId is now a hole, do not re-introduce)
         33 => wire__crate__api__get_reading_progress_impl(port, ptr, rust_vec_len, data_len),
         34 => wire__crate__api__get_replace_rules_impl(port, ptr, rust_vec_len, data_len),
         35 => wire__crate__api__get_source_for_download_impl(port, ptr, rust_vec_len, data_len),

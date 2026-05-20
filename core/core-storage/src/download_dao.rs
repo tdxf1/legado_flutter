@@ -166,20 +166,18 @@ impl<'a> DownloadDao<'a> {
         task: &DownloadTask,
         chapters: &[DownloadChapter],
     ) -> SqlResult<()> {
-        self.conn.execute("BEGIN", [])?;
-        let result = self
-            .upsert(task)
-            .and_then(|_| self.batch_create_chapters(chapters));
-        match result {
-            Ok(()) => {
-                self.conn.execute("COMMIT", [])?;
-                Ok(())
-            }
-            Err(e) => {
-                let _ = self.conn.execute("ROLLBACK", []);
-                Err(e)
-            }
-        }
+        // RAII guard：之前手写 `BEGIN/COMMIT/ROLLBACK` 在 `let _ = ROLLBACK`
+        // 路径会吞 SQL 错误且嵌套 transaction 时直接 panic。改用
+        // [`Connection::unchecked_transaction`]：DAO 持有 `&Connection`（不
+        // 可变借用，与所有 caller 兼容），失败 / 提前 return / panic 时 Drop
+        // 自动 rollback。`unchecked_*` 命名是因为 rusqlite 无法从 `&Connection`
+        // 静态保证当前没有其它显式 transaction 在跑——本路径调用都是从
+        // bridge fn 里临时 `open_db` 出来的新连接，约束天然满足。
+        let tx = self.conn.unchecked_transaction()?;
+        self.upsert(task)?;
+        self.batch_create_chapters(chapters)?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn delete_with_files(&self, id: &str) -> SqlResult<()> {

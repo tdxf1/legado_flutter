@@ -212,7 +212,9 @@ pub fn delete_sources_batch(db_path: String, ids_json: String) -> Result<(), Str
     let mut conn = open_db(&db_path)?;
     let ids: Vec<String> =
         serde_json::from_str(&ids_json).map_err(|e| format!("JSON 解析失败: {}", e))?;
-    let dao = core_storage::source_dao::SourceDao::new(&mut conn);
+    // `mut`：`delete_batch` 现在内部开 transaction（需要 `&mut Connection`），所以
+    // dao 持有可变借用，本地绑定也得是 `mut`。其它只读 dao 调用不受影响。
+    let mut dao = core_storage::source_dao::SourceDao::new(&mut conn);
     dao.delete_batch(&ids)
         .map_err(|e| format!("批量删除书源失败: {}", e))
 }
@@ -730,23 +732,13 @@ pub async fn download_and_save_chapter(
     let text = match &content {
         Ok(c) => c.content.clone(),
         Err(core_source::ParserError::Empty) => {
-            let conn = open_db(&db_path)?;
-            let dao = core_storage::download_dao::DownloadDao::new(&conn);
-            dao.update_chapter_status(&download_chapter_id, 3, None, 0, Some("章节内容为空"))
-                .map_err(|e| format!("更新章节状态失败: {}", e))?;
-            recompute_download_task_status(&dao, &task_id)
-                .map_err(|e| format!("更新任务状态失败: {}", e))?;
+            mark_chapter_failed(&db_path, &task_id, &download_chapter_id, "章节内容为空")?;
             return Err("章节内容为空".to_string());
         }
         Err(e) => {
             let msg = e.to_string();
             let short = if msg.len() > 200 { &msg[..200] } else { &msg };
-            let conn = open_db(&db_path)?;
-            let dao = core_storage::download_dao::DownloadDao::new(&conn);
-            dao.update_chapter_status(&download_chapter_id, 3, None, 0, Some(short))
-                .map_err(|e| format!("更新章节状态失败: {}", e))?;
-            recompute_download_task_status(&dao, &task_id)
-                .map_err(|e| format!("更新任务状态失败: {}", e))?;
+            mark_chapter_failed(&db_path, &task_id, &download_chapter_id, short)?;
             return Err(msg);
         }
     };
@@ -900,60 +892,6 @@ pub fn export_all_sources(db_path: String) -> Result<String, String> {
     let dao = core_storage::source_dao::SourceDao::new(&mut conn);
     dao.export_legado_json()
         .map_err(|e| format!("导出失败: {}", e))
-}
-
-// ============================================================
-// 发现页 (Explore) — FRB 桥接
-// ============================================================
-
-/// 获取书源的发现入口列表
-pub fn get_explore_entries(db_path: String, source_id: String) -> Result<String, String> {
-    let mut conn = open_db(&db_path)?;
-    let dao = core_storage::source_dao::SourceDao::new(&mut conn);
-    let source = dao
-        .get_by_id(&source_id)
-        .map_err(|e| format!("数据库错误: {}", e))?
-        .ok_or_else(|| format!("书源不存在: {}", source_id))?;
-    let core_source = storage_to_source_book_source(&source)?;
-    let entries = core_source::parser::BookSourceParser::get_explore_entries(&core_source);
-    serde_json::to_string(&entries).map_err(|e| format!("序列化失败: {}", e))
-}
-
-fn block_on_explore<F, R>(f: F) -> R
-where
-    F: FnOnce(&tokio::runtime::Runtime) -> R,
-{
-    static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-    let rt = RT.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()
-            .expect("explore runtime")
-    });
-    f(rt)
-}
-
-/// 执行发现页请求，获取书籍列表
-pub fn explore(
-    db_path: String,
-    source_id: String,
-    explore_url: String,
-    page: i32,
-) -> Result<String, String> {
-    let mut conn = open_db(&db_path)?;
-    let dao = core_storage::source_dao::SourceDao::new(&mut conn);
-    let source = dao
-        .get_by_id(&source_id)
-        .map_err(|e| format!("数据库错误: {}", e))?
-        .ok_or_else(|| format!("书源不存在: {}", source_id))?;
-    let core_source = storage_to_source_book_source(&source)?;
-    let parser = core_source::parser::BookSourceParser::new();
-    match block_on_explore(|rt| rt.block_on(parser.explore(&core_source, &explore_url, page))) {
-        Ok(results) => serde_json::to_string(&results).map_err(|e| format!("序列化失败: {}", e)),
-        Err(core_source::ParserError::Empty) => Ok("[]".to_string()),
-        Err(e) => Err(e.to_string()),
-    }
 }
 
 // ============================================================
@@ -2295,6 +2233,28 @@ async fn fetch_subscription_body(url: &str) -> Result<String, String> {
 
 fn open_db(db_path: &str) -> Result<rusqlite::Connection, String> {
     core_storage::database::get_connection(db_path).map_err(|e| format!("数据库连接失败: {}", e))
+}
+
+/// 把单个下载章节标记为失败（status=3）并联动重算任务整体状态。
+///
+/// 之前 [`download_and_save_chapter`] 的 `Empty` 与一般 `Err` 两个失败分支
+/// 各自手写 `update_chapter_status` + `recompute_download_task_status`
+/// 序列，下次新增错误分支极易漏一处。抽到这里收口，两个失败分支统一调，
+/// 错误信息也保持一致。成功路径（status=2）参数不同（携带 file_path /
+/// file_size），不走本 helper。
+fn mark_chapter_failed(
+    db_path: &str,
+    task_id: &str,
+    chapter_id: &str,
+    error_message: &str,
+) -> Result<(), String> {
+    let conn = open_db(db_path)?;
+    let dao = core_storage::download_dao::DownloadDao::new(&conn);
+    dao.update_chapter_status(chapter_id, 3, None, 0, Some(error_message))
+        .map_err(|e| format!("更新章节状态失败: {}", e))?;
+    recompute_download_task_status(&dao, task_id)
+        .map_err(|e| format!("更新任务状态失败: {}", e))?;
+    Ok(())
 }
 
 fn storage_to_source_book_source(
