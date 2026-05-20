@@ -139,6 +139,8 @@
 
 **建议**: 删掉 `fontSizeProvider` + `loadFontSizeFromDisk` + `saveFontSizeToDisk`；统一从 `readerSettingsProvider` 派生 `final fontSizeProvider = Provider<double>((ref) => ref.watch(readerSettingsProvider).fontSize);`。
 
+**Resolution (BATCH-18d, 2026-05-20)**: Resolved。`fontSizeProvider` 改派生 `Provider<double>((ref) => ref.watch(readerSettingsProvider).fontSize)`（providers.dart:822）；整删 `loadFontSizeFromDisk` / `saveFontSizeToDisk` 两个 wrapper（BATCH-18c 后已是 1-3 行 helper 调用，删后 caller 无残留）；`main.dart` 启动加载链路从 `loadFontSizeFromDisk` 改为 `loadReaderSettingsFromDisk` + `readerSettingsProvider.overrideWith`，让派生 `fontSizeProvider` 第一帧拿到正确值；`settings_page.dart` slider onChanged 改走 `readerSettingsProvider.notifier.state = state.copyWith(fontSize: value)` + `saveReaderSettingsToDisk`，settings 端与 reader 端共享同一 source of truth。新增 `test/font_size_derived_test.dart` 4 case 验证派生、override、state 变化、dedup 行为。`flutter analyze` 0 issue；`flutter test` 393/393 PASS（含新增 4 case）。顶级 `fontSize` key 残留无害不做迁移（极小概率"用户只在 settings 页改过字号、从未进过 reader"才会丢失偏好，留观察）。
+
 ---
 
 ### F-W2A-009 [P0][D-安全][core/platform_webview_executor]
