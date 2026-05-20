@@ -4,7 +4,7 @@ use tempfile::TempDir;
 fn setup_db() -> (TempDir, String) {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("test.db").to_string_lossy().to_string();
-    core_storage::init_database(&db_path).unwrap();
+    core_storage::database::init_database(&db_path).unwrap();
     (dir, db_path)
 }
 
@@ -160,7 +160,7 @@ fn test_get_download_task_by_book() {
 fn test_delete_task_cleans_files() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("test.db").to_string_lossy().to_string();
-    core_storage::init_database(&db_path).unwrap();
+    core_storage::database::init_database(&db_path).unwrap();
     ensure_book(&db_path, "book3", "Book Three");
 
     let download_dir = dir.path().join("downloads");

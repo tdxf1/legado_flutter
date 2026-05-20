@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-rust-data.md", "reason": "F-W1A-014 finding 原文 + 状态字段更新；新 finding（生产 WAL 未启用）写入位置"}
+{"file": "core/core-storage/src/lib.rs", "reason": "本批次主战场 — 删 StorageManager / DatabaseConfig / init_database wrapper / cfg(test) mod tests"}
+{"file": "core/core-storage/src/database.rs", "reason": "确认 init_database 现有签名 + WAL pragma 现状（不动它）"}
+{"file": "core/bridge/tests/download_test.rs", "reason": "L7 + L163 替换 import 路径"}

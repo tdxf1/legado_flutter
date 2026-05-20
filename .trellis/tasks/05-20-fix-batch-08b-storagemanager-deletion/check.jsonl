@@ -1,0 +1,3 @@
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-rust-data.md", "reason": "F-W1A-014 状态同步 + 新 finding 落位验收"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-08-dao-sql-dedup-and-cleanup.md", "reason": "BATCH-08 路线图原文（验收清单中 F-W1A-014 项）"}
+{"file": ".trellis/tasks/05-20-fix-batch-08b-storagemanager-deletion/prd.md", "reason": "MVP scope + AC + ADR-lite，逐条对账"}

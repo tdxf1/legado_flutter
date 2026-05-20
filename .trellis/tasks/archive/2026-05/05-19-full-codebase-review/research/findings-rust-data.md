@@ -219,6 +219,10 @@
 
 **建议**: (1) 把错误类型统一成 `rusqlite::Error` 或 `core-storage::Error` 枚举；(2) 评估 StorageManager 是否仍需要——若只为单元测试用可移到 `#[cfg(test)]`；(3) Default `path` 改成 `:memory:` 防误操作。
 
+**Resolution**: Resolved by BATCH-08b（commit 待补）— 选项 (A) 整删：删除 `pub struct StorageManager` + `impl StorageManager`（7 个 dao() 出口）+ `pub struct DatabaseConfig` + `impl Default` + `pub fn init_database` 顶层 wrapper + `#[cfg(test)] mod tests`（含 2 个 WAL 测试）。审计确认外部 0 caller，error type 两个 `?` 站点本来就是 `rusqlite::Error`；wrapper 仅 2 处外部 caller 在 `bridge/tests/download_test.rs`，已替换为 `core_storage::database::init_database`。`lib.rs` 从 169 行缩到 60 行（-109 行）。
+
+**Follow-up — 新 finding (F-W1A-055)**：审计副产物。`StorageManager::new` 是仓库内**唯一**调用 `pragma_update("journal_mode", "WAL")` 的代码路径；删除后**生产 `database::init_database` 不调用任何 journal_mode 相关 pragma**，意味着 production SQLite 跑的是默认 `journal_mode=delete` 而非 WAL。`database.rs:34-49` 的注释强烈暗示意图启用 WAL（BATCH-07b 加了 `synchronous=NORMAL` + `wal_autocheckpoint=1000`，这两个 pragma 仅在 WAL 模式下有意义）。建议：单独立批次评估是否应给 `database::init_database` 加 `pragma_update(None, "journal_mode", "WAL")`，并评估 production DB 文件迁移路径（首次启动时从 `journal_mode=delete` 切到 WAL 是单文件操作不需要外部迁移工具，但要测在已有 DB 上的安全性）。
+
 ---
 
 ### F-W1A-015 [P1 主要][C-性能][core-storage/cache_dao]
