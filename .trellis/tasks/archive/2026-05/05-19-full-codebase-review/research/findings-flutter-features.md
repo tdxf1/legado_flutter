@@ -315,7 +315,11 @@
 
 顺手修跨平台行为差异：4 处之前直接 `getApplicationDocumentsDirectory()` 不带三元式，桌面端拿到 Documents 目录与 db 路径（Support）不一致；统一走 `resolvePersistenceDir()` 后跨平台对齐。`flutter analyze` 0 issue；`flutter test` 393/393 PASS 维持。`path_provider` import 在 `flutter_app/lib/` 下仅 `json_store.dart` 一处。
 
-**Follow-up — 新 finding (F-W2A-058)**：webdav.json 完整 read-modify-write 模板（"打开 → jsonDecode Map → 字段提取 → 改字段 → jsonEncode → writeAsString"）在 `webdav_config_page.dart:108-117/180-187` + `backup_page.dart:474-494` 重复实现。json_store helper 当前仅支持 `settings.json` 单文件，不能直接迁。修复方向：扩 json_store API 支持任意 fileName（如 `readJsonFile<T>` / `writeJsonFile` / `deleteJsonFile`）+ 迁两处 caller。等价 BATCH-18d audit 列出的方案 B（约 +80 行）。Status: Open（占位，BATCH-18g 处理）。
+**Follow-up — 新 finding (F-W2A-081)**：webdav.json 完整 read-modify-write 模板（"打开 → jsonDecode Map → 字段提取 → 改字段 → jsonEncode → writeAsString"）在 `webdav_config_page.dart:108-117/180-187` + `backup_page.dart:474-494` 重复实现。json_store helper 当前仅支持 `settings.json` 单文件，不能直接迁。修复方向：扩 json_store API 支持任意 fileName（如 `readJsonFile<T>` / `writeJsonFile` / `deleteJsonFile`）+ 迁两处 caller。等价 BATCH-18d audit 列出的方案 B（约 +80 行）。Status: Open（占位，BATCH-18g 处理）。
+
+**注**：BATCH-18e 录入此 follow-up 时误用 ID `F-W2A-058`（已与 `findings-flutter-core.md:677` 的真实 finding "ReaderAutoScroller 模式切换 race" 撞号），BATCH-18g 重新分配为 `F-W2A-081`（master report 主索引同步修正）。
+
+**F-W2A-081 Resolution (BATCH-18g, 2026-05-21)**: 闭环。`json_store.dart` 加 3 个公共 fn `readJsonFile` / `writeJsonFile` / `deleteJsonFile`（整文件 IO，与既有 key-based API 共存），共用 `_writeLock`。`writeJsonFile` 设计为 rethrow（与 `writeJsonKey` 吞错策略不同），让 caller 外层 try-catch 保留 SnackBar UX。`webdav_config_page.dart::_loadConfig` + `_onSave` + `backup_page.dart::_loadWebDavConfig` 三处 caller 全部走新 helper，read-modify-write 模板消除。删 `webdav_config_page.dart` 顶部 `dart:io` + `dart:convert` import；删 `backup_page.dart` 顶部 `dart:io` import（其它代码不再用 File/Directory）。新增 8 个 test case（writeJsonFile round-trip / null on missing / null on malformed / 整覆盖语义 / deleteJsonFile / no-op delete / rethrow on IO error / 共用 mutex 串行化 / settings.json 不要混用约定）。`flutter analyze` 0 issue；`flutter test` 402/402 PASS（旧 393 + 新 9）。
 
 ---
 
