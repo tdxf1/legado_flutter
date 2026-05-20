@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/persistence/json_store.dart';
 import '../../core/providers.dart';
+import '../../core/util/time_format.dart';
 import '../../src/rust/api.dart' as rust_api;
 import 'widgets/book_group_dialogs.dart';
 
@@ -462,25 +463,9 @@ class _BookListView extends ConsumerWidget {
     final durTime = (book['dur_chapter_time'] as num?)?.toInt() ?? 0;
     final author = book['author'] as String? ?? '';
     if (durTitle != null && durTitle.isNotEmpty && durTime > 0) {
-      return '${_formatRelativeTime(durTime)} · $durTitle';
+      return '${formatRelativeTime(durTime)} · $durTitle';
     }
     return author.isEmpty ? '未知作者' : author;
-  }
-
-  /// 批次 14 (05-19): 把 unix 时间戳（秒）格式化成"刚刚 / N 分钟前 /
-  /// N 小时前 / N 天前 / yyyy-MM-dd"风格的相对时间字符串。
-  String _formatRelativeTime(int sec) {
-    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final delta = now - sec;
-    if (delta < 60) return '刚刚';
-    if (delta < 3600) return '${(delta / 60).floor()} 分钟前';
-    if (delta < 86400) return '${(delta / 3600).floor()} 小时前';
-    if (delta < 86400 * 30) return '${(delta / 86400).floor()} 天前';
-    return DateTime.fromMillisecondsSinceEpoch(sec * 1000)
-        .toLocal()
-        .toString()
-        .split(' ')
-        .first;
   }
 
   Widget _buildCover(Map<String, dynamic> book) {

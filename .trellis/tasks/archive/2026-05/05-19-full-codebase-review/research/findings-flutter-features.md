@@ -125,6 +125,8 @@
 
 **建议**: 抽 `core/util/platform_int64.dart`：`int toInt(PlatformInt64 v) { final dynamic raw = v; return raw is int ? raw : (raw as BigInt).toInt(); }`，所有调用点统一使用。
 
+**Resolution (BATCH-24, 2026-05-21)**: 抽 `flutter_app/lib/core/util/platform_int64.dart::platformInt64ToInt(dynamic raw) → int`。原始估计 6 处 caller，实际**7 处**（遗漏 read_stats_page.dart `totalDyn` 拼装样式略不同的一份）：rule_sub_page × 2 + rss_source_manage × 2 + cache_management × 2 + read_stats × 1 全部改用 helper，+ 3 case 单测（int 直传 / BigInt-like 走 toInt() / null 抛异常）。read_stats_page 改用 helper 后顺手删掉了 `flutter_rust_bridge_for_generated.dart` 显式 `PlatformInt64` 类型 import（caller 不再需要类型名）。
+
 ---
 
 ### F-W2B-008 [P1 主要][C-性能][settings/cache_management]
@@ -347,6 +349,8 @@
 
 **建议**: 抽 `String _formatImportSummary(String json, {required String prefix})` helper。
 
+**Resolution (BATCH-24, 2026-05-21)**: 抽 `flutter_app/lib/core/util/import_summary_label.dart::formatImportSummaryLabel(String json, {required String prefix, required String fallback}) → String`。caller 显式传 `fallback` 让 catch 兜底文案在 caller 处可见（本地导入 fallback="导入完成"，WebDAV 恢复 fallback="从 WebDAV 恢复完成"）。两处 caller 各从 ~17 行降到 5 行 + 4 case 单测覆盖完整 JSON / errors > 0 / 字段缺失 ?? 0 / 解析失败 fallback 4 个边界。
+
 ---
 
 ### F-W2B-025 [P2 次要][B-正确性][settings/backup]
@@ -418,6 +422,8 @@
 **详细**: 两处实现完全一样（"刚刚 / N 分钟前 / N 小时前 / N 天前 / yyyy-MM-dd"），从代码复用角度应抽公共 lib。
 
 **建议**: 移到 `core/util/time_format.dart`，两边 import；与 F-W2B-022 的 settings IO 抽取一起做。
+
+**Resolution (BATCH-24, 2026-05-21)**: 抽 `flutter_app/lib/core/util/time_format.dart::formatRelativeTime(int sec) → String`。两处私有 helper 删除，bookshelf_page + read_stats_page 各自 import 同一函数。**顺手修隐含 bug**：bookshelf 端原版没有 `if (sec <= 0) return '从未';` early-return，输入 sec=0 会走到末尾返回 "1970-01-01"（书从未读过的场景下显示历史日期）。新 helper 沿用 read_stats 版的 `<= 0 → '从未'` 边界，bookshelf 同步获得修复。+ 7 case 单测覆盖 sec=0 / sec<0 / 30s / 90s / 2h / 5d / >30 天 yyyy-MM-dd 格式 7 个区间。
 
 ---
 

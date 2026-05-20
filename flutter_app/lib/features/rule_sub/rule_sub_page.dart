@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/providers.dart';
+import '../../core/util/platform_int64.dart';
 import '../../src/rust/api.dart' as rust_api;
 
 /// 订阅源页（批次 19 / 05-19）。
@@ -138,9 +139,7 @@ class _RuleSubPageState extends ConsumerState<RuleSubPage> {
     final fn = widget.deleteOverride ??
         (String db, String i) async {
           final n = await rust_api.ruleSubDelete(dbPath: db, id: i);
-          // ignore: unnecessary_cast
-          final dynamic raw = n;
-          return raw is int ? raw : raw.toInt() as int;
+          return platformInt64ToInt(n);
         };
     return fn(dbPath, id);
   }
@@ -151,8 +150,7 @@ class _RuleSubPageState extends ConsumerState<RuleSubPage> {
         (String db, String i, String n, String u, int t) async {
           final res = await rust_api.ruleSubUpdate(
               dbPath: db, id: i, name: n, url: u, subType: t);
-          final dynamic raw = res;
-          return raw is int ? raw : raw.toInt() as int;
+          return platformInt64ToInt(res);
         };
     return fn(dbPath, id, name, url, subType);
   }

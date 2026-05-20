@@ -2,10 +2,9 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
-    show PlatformInt64;
 
 import '../../core/providers.dart';
+import '../../core/util/platform_int64.dart';
 import '../../src/rust/api.dart' as rust_api;
 
 /// 缓存管理页（批次 15 / 05-19）。
@@ -138,11 +137,8 @@ class _CacheManagementPageState extends ConsumerState<CacheManagementPage> {
     try {
       final clearFn = widget.clearAllCacheOverride ??
           (String dbPath) async {
-            final PlatformInt64 n =
-                await rust_api.clearAllCache(dbPath: dbPath);
-            // PlatformInt64 在 native (io) 是 int，web (BigInt)。
-            final dynamic raw = n;
-            return raw is int ? raw : raw.toInt() as int;
+            final n = await rust_api.clearAllCache(dbPath: dbPath);
+            return platformInt64ToInt(n);
           };
       final String dbPath =
           widget.dbPathOverride ?? await ref.read(dbPathProvider.future);
@@ -199,10 +195,8 @@ class _CacheManagementPageState extends ConsumerState<CacheManagementPage> {
     try {
       final clearFn = widget.clearBookCacheOverride ??
           (String dbPath, String id) async {
-            final PlatformInt64 n =
-                await rust_api.clearBookCache(dbPath: dbPath, bookId: id);
-            final dynamic raw = n;
-            return raw is int ? raw : raw.toInt() as int;
+            final n = await rust_api.clearBookCache(dbPath: dbPath, bookId: id);
+            return platformInt64ToInt(n);
           };
       final String dbPath =
           widget.dbPathOverride ?? await ref.read(dbPathProvider.future);

@@ -2,10 +2,10 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
-    show PlatformInt64;
 
 import '../../core/providers.dart';
+import '../../core/util/platform_int64.dart';
+import '../../core/util/time_format.dart';
 import '../../src/rust/api.dart' as rust_api;
 
 /// 阅读统计页（批次 14 / 05-19）。
@@ -71,14 +71,8 @@ class _ReadStatsPageState extends ConsumerState<ReadStatsPage> {
       final json = await rust_api.listReadRecords(dbPath: dbPath);
       final List<dynamic> raw = jsonDecode(json);
       final records = raw.cast<Map<String, dynamic>>();
-      final PlatformInt64 total =
-          await rust_api.getTotalReadTime(dbPath: dbPath);
-      // PlatformInt64 在 native (io) 是 int，web (BigInt)；统一转 int。
-      // 用 dynamic 桥接避免 native 上 analyzer 提示"always true"。
-      final dynamic totalDyn = total;
-      final int totalSec = totalDyn is int
-          ? totalDyn
-          : totalDyn.toInt() as int;
+      final total = await rust_api.getTotalReadTime(dbPath: dbPath);
+      final int totalSec = platformInt64ToInt(total);
       if (!mounted) return;
       setState(() {
         _records = records;
@@ -160,29 +154,11 @@ class _ReadStatsPageState extends ConsumerState<ReadStatsPage> {
             overflow: TextOverflow.ellipsis,
           ),
           subtitle: Text(
-            '${formatReadDuration(readTime)} · 上次读 ${_formatRelativeTime(lastReadAt)}',
+            '${formatReadDuration(readTime)} · 上次读 ${formatRelativeTime(lastReadAt)}',
           ),
         );
       },
     );
-  }
-
-  /// 把 unix 时间戳（秒）格式化成相对时间字符串。
-  /// 与 bookshelf_page 内的同名 helper 保持语义一致 — 抽公用 lib 的话需要
-  /// 跨 feature 包，本批次先复制一份避免无谓抽象。
-  String _formatRelativeTime(int sec) {
-    if (sec <= 0) return '从未';
-    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final delta = now - sec;
-    if (delta < 60) return '刚刚';
-    if (delta < 3600) return '${(delta / 60).floor()} 分钟前';
-    if (delta < 86400) return '${(delta / 3600).floor()} 小时前';
-    if (delta < 86400 * 30) return '${(delta / 86400).floor()} 天前';
-    return DateTime.fromMillisecondsSinceEpoch(sec * 1000)
-        .toLocal()
-        .toString()
-        .split(' ')
-        .first;
   }
 }
 

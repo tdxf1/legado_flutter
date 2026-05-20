@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/persistence/json_store.dart';
 import '../../core/providers.dart';
+import '../../core/util/import_summary_label.dart';
 import '../../src/rust/api.dart' as rust_api;
 
 /// 本地备份/恢复页（批次 10 / 05-19）。
@@ -363,23 +364,11 @@ class _BackupPageState extends ConsumerState<BackupPage> {
       final summaryJson = await importFn(dbPath, path);
       if (!mounted) return;
       // 解析 ImportSummary：{books, groups, bookmarks, replace_rules, sources, errors}
-      String label;
-      try {
-        final Map<String, dynamic> summary =
-            jsonDecode(summaryJson) as Map<String, dynamic>;
-        final books = summary['books'] ?? 0;
-        final groups = summary['groups'] ?? 0;
-        final bookmarks = summary['bookmarks'] ?? 0;
-        final rules = summary['replace_rules'] ?? 0;
-        final sources = summary['sources'] ?? 0;
-        final errors = summary['errors'];
-        final errorCount = (errors is List) ? errors.length : 0;
-        label = '导入完成: $books 本书 / $groups 个分组 / '
-            '$bookmarks 条书签 / $rules 条替换规则 / $sources 个书源'
-            '${errorCount > 0 ? '（$errorCount 项错误）' : ''}';
-      } catch (_) {
-        label = '导入完成';
-      }
+      final label = formatImportSummaryLabel(
+        summaryJson,
+        prefix: '导入完成',
+        fallback: '导入完成',
+      );
       // 让书架/分组/书源/替换规则相关 providers 立刻刷新。
       ref.invalidate(allBooksProvider);
       ref.invalidate(booksByGroupProvider);
@@ -624,23 +613,11 @@ class _BackupPageState extends ConsumerState<BackupPage> {
       );
       if (!mounted) return;
       // 解析 ImportSummary
-      String label;
-      try {
-        final Map<String, dynamic> summary =
-            jsonDecode(summaryJson) as Map<String, dynamic>;
-        final books = summary['books'] ?? 0;
-        final groups = summary['groups'] ?? 0;
-        final bookmarks = summary['bookmarks'] ?? 0;
-        final rules = summary['replace_rules'] ?? 0;
-        final sources = summary['sources'] ?? 0;
-        final errors = summary['errors'];
-        final errorCount = (errors is List) ? errors.length : 0;
-        label = '从 WebDAV 恢复: $books 本书 / $groups 个分组 / '
-            '$bookmarks 条书签 / $rules 条替换规则 / $sources 个书源'
-            '${errorCount > 0 ? '（$errorCount 项错误）' : ''}';
-      } catch (_) {
-        label = '从 WebDAV 恢复完成';
-      }
+      final label = formatImportSummaryLabel(
+        summaryJson,
+        prefix: '从 WebDAV 恢复',
+        fallback: '从 WebDAV 恢复完成',
+      );
       ref.invalidate(allBooksProvider);
       ref.invalidate(booksByGroupProvider);
       ref.invalidate(bookGroupsProvider);

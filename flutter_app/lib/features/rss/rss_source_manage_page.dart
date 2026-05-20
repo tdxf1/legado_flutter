@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/providers.dart';
+import '../../core/util/platform_int64.dart';
 import '../../src/rust/api.dart' as rust_api;
 
 /// RSS 源管理页（批次 16 / 05-19）。
@@ -182,9 +183,7 @@ class _RssSourceManagePageState extends ConsumerState<RssSourceManagePage> {
           (String db, String u, bool e) async {
             final n = await rust_api.rssSourceSetEnabled(
                 dbPath: db, url: u, enabled: e);
-            // ignore: unnecessary_cast
-            final dynamic raw = n;
-            return raw is int ? raw : raw.toInt() as int;
+            return platformInt64ToInt(n);
           };
       final String dbPath =
           widget.dbPathOverride ?? await ref.read(dbPathProvider.future);
@@ -229,8 +228,7 @@ class _RssSourceManagePageState extends ConsumerState<RssSourceManagePage> {
       final fn = widget.deleteOverride ??
           (String db, String u) async {
             final n = await rust_api.rssSourceDelete(dbPath: db, url: u);
-            final dynamic raw = n;
-            return raw is int ? raw : raw.toInt() as int;
+            return platformInt64ToInt(n);
           };
       final String dbPath =
           widget.dbPathOverride ?? await ref.read(dbPathProvider.future);
