@@ -227,6 +227,14 @@
 
 **Follow-up — 新 finding (F-W1A-056)**：审计副产物。启用 WAL 后用户 db 目录会多 `legado.db-wal` + `legado.db-shm` sidecar 文件。`core/core-storage/src/backup_dao.rs` 当前只备份主 db 文件，如果备份发起时 WAL 未 checkpoint，-wal 内的未 commit 改动会丢失。修复方向：备份前先 `PRAGMA wal_checkpoint(TRUNCATE)` 把 -wal 数据强制 sync 回主 db，或备份 db + sidecar 三件套。Legado 写量小、autocheckpoint=1000 页（~4MB）频繁，实际丢失风险低，留独立批次审计。Status: Open。
 
+**F-W1A-056 Resolution (BATCH-08d audit, 2026-05-20)**: **Dismissed — finding 基于错误前提**。BATCH-08d audit 推翻"备份会拷贝 db 文件"假设：`backup_dao::export_to_zip` 走 SQL `SELECT` → JSON → zip 路径，全程不接触文件系统层 db 文件。WAL sidecar 对 SQL 层透明：已 commit 数据由 SQLite 引擎自动合并到 SELECT 结果，未 commit 数据按 ACID 隔离语义本就不属于备份范围。Audit evidence：
+- `backup_dao.rs:75-130` — `export_to_zip` 通过 `select_all_books / select_all_groups / select_all_bookmarks / select_all_replace_rules / select_all_sources` 走 SQL 读取
+- `core/bridge/src/api.rs:1219` (`export_backup_zip`) + `:1275` (`webdav_upload_backup`) — 仅有 2 处 caller，都先 `open_db` 拿 `Connection` 再调 `export_to_zip(conn, ...)`
+- 全仓 grep `fs::copy` / `sqlite3_backup_init` / `VACUUM INTO` / `wal_checkpoint` 调用：0 命中（仅 `local_book.rs:126` 的 `fs::copy` 用于复制用户上传的 epub/txt 与 db 备份无关）
+- SQLite WAL doc 保证 SELECT 看到合并后的视图（https://sqlite.org/wal.html#concurrency）
+
+**Follow-up — 新 finding (F-W1A-057)**：BATCH-08d 审计副产物，占位防止后续 binary backup 路径漏 checkpoint。当前 `backup_dao::export_to_zip` 走 SQL SELECT 路径与 WAL sidecar 无关（F-W1A-056 dismissed）。但若**未来**新增任何"二进制级"备份路径（`fs::copy` db 文件 / `VACUUM INTO` / `sqlite3_backup_init` / Dart 侧直接拷贝 `legado.db`），那条新路径**必须在备份前**调 `PRAGMA wal_checkpoint(TRUNCATE)` 把 -wal 数据 sync 回主 db，否则会丢失已 commit 但还未 checkpoint 回主 db 的事务。修复触发条件：仅在新增 binary backup 路径的 PR 内联解决，本 finding 单独不修复。Status: Open（占位）。
+
 ---
 
 ### F-W1A-015 [P1 主要][C-性能][core-storage/cache_dao]
