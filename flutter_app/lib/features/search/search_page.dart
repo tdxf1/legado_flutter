@@ -7,7 +7,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/cover_cache.dart';
 import '../../core/providers.dart';
-import '../../core/transport.dart';
 import '../../src/rust/api.dart' as rust_api;
 
 class SearchPage extends ConsumerStatefulWidget {
@@ -327,11 +326,6 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     _lastSearchKeyword = keyword;
     setState(() => _loading = true);
     try {
-      // HTTP mode: 走 axum /api/search/sse 流式聚合，避免阻塞 FRB 单线程
-      if (_onlineMode && ref.read(backendModeProvider) == BackendMode.http) {
-        await _doSearchViaSse(keyword);
-        return;
-      }
       if (_onlineMode) {
         final dbPath = await ref.read(dbPathProvider.future);
         final sourcesJson = await rust_api.getEnabledSources(dbPath: dbPath);
@@ -403,88 +397,6 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     } finally {
       if (!mounted) return;
       setState(() => _loading = false);
-    }
-  }
-
-  /// HTTP+SSE 流式搜索：当 [BackendMode.http] 时使用。
-  ///
-  /// 通过 [transportProvider] 拿到 [HttpTransport]，订阅
-  /// `GET /api/search/sse?q=keyword`。每条 `event: result` 实时合并到 _results
-  /// 列表，[event: done] 关闭流，[event: error] 仅 debugPrint 不阻断。
-  Future<void> _doSearchViaSse(String keyword) async {
-    final transport = ref.read(transportProvider);
-    final results = <Map<String, dynamic>>[];
-    final seen = <String>{};
-    StreamSubscription<TransportEvent>? sub;
-    final completer = Completer<void>();
-
-    sub = transport
-        .stream('/api/search/sse', query: {'q': keyword})
-        .listen(
-      (event) {
-        switch (event.event) {
-          case 'result':
-            final data = event.json;
-            if (data == null) break;
-            final items = data['items'];
-            if (items is! List) break;
-            for (final item in items) {
-              if (item is! Map) continue;
-              final m = Map<String, dynamic>.from(item);
-              final key = '${m['name']}_${m['author']}';
-              if (seen.add(key)) {
-                results.add(m);
-              }
-            }
-            if (mounted) {
-              final view = _precisionMode
-                  ? SearchPage.applyPrecisionFilter(results, keyword)
-                  : results;
-              _results.value = List.unmodifiable(view);
-            }
-            break;
-          case 'error':
-            debugPrint('[SearchSSE] error event: ${event.data}');
-            break;
-          case 'done':
-            if (!completer.isCompleted) completer.complete();
-            sub?.cancel();
-            break;
-        }
-      },
-      onError: (Object e, StackTrace st) {
-        if (!completer.isCompleted) completer.completeError(e, st);
-      },
-      onDone: () {
-        if (!completer.isCompleted) completer.complete();
-      },
-      cancelOnError: false,
-    );
-
-    try {
-      await completer.future
-          .timeout(const Duration(seconds: 60), onTimeout: () {
-        sub?.cancel();
-      });
-      if (!mounted) return;
-      final finalResults = _precisionMode
-          ? SearchPage.applyPrecisionFilter(results, keyword)
-          : results;
-      _results.value = List.unmodifiable(finalResults);
-      if (_precisionMode && finalResults.isEmpty && results.isNotEmpty) {
-        _showPrecisionEmptyDialog();
-      }
-      _addToHistory(keyword);
-    } catch (e) {
-      if (!mounted) return;
-      _results.value = const [];
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('搜索失败: $e')),
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _loading = false);
-      }
     }
   }
 

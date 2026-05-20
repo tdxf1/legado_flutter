@@ -63,6 +63,8 @@
 
 **建议**: 要么补一份"FRB 也走 Transport.invoke"的迁移路线图（PRD 写明并打开追踪），要么直接删掉 `Transport` 抽象 + `HttpTransport` + `BackendMode` enum，让代码真实反映"FRB 单一传输"的现状；保留下来无消费者反而误导未来开发者。
 
+**Resolution**: Resolved by BATCH-18b（commit 待补）— 整组删除 Transport / HttpTransport / LocalTransport / BackendMode / transportProvider / search_page._doSearchViaSse + 两个测试文件，净 ~-700 行。
+
 ---
 
 ### F-W2A-003 [P1][A-架构][core/providers]

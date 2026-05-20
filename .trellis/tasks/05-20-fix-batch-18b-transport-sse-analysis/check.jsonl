@@ -1,0 +1,3 @@
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-core.md", "reason": "F-W2A-002 状态同步验收"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-18-flutter-dead-code-and-io-abstract.md", "reason": "本批次自身验收清单"}
+{"file": ".trellis/tasks/05-20-fix-batch-18b-transport-sse-analysis/prd.md", "reason": "MVP scope + AC + ADR-lite，逐条对账"}

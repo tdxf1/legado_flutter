@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-core.md", "reason": "F-W2A-002 LocalTransport 占位 finding 原文 + 状态字段需要更新"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-18-flutter-dead-code-and-io-abstract.md", "reason": "BATCH-18 路线图原文（验收清单 + impacted files）"}
+{"file": "flutter_app/lib/core/transport.dart", "reason": "整文件删除目标"}
+{"file": "flutter_app/lib/core/providers.dart", "reason": "删除 import + BackendMode + backendModeProvider + transportProvider + 历史注释"}
+{"file": "flutter_app/lib/features/search/search_page.dart", "reason": "删除 import + _doSearchViaSse 方法 + _doSearch 内 BackendMode.http 死分支；保留 _onlineMode + FRB 在线搜索路径"}
+{"file": "flutter_app/test/transport_test.dart", "reason": "整文件删除（仅测占位行为）"}
+{"file": "flutter_app/test/search_sse_test.dart", "reason": "整文件删除（仅测 SSE 协议层，production 不可达）"}
+{"note": "Phase 3 expansion: dio import grep（flutter_app/lib/）总命中 2 个文件——(1) flutter_app/lib/core/cover_cache.dart 下载封面图（BATCH-18 AC#4 预期保留），(2) flutter_app/lib/features/qr/qr_import_handler.dart 拉取 QR 导入 URL（BATCH-18 AC#4 未列入，是额外消费者）。结论：dio 不是仅 cover_cache 一处。BATCH-18 AC#4 行文需要在后续批次更新或 qr_import_handler 改用 package:http。本批次按 PRD Out of Scope 不动 dio 依赖。"}
