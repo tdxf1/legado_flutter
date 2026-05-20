@@ -15,7 +15,10 @@ final lightThemeProvider = Provider<ThemeData>((ref) => AppTheme.light);
 
 final darkThemeProvider = Provider<ThemeData>((ref) => AppTheme.dark);
 
-final fontSizeProvider = StateProvider<double>((ref) => 18.0);
+// fontSizeProvider 派生自 readerSettingsProvider — 单一 source of truth。
+// BATCH-18d (F-W2A-008) 之前是独立 StateProvider<double>，与
+// ReaderSettings.fontSize 双 source of truth 互不同步。派生定义在
+// readerSettingsProvider 之后（约 L814）— 见 [`readerSettingsProvider`]。
 
 final refreshRateModeProvider =
     StateProvider<RefreshRateMode>((ref) => RefreshRateMode.auto);
@@ -245,14 +248,10 @@ Future<String?> loadPendingRoute({String? directory}) =>
 Future<void> clearPendingRoute({String? directory}) =>
     deleteJsonKey('pendingRoute', directory: directory);
 
-Future<double> loadFontSizeFromDisk() => readJsonKey<double>(
-      'fontSize',
-      (raw) => raw is num ? raw.toDouble().clamp(14.0, 28.0) : 18.0,
-      18.0,
-    );
-
-Future<void> saveFontSizeToDisk(double fontSize) =>
-    writeJsonKey('fontSize', fontSize, errorTag: 'font size');
+// BATCH-18d (F-W2A-008)：删 `loadFontSizeFromDisk` / `saveFontSizeToDisk`。
+// fontSize 现在是 readerSettings 的子字段，由 `loadReaderSettingsFromDisk` /
+// `saveReaderSettingsToDisk` 统一加载 / 持久化。fontSizeProvider 派生自
+// readerSettingsProvider — 见本文件 L814 附近。
 
 Future<List<String>> loadSearchHistoryFromDisk() => readJsonKey<List<String>>(
       'searchHistory',
@@ -812,6 +811,17 @@ List<int> _parseTapZones(dynamic raw) {
 }
 
 final readerSettingsProvider = StateProvider<ReaderSettings>((ref) => const ReaderSettings());
+
+/// 字号派生自 readerSettings — 单一 source of truth（F-W2A-008，BATCH-18d）。
+///
+/// 历史背景：早先是独立的 `StateProvider<double>`，与 `ReaderSettings.fontSize`
+/// 双 source of truth — settings 页改字号写顶级 `fontSize` key，reader
+/// 实际读 `readerSettings.fontSize` 子对象，互不同步。改派生后两端共用
+/// 同一字段：settings slider 改完 → `readerSettingsProvider.notifier` 更新
+/// → 派生流自动通知所有读者（含 reader_page 与 settings_page）。
+final fontSizeProvider = Provider<double>(
+  (ref) => ref.watch(readerSettingsProvider).fontSize,
+);
 
 Future<ReaderSettings> loadReaderSettingsFromDisk() => readJsonKey<ReaderSettings>(
       'readerSettings',

@@ -46,11 +46,15 @@ Future<void> main() async {
   await NotificationService.init();
 
   final themeMode = await loadThemeModeFromDisk();
-  final fontSize = await loadFontSizeFromDisk();
+  // BATCH-18d (F-W2A-008)：启动加载 readerSettings，让派生的
+  // fontSizeProvider 第一帧拿到正确值。reader_page 进入时仍会再次
+  // loadReaderSettingsFromDisk（_readerSettingsLoaded flag 控制），
+  // helper 幂等无副作用。
+  final readerSettings = await loadReaderSettingsFromDisk();
   runApp(ProviderScope(
     overrides: [
       themeModeProvider.overrideWith((ref) => themeMode),
-      fontSizeProvider.overrideWith((ref) => fontSize),
+      readerSettingsProvider.overrideWith((ref) => readerSettings),
       refreshRateModeProvider.overrideWith((ref) => refreshRateMode),
     ],
     child: const LegadoApp(),

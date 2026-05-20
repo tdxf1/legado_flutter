@@ -144,8 +144,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                     divisions: 14,
                     label: '${ref.watch(fontSizeProvider).round()}',
                     onChanged: (value) {
-                      ref.read(fontSizeProvider.notifier).state = value;
-                      saveFontSizeToDisk(value);
+                      // BATCH-18d (F-W2A-008)：派生 fontSizeProvider 后，
+                      // 字号写入必须走 readerSettingsProvider；这样 reader
+                      // 端与 settings 页共享同一 source of truth。
+                      final notifier = ref.read(readerSettingsProvider.notifier);
+                      notifier.state = notifier.state.copyWith(fontSize: value);
+                      saveReaderSettingsToDisk(notifier.state);
                     },
                   ),
                 ),
