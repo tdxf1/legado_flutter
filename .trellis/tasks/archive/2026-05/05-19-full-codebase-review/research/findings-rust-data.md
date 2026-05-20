@@ -223,6 +223,10 @@
 
 **Follow-up — 新 finding (F-W1A-055)**：审计副产物。`StorageManager::new` 是仓库内**唯一**调用 `pragma_update("journal_mode", "WAL")` 的代码路径；删除后**生产 `database::init_database` 不调用任何 journal_mode 相关 pragma**，意味着 production SQLite 跑的是默认 `journal_mode=delete` 而非 WAL。`database.rs:34-49` 的注释强烈暗示意图启用 WAL（BATCH-07b 加了 `synchronous=NORMAL` + `wal_autocheckpoint=1000`，这两个 pragma 仅在 WAL 模式下有意义）。建议：单独立批次评估是否应给 `database::init_database` 加 `pragma_update(None, "journal_mode", "WAL")`，并评估 production DB 文件迁移路径（首次启动时从 `journal_mode=delete` 切到 WAL 是单文件操作不需要外部迁移工具，但要测在已有 DB 上的安全性）。
 
+**Resolution (BATCH-08c, 2026-05-20)**: F-W1A-055 已闭环。在 `database::init_database` 内 `Connection::open` 之后插入 `pragma_update_and_check(None, "journal_mode", "WAL", ...)`，配合既有 `synchronous=NORMAL` + `wal_autocheckpoint=1000` 形成 SQLite 官方推荐组合。启用成功 info!，失败 warn!，不阻塞启动。新增 2 个单测 `test_wal_enabled_on_fresh_init` + `test_wal_persists_across_reopens`（验证 db-level 持久化；下游 `get_connection` / 直调 `Connection::open` 的所有路径自动继承）。`core-storage --lib` 从 89 → 91 PASS。`bridge --lib --tests` 维持 16/16 + 8/8。
+
+**Follow-up — 新 finding (F-W1A-056)**：审计副产物。启用 WAL 后用户 db 目录会多 `legado.db-wal` + `legado.db-shm` sidecar 文件。`core/core-storage/src/backup_dao.rs` 当前只备份主 db 文件，如果备份发起时 WAL 未 checkpoint，-wal 内的未 commit 改动会丢失。修复方向：备份前先 `PRAGMA wal_checkpoint(TRUNCATE)` 把 -wal 数据强制 sync 回主 db，或备份 db + sidecar 三件套。Legado 写量小、autocheckpoint=1000 页（~4MB）频繁，实际丢失风险低，留独立批次审计。Status: Open。
+
 ---
 
 ### F-W1A-015 [P1 主要][C-性能][core-storage/cache_dao]
