@@ -1,0 +1,140 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:legado_flutter/core/persistence/json_store.dart';
+
+void main() {
+  late Directory tmpDir;
+
+  setUp(() async {
+    tmpDir = await Directory.systemTemp.createTemp('json_store_test_');
+  });
+
+  tearDown(() async {
+    if (await tmpDir.exists()) await tmpDir.delete(recursive: true);
+  });
+
+  test('round-trip: writeJsonKey then readJsonKey returns same value',
+      () async {
+    await writeJsonKey('foo', 'bar', directory: tmpDir.path);
+    final v = await readJsonKey<String>(
+      'foo',
+      (raw) => raw as String,
+      'default',
+      directory: tmpDir.path,
+    );
+    expect(v, 'bar');
+  });
+
+  test('readJsonKey returns default when file missing', () async {
+    final v = await readJsonKey<int>(
+      'missing',
+      (raw) => raw as int,
+      42,
+      directory: tmpDir.path,
+    );
+    expect(v, 42);
+  });
+
+  test('readJsonKey returns default when key missing', () async {
+    await writeJsonKey('a', 1, directory: tmpDir.path);
+    final v = await readJsonKey<int>(
+      'b',
+      (raw) => raw as int,
+      99,
+      directory: tmpDir.path,
+    );
+    expect(v, 99);
+  });
+
+  test('readJsonKey returns default when parse throws', () async {
+    await writeJsonKey('foo', 'not-a-number', directory: tmpDir.path);
+    final v = await readJsonKey<int>(
+      'foo',
+      (raw) => raw as int,
+      7,
+      directory: tmpDir.path,
+    );
+    expect(v, 7);
+  });
+
+  test('deleteJsonKey removes the key but keeps siblings', () async {
+    await writeJsonKey('keep', 'me', directory: tmpDir.path);
+    await writeJsonKey('drop', 'gone', directory: tmpDir.path);
+    await deleteJsonKey('drop', directory: tmpDir.path);
+
+    final dropped = await readJsonKey<String?>(
+      'drop',
+      (raw) => raw as String?,
+      null,
+      directory: tmpDir.path,
+    );
+    final kept = await readJsonKey<String?>(
+      'keep',
+      (raw) => raw as String?,
+      null,
+      directory: tmpDir.path,
+    );
+    expect(dropped, isNull);
+    expect(kept, 'me');
+  });
+
+  test('deleteJsonKey is a no-op when file or key missing', () async {
+    // No file yet — should not throw / create file.
+    await deleteJsonKey('foo', directory: tmpDir.path);
+    expect(await File('${tmpDir.path}/settings.json').exists(), isFalse);
+
+    // File exists but key absent.
+    await writeJsonKey('a', 1, directory: tmpDir.path);
+    await deleteJsonKey('b', directory: tmpDir.path);
+    final v = await readJsonKey<int>(
+      'a',
+      (raw) => raw as int,
+      0,
+      directory: tmpDir.path,
+    );
+    expect(v, 1);
+  });
+
+  test('concurrent writes serialize correctly: all keys persisted', () async {
+    final futures = List.generate(
+      10,
+      (i) => writeJsonKey('k$i', i, directory: tmpDir.path),
+    );
+    await Future.wait(futures);
+
+    final file = File('${tmpDir.path}/settings.json');
+    final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+    for (var i = 0; i < 10; i++) {
+      expect(json['k$i'], i, reason: 'key k$i missing or wrong');
+    }
+  });
+
+  test('read does not block write and vice versa', () async {
+    await writeJsonKey('seed', 1, directory: tmpDir.path);
+    final futures = <Future<void>>[];
+    for (var i = 0; i < 5; i++) {
+      futures.add(
+        readJsonKey<int>(
+          'seed',
+          (raw) => raw as int,
+          0,
+          directory: tmpDir.path,
+        ),
+      );
+      futures.add(writeJsonKey('w$i', i, directory: tmpDir.path));
+    }
+    // 5 秒超时即认为没死锁；正常情况下应在毫秒级完成。
+    await Future.wait(futures).timeout(const Duration(seconds: 5));
+  });
+
+  test('writeJsonKey errors are swallowed when errorTag null', () async {
+    // 用一个不存在的目录触发底层 IO 异常；错误应被静默吞掉，不向上抛。
+    final bogusDir = '${tmpDir.path}/does_not_exist_${DateTime.now().microsecondsSinceEpoch}';
+    // 不传 errorTag → 静默；调用应返回正常。
+    await writeJsonKey('foo', 'bar', directory: bogusDir);
+    // 也确认没建出意外文件。
+    expect(await Directory(bogusDir).exists(), isFalse);
+  });
+}

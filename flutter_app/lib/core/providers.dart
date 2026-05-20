@@ -1,11 +1,10 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path_provider/path_provider.dart';
 
+import 'persistence/json_store.dart';
 import 'theme.dart';
 import 'refresh_rate_controller.dart';
 import '../src/rust/api.dart' as rust_api;
@@ -24,10 +23,7 @@ final refreshRateModeProvider =
 final dbDirProvider = FutureProvider<String>((ref) async {
   if (kIsWeb) return '.';
   try {
-    final dir = Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path;
-    return dir;
+    return await resolvePersistenceDir();
   } catch (e) {
     return '.';
   }
@@ -214,147 +210,58 @@ final bookChaptersProvider =
   return result;
 });
 
-Future<ThemeMode> loadThemeModeFromDisk({String? directory}) async {
-  try {
-    final dir = directory ?? (Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path);
-    final file = File('$dir/settings.json');
-    if (!await file.exists()) return ThemeMode.system;
-    final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-    return ThemeMode.values[json['themeMode'] as int? ?? 0];
-  } catch (e) {
-    return ThemeMode.system;
-  }
-}
+Future<ThemeMode> loadThemeModeFromDisk({String? directory}) =>
+    readJsonKey<ThemeMode>(
+      'themeMode',
+      (raw) {
+        if (raw is int && raw >= 0 && raw < ThemeMode.values.length) {
+          return ThemeMode.values[raw];
+        }
+        return ThemeMode.system;
+      },
+      ThemeMode.system,
+      directory: directory,
+    );
 
-Future<void> saveThemeModeToDisk(ThemeMode mode, {String? directory}) async {
-  try {
-    final dir = directory ?? (Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path);
-    final file = File('$dir/settings.json');
-    final Map<String, dynamic> data = file.existsSync()
-        ? jsonDecode(await file.readAsString()) as Map<String, dynamic>
-        : {};
-    data['themeMode'] = mode.index;
-    await file.writeAsString(jsonEncode(data));
-  } catch (e) {
-    debugPrint('Failed to save theme mode: $e');
-  }
-}
+Future<void> saveThemeModeToDisk(ThemeMode mode, {String? directory}) =>
+    writeJsonKey(
+      'themeMode',
+      mode.index,
+      directory: directory,
+      errorTag: 'theme mode',
+    );
 
-Future<void> savePendingRoute(String route, {String? directory}) async {
-  try {
-    final dir = directory ?? (Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path);
-    final file = File('$dir/settings.json');
-    final Map<String, dynamic> data = file.existsSync()
-        ? jsonDecode(await file.readAsString()) as Map<String, dynamic>
-        : {};
-    data['pendingRoute'] = route;
-    await file.writeAsString(jsonEncode(data));
-  } catch (e) {
-  }
-}
+Future<void> savePendingRoute(String route, {String? directory}) =>
+    writeJsonKey('pendingRoute', route, directory: directory);
 
-Future<String?> loadPendingRoute({String? directory}) async {
-  try {
-    final dir = directory ?? (Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path);
-    final file = File('$dir/settings.json');
-    if (!await file.exists()) {
-      return null;
-    }
-    final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-    final route = json['pendingRoute'] as String?;
-    return route;
-  } catch (e) {
-    return null;
-  }
-}
+Future<String?> loadPendingRoute({String? directory}) =>
+    readJsonKey<String?>(
+      'pendingRoute',
+      (raw) => raw as String?,
+      null,
+      directory: directory,
+    );
 
-Future<void> clearPendingRoute({String? directory}) async {
-  try {
-    final dir = directory ?? (Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path);
-    final file = File('$dir/settings.json');
-    if (await file.exists()) {
-      final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-      json.remove('pendingRoute');
-      await file.writeAsString(jsonEncode(json));
-    } else {
-    }
-  } catch (e) {
-  }
-}
+Future<void> clearPendingRoute({String? directory}) =>
+    deleteJsonKey('pendingRoute', directory: directory);
 
-Future<double> loadFontSizeFromDisk() async {
-  try {
-    final dir = Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path;
-    final file = File('$dir/settings.json');
-    if (!await file.exists()) return 18.0;
-    final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-    final v = json['fontSize'];
-    if (v is num) return v.toDouble().clamp(14.0, 28.0);
-    return 18.0;
-  } catch (e) {
-    return 18.0;
-  }
-}
+Future<double> loadFontSizeFromDisk() => readJsonKey<double>(
+      'fontSize',
+      (raw) => raw is num ? raw.toDouble().clamp(14.0, 28.0) : 18.0,
+      18.0,
+    );
 
-Future<void> saveFontSizeToDisk(double fontSize) async {
-  try {
-    final dir = Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path;
-    final file = File('$dir/settings.json');
-    final Map<String, dynamic> data = file.existsSync()
-        ? jsonDecode(await file.readAsString()) as Map<String, dynamic>
-        : {};
-    data['fontSize'] = fontSize;
-    await file.writeAsString(jsonEncode(data));
-  } catch (e) {
-    debugPrint('Failed to save font size: $e');
-  }
-}
+Future<void> saveFontSizeToDisk(double fontSize) =>
+    writeJsonKey('fontSize', fontSize, errorTag: 'font size');
 
-Future<List<String>> loadSearchHistoryFromDisk() async {
-  try {
-    final dir = Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path;
-    final file = File('$dir/settings.json');
-    if (!await file.exists()) return [];
-    final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-    final list = json['searchHistory'];
-    if (list is List) return list.map((e) => e.toString()).toList();
-    return [];
-  } catch (e) {
-    return [];
-  }
-}
+Future<List<String>> loadSearchHistoryFromDisk() => readJsonKey<List<String>>(
+      'searchHistory',
+      (raw) => raw is List ? raw.map((e) => e.toString()).toList() : <String>[],
+      <String>[],
+    );
 
-Future<void> saveSearchHistoryToDisk(List<String> history) async {
-  try {
-    final dir = Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path;
-    final file = File('$dir/settings.json');
-    final Map<String, dynamic> data = file.existsSync()
-        ? jsonDecode(await file.readAsString()) as Map<String, dynamic>
-        : {};
-    data['searchHistory'] = history;
-    await file.writeAsString(jsonEncode(data));
-  } catch (e) {
-    debugPrint('Failed to save search history: $e');
-  }
-}
+Future<void> saveSearchHistoryToDisk(List<String> history) =>
+    writeJsonKey('searchHistory', history, errorTag: 'search history');
 
 /// 搜索精确模式：是否仅保留 `name == kw / author == kw / contains kw` 的结果。
 ///
@@ -362,37 +269,14 @@ Future<void> saveSearchHistoryToDisk(List<String> history) async {
 /// （PRD 文本写的是 SharedPreferences，但工程里没有 shared_preferences 依赖
 /// 只有 path_provider，且 search_history 已经走 settings.json，按
 /// code-reuse-thinking-guide 复用现有方案，避免引入新依赖与平台 mock）。
-Future<bool> loadSearchPrecisionFromDisk() async {
-  try {
-    final dir = Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path;
-    final file = File('$dir/settings.json');
-    if (!await file.exists()) return false;
-    final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-    final v = json['searchPrecision'];
-    if (v is bool) return v;
-    return false;
-  } catch (e) {
-    return false;
-  }
-}
+Future<bool> loadSearchPrecisionFromDisk() => readJsonKey<bool>(
+      'searchPrecision',
+      (raw) => raw is bool ? raw : false,
+      false,
+    );
 
-Future<void> saveSearchPrecisionToDisk(bool enabled) async {
-  try {
-    final dir = Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path;
-    final file = File('$dir/settings.json');
-    final Map<String, dynamic> data = file.existsSync()
-        ? jsonDecode(await file.readAsString()) as Map<String, dynamic>
-        : {};
-    data['searchPrecision'] = enabled;
-    await file.writeAsString(jsonEncode(data));
-  } catch (e) {
-    debugPrint('Failed to save search precision: $e');
-  }
-}
+Future<void> saveSearchPrecisionToDisk(bool enabled) =>
+    writeJsonKey('searchPrecision', enabled, errorTag: 'search precision');
 /// 阅读器渲染模式。
 ///
 /// 之前散落使用 `_settings.pageAnim == ReaderPageAnim.scroll` 或
@@ -929,100 +813,45 @@ List<int> _parseTapZones(dynamic raw) {
 
 final readerSettingsProvider = StateProvider<ReaderSettings>((ref) => const ReaderSettings());
 
-Future<ReaderSettings> loadReaderSettingsFromDisk() async {
-  try {
-    final dir = Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path;
-    final file = File('$dir/settings.json');
-    if (!await file.exists()) return const ReaderSettings();
-    final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-    final settingsJson = json['readerSettings'];
-    if (settingsJson is Map<String, dynamic>) {
-      return ReaderSettings.fromJson(settingsJson);
-    }
-    return const ReaderSettings();
-  } catch (e) {
-    return const ReaderSettings();
-  }
-}
+Future<ReaderSettings> loadReaderSettingsFromDisk() => readJsonKey<ReaderSettings>(
+      'readerSettings',
+      (raw) => raw is Map<String, dynamic>
+          ? ReaderSettings.fromJson(raw)
+          : const ReaderSettings(),
+      const ReaderSettings(),
+    );
 
-Future<void> saveReaderSettingsToDisk(ReaderSettings settings) async {
-  try {
-    final dir = Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path;
-    final file = File('$dir/settings.json');
-    final Map<String, dynamic> data = file.existsSync()
-        ? jsonDecode(await file.readAsString()) as Map<String, dynamic>
-        : {};
-    data['readerSettings'] = settings.toJson();
-    await file.writeAsString(jsonEncode(data));
-  } catch (e) {
-    debugPrint('Failed to save reader settings: $e');
-  }
-}
+Future<void> saveReaderSettingsToDisk(ReaderSettings settings) =>
+    writeJsonKey(
+      'readerSettings',
+      settings.toJson(),
+      errorTag: 'reader settings',
+    );
 
-Future<bool> loadBookshelfGridViewFromDisk() async {
-  try {
-    final dir = Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path;
-    final file = File('$dir/settings.json');
-    if (!await file.exists()) return false;
-    final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-    final v = json['bookshelfGridView'];
-    if (v is bool) return v;
-    return false;
-  } catch (e) {
-    return false;
-  }
-}
+Future<bool> loadBookshelfGridViewFromDisk() => readJsonKey<bool>(
+      'bookshelfGridView',
+      (raw) => raw is bool ? raw : false,
+      false,
+    );
 
-Future<void> saveBookshelfGridViewToDisk(bool isGridView) async {
-  try {
-    final dir = Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path;
-    final file = File('$dir/settings.json');
-    final Map<String, dynamic> data = file.existsSync()
-        ? jsonDecode(await file.readAsString()) as Map<String, dynamic>
-        : {};
-    data['bookshelfGridView'] = isGridView;
-    await file.writeAsString(jsonEncode(data));
-  } catch (e) {
-    debugPrint('Failed to save bookshelf grid view: $e');
-  }
-}
+Future<void> saveBookshelfGridViewToDisk(bool isGridView) =>
+    writeJsonKey(
+      'bookshelfGridView',
+      isGridView,
+      errorTag: 'bookshelf grid view',
+    );
 
-Future<RefreshRateMode> loadRefreshRateModeFromDisk() async {
-  try {
-    final dir = Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path;
-    final file = File('$dir/settings.json');
-    if (!await file.exists()) return RefreshRateMode.auto;
-    final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-    final v = json['refreshRateMode'];
-    if (v is int) return RefreshRateModeLabel.fromIndex(v);
-    return RefreshRateMode.auto;
-  } catch (e) {
-    return RefreshRateMode.auto;
-  }
-}
+Future<RefreshRateMode> loadRefreshRateModeFromDisk() =>
+    readJsonKey<RefreshRateMode>(
+      'refreshRateMode',
+      (raw) => raw is int
+          ? RefreshRateModeLabel.fromIndex(raw)
+          : RefreshRateMode.auto,
+      RefreshRateMode.auto,
+    );
 
-Future<void> saveRefreshRateModeToDisk(RefreshRateMode mode) async {
-  try {
-    final dir = Platform.isAndroid
-        ? (await getApplicationDocumentsDirectory()).path
-        : (await getApplicationSupportDirectory()).path;
-    final file = File('$dir/settings.json');
-    final Map<String, dynamic> data = file.existsSync()
-        ? jsonDecode(await file.readAsString()) as Map<String, dynamic>
-        : {};
-    data['refreshRateMode'] = mode.persistIndex;
-    await file.writeAsString(jsonEncode(data));
-  } catch (e) {
-    debugPrint('Failed to save refresh rate mode: $e');
-  }
-}
+Future<void> saveRefreshRateModeToDisk(RefreshRateMode mode) => writeJsonKey(
+      'refreshRateMode',
+      mode.persistIndex,
+      errorTag: 'refresh rate mode',
+    );
