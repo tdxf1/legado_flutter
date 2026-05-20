@@ -77,6 +77,8 @@
 
 **建议**: 抽出 `class _SettingsStore { static Future<Map> read(); static Future<void> writeKey(String k, dynamic v); }` 单点序列化；或者干脆引入 `package:shared_preferences` 把这堆字段迁过去。后者更优——SharedPreferences 自带 atomicity 与平台无关，能去掉 `Platform.isAndroid` 路径分叉。
 
+**Resolution (BATCH-18c, 2026-05-20)**: Extracted to `flutter_app/lib/core/persistence/json_store.dart` with 3 helpers (`readJsonKey<T>`, `writeJsonKey`, `deleteJsonKey`) plus a public `resolvePersistenceDir` (which `dbDirProvider` now reuses). All 17 wrapper functions in `providers.dart` keep their signatures; bodies reduced to 1–3 line helper calls. Module-level `_Mutex` serializes every write/delete, resolving the read-modify-write race noted at the end of this finding (`getApplicationDocumentsDirectory|getApplicationSupportDirectory` and `Platform.isAndroid` no longer appear in `providers.dart`). Did not introduce `shared_preferences` (would be a dep + migration cost orthogonal to this batch's "local extraction" goal). Net diff ≈ −150 lines on `providers.dart` plus a new ~165 line helper and ~135 line test file (`test/json_store_test.dart`, 9 cases including concurrent-write serialization and read-write non-blocking).
+
 ---
 
 ### F-W2A-004 [P1][B-正确性][core/providers]

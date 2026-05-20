@@ -23,7 +23,8 @@
     "05-20-fix-batch-07b-cross-dao-tx",
     "05-20-fix-batch-18b-transport-sse-analysis",
     "05-20-fix-batch-08-dao-sql-dedup",
-    "05-20-fix-batch-08b-storagemanager-deletion"
+    "05-20-fix-batch-08b-storagemanager-deletion",
+    "05-20-fix-batch-18c-json-store-abstraction"
   ],
   "parent": null,
   "relatedFiles": [],
