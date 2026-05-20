@@ -6,8 +6,8 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:go_router/go_router.dart';
-import 'package:path_provider/path_provider.dart';
 
+import '../../core/persistence/json_store.dart';
 import '../../core/providers.dart';
 import '../../src/rust/api.dart' as rust_api;
 import 'widgets/book_group_dialogs.dart';
@@ -277,7 +277,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
       final String dbPath =
           widget.dbPathOverride ?? await ref.read(dbPathProvider.future);
       final String documentsDir = widget.documentsDirOverride ??
-          (await getApplicationDocumentsDirectory()).path;
+          await resolvePersistenceDir();
       // FRB 调用
       final importFn = widget.importLocalBookOverride ??
           ({

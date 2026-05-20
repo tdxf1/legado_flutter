@@ -5,8 +5,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:path_provider/path_provider.dart';
 
+import '../../core/persistence/json_store.dart';
 import '../../core/providers.dart';
 import '../../src/rust/api.dart' as rust_api;
 
@@ -283,8 +283,9 @@ class _BookInfoEditPageState extends ConsumerState<BookInfoEditPage> {
     required String srcPath,
     required String bookId,
   }) async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final coversDir = Directory('${docsDir.path}/covers');
+    // BATCH-18e (F-W2B-022)：走统一的 resolvePersistenceDir。
+    final dir = await resolvePersistenceDir();
+    final coversDir = Directory('$dir/covers');
     if (!await coversDir.exists()) {
       await coversDir.create(recursive: true);
     }

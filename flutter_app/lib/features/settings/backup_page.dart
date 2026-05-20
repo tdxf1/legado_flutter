@@ -5,8 +5,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:path_provider/path_provider.dart';
 
+import '../../core/persistence/json_store.dart';
 import '../../core/providers.dart';
 import '../../src/rust/api.dart' as rust_api;
 
@@ -473,8 +473,10 @@ class _BackupPageState extends ConsumerState<BackupPage> {
   /// 提示"先去配置"）。
   Future<Map<String, String>?> _loadWebDavConfig() async {
     try {
-      final dir = widget.webdavConfigDirOverride ??
-          (await getApplicationDocumentsDirectory()).path;
+      // BATCH-18e (F-W2B-022)：路径走 resolvePersistenceDir 与 db 对齐。
+      // webdav.json read-modify-write 模板与 webdav_config_page 重复，留
+      // BATCH-18g（F-W2A-058）独立批次抽公共 helper。
+      final dir = widget.webdavConfigDirOverride ?? await resolvePersistenceDir();
       final f = File('$dir/webdav.json');
       if (!await f.exists()) return null;
       final text = await f.readAsString();

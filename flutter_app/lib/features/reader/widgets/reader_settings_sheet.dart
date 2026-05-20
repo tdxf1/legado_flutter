@@ -15,8 +15,8 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 
+import '../../../core/persistence/json_store.dart';
 import '../../../core/providers.dart';
 import 'tap_zone_config_dialog.dart';
 
@@ -54,9 +54,9 @@ class _ReaderSettingsSheetState extends State<ReaderSettingsSheet> {
       if (result == null || result.files.isEmpty) return;
       final sourcePath = result.files.single.path;
       if (sourcePath == null) return;
-      final dir = Platform.isAndroid
-          ? (await getApplicationDocumentsDirectory()).path
-          : (await getApplicationSupportDirectory()).path;
+      // BATCH-18e (F-W2B-022)：走统一的 resolvePersistenceDir，
+      // 与 json_store 保持单一 Android/桌面平台路径策略。
+      final dir = await resolvePersistenceDir();
       final bgDir = Directory('$dir/reader_backgrounds');
       if (!await bgDir.exists()) await bgDir.create(recursive: true);
       final filename = 'bg_${DateTime.now().millisecondsSinceEpoch}.jpg';

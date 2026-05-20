@@ -16,7 +16,8 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
+
+import 'persistence/json_store.dart';
 
 class CoverCache {
   CoverCache._();
@@ -27,8 +28,10 @@ class CoverCache {
   static Future<String?> downloadAndCache(String coverUrl) async {
     if (coverUrl.isEmpty) return null;
     try {
-      final dir = await getApplicationDocumentsDirectory();
-      final coversDir = Directory('${dir.path}/covers');
+      // BATCH-18e (F-W2B-022)：走统一的 resolvePersistenceDir。Android
+      // 拿 Documents、其它平台拿 Support，与 db 路径对齐。
+      final dir = await resolvePersistenceDir();
+      final coversDir = Directory('$dir/covers');
       if (!coversDir.existsSync()) {
         coversDir.createSync(recursive: true);
       }

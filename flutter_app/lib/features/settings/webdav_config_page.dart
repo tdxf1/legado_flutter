@@ -3,8 +3,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path_provider/path_provider.dart';
 
+import '../../core/persistence/json_store.dart';
 import '../../src/rust/api.dart' as rust_api;
 
 /// WebDAV 配置页（批次 11 / 05-19）。
@@ -98,8 +98,8 @@ class _WebDavConfigPageState extends ConsumerState<WebDavConfigPage> {
   Future<String> _resolveConfigDir() async {
     final override = widget.configDirOverride;
     if (override != null) return override;
-    final docsDir = await getApplicationDocumentsDirectory();
-    return docsDir.path;
+    // BATCH-18e (F-W2B-022)：走统一的 resolvePersistenceDir。
+    return await resolvePersistenceDir();
   }
 
   Future<void> _loadConfig() async {
