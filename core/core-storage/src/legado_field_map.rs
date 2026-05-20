@@ -718,9 +718,17 @@ pub fn storage_bookmark_to_legado_json(bm: &Bookmark) -> Value {
 }
 
 /// 本端口 `ReplaceRule` → Legado JSON
+///
+/// 批次 08 (BATCH-08 / F-W1A-054)：Legado 端 `ReplaceRule.id` PK 是 i64
+/// 毫秒时间戳；本端口真实主键是 `String` UUID。导出时把 `created_at *
+/// 1000` 当 PK 高位，并在低 16 位塞 `id` UUID 的 hash 做抖动，避免同
+/// 1ms 创建的多条规则导出后 PK 冲突 → 原 Legado 端导入触发 UNIQUE 违
+/// 反。极端情况下 hash 冲突仍可能（65536 内同 ms 多条；概率极低，可接
+/// 受），不影响 Round-trip 端口侧（端口侧主键仍是 UUID）。
 pub fn storage_replace_rule_to_legado_json(r: &ReplaceRule) -> Value {
+    let pk = r.created_at * 1000 + (hash_id_u16(&r.id) as i64);
     json!({
-        "id": r.created_at * 1000, // Legado 用毫秒时间戳作 PK
+        "id": pk,
         "name": r.name,
         "group": "",
         "pattern": r.pattern,
@@ -734,6 +742,16 @@ pub fn storage_replace_rule_to_legado_json(r: &ReplaceRule) -> Value {
         "timeoutMillisecond": 3000,
         "order": r.sort_number,
     })
+}
+
+/// 把 UUID 字符串 hash 到 u16，作为 Legado PK 的低 16 位抖动。
+/// 用 `std::collections::hash_map::DefaultHasher`（无外部 dep），最低
+/// 16 bit cast 即可。
+fn hash_id_u16(id: &str) -> u16 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut h);
+    h.finish() as u16
 }
 
 /// 本端口 `BookSource` → Legado JSON（最小集，与 source_dao::export_legado_json
@@ -959,5 +977,53 @@ mod tests {
         assert_eq!(json["group"], 4);
         // 时间戳应该再 ×1000 还原成 ms
         assert_eq!(json["latestChapterTime"], 1_700_000_000_000_i64);
+    }
+
+    fn make_replace_rule(id: &str, created_at: i64) -> ReplaceRule {
+        ReplaceRule {
+            id: id.into(),
+            name: format!("rule-{id}"),
+            pattern: ".*".into(),
+            replacement: "".into(),
+            enabled: true,
+            scope: None,
+            scope_title: false,
+            scope_content: true,
+            exclude_scope: None,
+            sort_number: 0,
+            created_at,
+            updated_at: created_at,
+        }
+    }
+
+    /// 批次 08 (BATCH-08 / F-W1A-054): 同 `created_at` 但不同 `id` 的两条
+    /// 规则导出后 `id` PK 字段不能冲突 — 否则原 Legado 端导入触发 UNIQUE
+    /// 违反。低 16 位用 UUID hash 抖动后，同 ms 多条概率冲突 < 1/65536。
+    #[test]
+    fn storage_replace_rule_to_legado_pk_jitter_avoids_same_ms_collision() {
+        let r1 = make_replace_rule("aaaaaaaa-1111-2222-3333-444444444444", 1_700_000_000);
+        let r2 = make_replace_rule("bbbbbbbb-5555-6666-7777-888888888888", 1_700_000_000);
+        let j1 = storage_replace_rule_to_legado_json(&r1);
+        let j2 = storage_replace_rule_to_legado_json(&r2);
+        let id1 = j1["id"].as_i64().expect("id1 should be i64");
+        let id2 = j2["id"].as_i64().expect("id2 should be i64");
+        assert_ne!(id1, id2, "same created_at but different UUIDs must produce different PKs");
+        // 两个 PK 都应该在 created_at*1000 附近（同一 ms 高位）
+        let base = 1_700_000_000_i64 * 1000;
+        assert!(id1 >= base && id1 < base + 0x1_0000);
+        assert!(id2 >= base && id2 < base + 0x1_0000);
+    }
+
+    /// 同一 id 多次导出应保持 PK 稳定（纯函数性 — 不依赖随机 / 时间）。
+    #[test]
+    fn storage_replace_rule_to_legado_pk_is_stable_for_same_id() {
+        let r = make_replace_rule("c0ffee00-cafe-1234-5678-9abcdef01234", 1_700_000_000);
+        let id1 = storage_replace_rule_to_legado_json(&r)["id"]
+            .as_i64()
+            .unwrap();
+        let id2 = storage_replace_rule_to_legado_json(&r)["id"]
+            .as_i64()
+            .unwrap();
+        assert_eq!(id1, id2, "same input must produce same PK");
     }
 }

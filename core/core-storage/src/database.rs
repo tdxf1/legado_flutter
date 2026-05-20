@@ -1475,7 +1475,11 @@ mod tests {
         dao.delete_bookmark(&bookmark.id).unwrap();
         assert_eq!(dao.get_bookmarks(&book.id).unwrap().len(), 0);
 
-        dao.delete(&book.id).unwrap();
+        // 批次 08 (BATCH-08 / F-W1A-018): 之前调 `progress_dao.delete(book_id)`
+        // 显式清进度；该 fn 因 0 caller 已删除，现在依赖 SQLite FK CASCADE
+        // —— 删 book 时 `book_progress.book_id` 外键自动清理对应行。
+        let book_dao = crate::book_dao::BookDao::new(&conn);
+        book_dao.delete(&book.id).unwrap();
         assert!(dao.get_by_book(&book.id).unwrap().is_none());
     }
 

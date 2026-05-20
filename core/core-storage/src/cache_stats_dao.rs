@@ -6,9 +6,10 @@
 //! ## 约定
 //!
 //! - 只读 + 批量 UPDATE，不动 chapters 行的存在性 / index / url。这点
-//!   和 [`crate::ChapterDao::delete_by_book`] 区分：换源时整本删章节走
-//!   delete_by_book；用户只想"释放空间但保留章节列表（标题 + url）以便
-//!   重新拉"时走 [`CacheStatsDao::clear_book_cache`]。
+//!   和"整本删章节"区分：删书时 SQLite FK CASCADE 自动清理章节
+//!   （`chapters.book_id` 外键 ON DELETE CASCADE）；用户只想"释放空间
+//!   但保留章节列表（标题 + url）以便重新拉"时走
+//!   [`CacheStatsDao::clear_book_cache`]。
 //! - 全部走 `&Connection`（不需要 `&mut`），可与其它只读 DAO 同实例
 //!   并存。
 //! - `clear_*` 返回受影响 chapters 行数（i64），方便上层 SnackBar

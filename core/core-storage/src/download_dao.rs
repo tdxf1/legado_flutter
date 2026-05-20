@@ -2,22 +2,32 @@ use super::models::{DownloadChapter, DownloadTask};
 use chrono::Utc;
 use rusqlite::{params, Connection, Result as SqlResult};
 use std::path::PathBuf;
-use std::sync::RwLock;
+use std::sync::OnceLock;
 use tracing::{debug, info};
 use uuid::Uuid;
 
-static DOWNLOAD_ROOT: RwLock<Option<PathBuf>> = RwLock::new(None);
+/// 下载根目录（一次性配置）。
+///
+/// 批次 08 (BATCH-08 / F-W1A-016) 把原 `RwLock<Option<PathBuf>>` 改成
+/// `OnceLock<PathBuf>`：set 路径仅 1 处（FRB 启动时由
+/// `bridge::api::download_and_save_chapter` 一次性 set），mutable global
+/// 不必要。
+static DOWNLOAD_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
+/// 设置下载根目录。
+///
+/// 重复 set 静默忽略（OnceLock 语义）：FRB 启动时一次性 set 后，后续
+/// 同一 db_path 的 set 调用不再生效；目前只有一次 set 路径，重复 set
+/// 仅在测试 fixture / 多 db 切换场景下出现，对生产无影响。
 pub fn set_download_root(path: &str) {
     if let Ok(canonical) = PathBuf::from(path).canonicalize() {
-        if let Ok(mut root) = DOWNLOAD_ROOT.write() {
-            *root = Some(canonical);
-        }
+        // OnceLock::set 第二次调用返回 Err(value) 表示已被设置；丢弃即可。
+        let _ = DOWNLOAD_ROOT.set(canonical);
     }
 }
 
 fn get_download_root() -> Option<PathBuf> {
-    DOWNLOAD_ROOT.read().ok()?.clone()
+    DOWNLOAD_ROOT.get().cloned()
 }
 
 pub struct DownloadDao<'a> {

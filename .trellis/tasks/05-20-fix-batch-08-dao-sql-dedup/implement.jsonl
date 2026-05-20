@@ -1,0 +1,11 @@
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-rust-data.md", "reason": "本批次涉及的 wave 1A findings 详细文本（F-W1A-006/010/011/015/016/018/054）"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-08-dao-sql-dedup-and-cleanup.md", "reason": "BATCH-08 路线图原文（验收清单 + 影响文件）"}
+{"file": "core/core-storage/src/source_dao.rs", "reason": "F-W1A-006: 4 处 SELECT 抽 BOOK_SOURCE_COLUMNS 常量"}
+{"file": "core/core-storage/src/book_dao.rs", "reason": "F-W1A-011: BOOK_UPSERT_SQL / book_upsert_params! 已存在，需提到 pub(crate) 让 backup_dao 复用；BOOK_COLUMNS 风格参考"}
+{"file": "core/core-storage/src/backup_dao.rs", "reason": "F-W1A-006 第 5 处 SELECT + F-W1A-011 books upsert + F-W1A-010 backup 端 upsert_bookmark 范本"}
+{"file": "core/core-storage/src/progress_dao.rs", "reason": "F-W1A-010: add_bookmark 改 upsert + 删除孤儿 delete(book_id) fn"}
+{"file": "core/core-storage/src/chapter_dao.rs", "reason": "F-W1A-018: 删除 delete_by_book 孤儿 fn"}
+{"file": "core/core-storage/src/cache_dao.rs", "reason": "F-W1A-015: get 改不吞 SQL Error"}
+{"file": "core/core-storage/src/download_dao.rs", "reason": "F-W1A-016: DOWNLOAD_ROOT 改 OnceLock"}
+{"file": "core/core-storage/src/legado_field_map.rs", "reason": "F-W1A-054: created_at*1000 PK 抖动 + doc-comment"}
+{"file": "core/bridge/src/api.rs", "reason": "F-W1A-018 主路径已闭环（验证），DOWNLOAD_ROOT set 调用点"}

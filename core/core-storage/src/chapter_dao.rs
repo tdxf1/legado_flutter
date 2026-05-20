@@ -235,13 +235,12 @@ impl<'a> ChapterDao<'a> {
         Ok(())
     }
 
-    /// 删除书籍的所有章节
-    pub fn delete_by_book(&self, book_id: &str) -> SqlResult<()> {
-        info!("删除书籍的所有章节: {}", book_id);
-        self.conn
-            .execute("DELETE FROM chapters WHERE book_id = ?", params![book_id])?;
-        Ok(())
-    }
+    // 历史上的 `pub fn delete_by_book(&self, book_id: &str)` 已在批次 08
+    // (BATCH-08 / F-W1A-018) 删除：`chapters.book_id` 是 `books.id` 外键
+    // 且 schema 设了 `ON DELETE CASCADE`，删书时数据库自动清理章节，该
+    // fn 0 caller 属死代码。如未来重新需要按 book_id 显式清章节（如换源
+    // 场景），请优先用 SQLite FK CASCADE，再考虑显式 DAO；或调用方自行
+    // `DELETE FROM chapters WHERE book_id = ?` 即可。
 
     /// 创建新章节（便捷函数）
     pub fn create(

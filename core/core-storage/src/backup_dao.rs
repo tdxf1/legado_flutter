@@ -439,15 +439,14 @@ fn select_all_replace_rules(conn: &Connection) -> Result<Vec<ReplaceRule>, Strin
 
 fn select_all_sources(conn: &Connection) -> Result<Vec<BookSource>, String> {
     // SourceDao 需要 &mut Connection；这里直接手写 SELECT 避免转换。
+    // 列定义复用 [`source_dao::BOOK_SOURCE_COLUMNS`]（批次 08 / F-W1A-006）
+    // —— 单一来源避免 schema 加列时这一处漂移。
+    let sql = format!(
+        "SELECT {} FROM book_sources ORDER BY custom_order ASC, weight DESC",
+        crate::source_dao::BOOK_SOURCE_COLUMNS
+    );
     let mut stmt = conn
-        .prepare(
-            "SELECT id, name, url, source_type, group_name, enabled, custom_order, weight,
-                    rule_search, rule_book_info, rule_toc, rule_content,
-                    login_url, login_ui, login_check_js, header, js_lib, cover_decode_js, book_url_pattern,
-                    rule_explore, explore_url, enabled_explore, last_update_time, book_source_comment,
-                    concurrent_rate, variable_comment, explore_screen, created_at, updated_at
-             FROM book_sources ORDER BY custom_order ASC, weight DESC",
-        )
+        .prepare(&sql)
         .map_err(|e| format!("prepare sources 失败: {}", e))?;
     let rows = stmt
         .query_map([], |row| {
@@ -607,107 +606,23 @@ fn upsert_group(tx: &rusqlite::Transaction, g: &BookGroup) -> Result<(), String>
 }
 
 fn upsert_book(tx: &rusqlite::Transaction, b: &Book) -> Result<(), String> {
-    use rusqlite::params;
-    tx.execute(
-        "INSERT INTO books (
-            id, source_id, source_name, name, author, cover_url, chapter_count,
-            latest_chapter_title, intro, kind, book_url, toc_url, last_check_time, last_check_count,
-            total_word_count, can_update, order_time, latest_chapter_time,
-            custom_cover_path, custom_info_json,
-            dur_chapter_index, dur_chapter_pos, dur_chapter_title, dur_chapter_time, group_id,
-            created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-            source_id = excluded.source_id,
-            source_name = excluded.source_name,
-            name = excluded.name,
-            author = excluded.author,
-            cover_url = excluded.cover_url,
-            chapter_count = excluded.chapter_count,
-            latest_chapter_title = excluded.latest_chapter_title,
-            intro = excluded.intro,
-            kind = excluded.kind,
-            book_url = excluded.book_url,
-            toc_url = excluded.toc_url,
-            last_check_time = excluded.last_check_time,
-            last_check_count = excluded.last_check_count,
-            total_word_count = excluded.total_word_count,
-            can_update = excluded.can_update,
-            order_time = excluded.order_time,
-            latest_chapter_time = excluded.latest_chapter_time,
-            custom_cover_path = excluded.custom_cover_path,
-            custom_info_json = excluded.custom_info_json,
-            dur_chapter_index = excluded.dur_chapter_index,
-            dur_chapter_pos = excluded.dur_chapter_pos,
-            dur_chapter_title = excluded.dur_chapter_title,
-            dur_chapter_time = excluded.dur_chapter_time,
-            group_id = excluded.group_id,
-            updated_at = excluded.updated_at",
-        params![
-            b.id,
-            b.source_id,
-            b.source_name,
-            b.name,
-            b.author,
-            b.cover_url,
-            b.chapter_count,
-            b.latest_chapter_title,
-            b.intro,
-            b.kind,
-            b.book_url,
-            b.toc_url,
-            b.last_check_time,
-            b.last_check_count,
-            b.total_word_count,
-            b.can_update as i32,
-            b.order_time,
-            b.latest_chapter_time,
-            b.custom_cover_path,
-            b.custom_info_json,
-            b.dur_chapter_index,
-            b.dur_chapter_pos,
-            b.dur_chapter_title,
-            b.dur_chapter_time,
-            b.group_id,
-            b.created_at,
-            b.updated_at,
-        ],
-    )
-    .map_err(|e| format!("book upsert SQL 失败: {}", e))?;
+    // 批次 08 (BATCH-08 / F-W1A-011)：复用 [`book_dao::BOOK_UPSERT_SQL`] +
+    // [`book_dao::book_upsert_params!`]，避免本文件再维护一份完整 27 列
+    // INSERT。schema 加列时只改 book_dao 一处。
+    use crate::book_dao::book_upsert_params;
+    tx.execute(crate::book_dao::BOOK_UPSERT_SQL, book_upsert_params!(b))
+        .map_err(|e| format!("book upsert SQL 失败: {}", e))?;
     Ok(())
 }
 
 fn upsert_bookmark(tx: &rusqlite::Transaction, bm: &Bookmark) -> Result<(), String> {
-    use rusqlite::params;
+    // 批次 08 (BATCH-08 / F-W1A-010): 复用 [`progress_dao::BOOKMARK_UPSERT_SQL`]
+    // + [`progress_dao::bookmark_upsert_params!`]，与主路径
+    // [`ProgressDao::add_bookmark`] 共享 SQL，避免风格漂移。
+    use crate::progress_dao::bookmark_upsert_params;
     tx.execute(
-        "INSERT INTO bookmarks (
-            id, book_id, chapter_index, paragraph_index, content,
-            book_name, book_author, chapter_pos, chapter_name, book_text,
-            created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-            book_id = excluded.book_id,
-            chapter_index = excluded.chapter_index,
-            paragraph_index = excluded.paragraph_index,
-            content = excluded.content,
-            book_name = excluded.book_name,
-            book_author = excluded.book_author,
-            chapter_pos = excluded.chapter_pos,
-            chapter_name = excluded.chapter_name,
-            book_text = excluded.book_text",
-        params![
-            bm.id,
-            bm.book_id,
-            bm.chapter_index,
-            bm.paragraph_index,
-            bm.content,
-            bm.book_name,
-            bm.book_author,
-            bm.chapter_pos,
-            bm.chapter_name,
-            bm.book_text,
-            bm.created_at,
-        ],
+        crate::progress_dao::BOOKMARK_UPSERT_SQL,
+        bookmark_upsert_params!(bm),
     )
     .map_err(|e| format!("bookmark upsert SQL 失败: {}", e))?;
     Ok(())

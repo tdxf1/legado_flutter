@@ -10,6 +10,21 @@ use serde::Deserialize;
 use tracing::{debug, info};
 use uuid::Uuid;
 
+/// `book_sources` 表读取列顺序的单一来源。
+///
+/// 4 处 SELECT (`get_by_id` / `get_enabled` / `get_all` / `get_by_url`) +
+/// `backup_dao::select_all_sources` 都基于此常量构建，避免列错位。顺序
+/// 与 [`book_source_from_row`] 内 `row.get(N)` 索引必须严格一致。批次
+/// 08 (BATCH-08 / F-W1A-006) 抽出常量后，新增列只需改一处。
+///
+/// 跨文件复用：`pub(crate)` 让 `backup_dao::select_all_sources` 直接复用
+/// 同一份列定义。
+pub(crate) const BOOK_SOURCE_COLUMNS: &str = "id, name, url, source_type, group_name, enabled, custom_order, weight, \
+    rule_search, rule_book_info, rule_toc, rule_content, \
+    login_url, login_ui, login_check_js, header, js_lib, cover_decode_js, book_url_pattern, \
+    rule_explore, explore_url, enabled_explore, last_update_time, book_source_comment, \
+    concurrent_rate, variable_comment, explore_screen, created_at, updated_at";
+
 /// 单条 SQL，同时被 [`SourceDao::upsert`] 和 [`SourceDao::batch_insert`] 使用，
 /// 避免两份 ON CONFLICT 列表漂移（之前 upsert 缺 login_ui / login_check_js /
 /// cover_decode_js，导致单条更新时这三列永远不会同步）。
@@ -133,14 +148,11 @@ impl<'a> SourceDao<'a> {
 
     /// 根据 ID 获取书源
     pub fn get_by_id(&self, id: &str) -> SqlResult<Option<BookSource>> {
-        let mut stmt = self.conn.prepare(
-             "SELECT id, name, url, source_type, group_name, enabled, custom_order, weight,
-                     rule_search, rule_book_info, rule_toc, rule_content,
-                     login_url, login_ui, login_check_js, header, js_lib, cover_decode_js, book_url_pattern,
-                     rule_explore, explore_url, enabled_explore, last_update_time, book_source_comment,
-                     concurrent_rate, variable_comment, explore_screen, created_at, updated_at
-              FROM book_sources WHERE id = ?"
-        )?;
+        let sql = format!(
+            "SELECT {} FROM book_sources WHERE id = ?",
+            BOOK_SOURCE_COLUMNS
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
 
         let mut rows = stmt.query(params![id])?;
 
@@ -153,14 +165,11 @@ impl<'a> SourceDao<'a> {
 
     /// 获取所有启用的书源
     pub fn get_enabled(&self) -> SqlResult<Vec<BookSource>> {
-        let mut stmt = self.conn.prepare(
-             "SELECT id, name, url, source_type, group_name, enabled, custom_order, weight,
-                     rule_search, rule_book_info, rule_toc, rule_content,
-                     login_url, login_ui, login_check_js, header, js_lib, cover_decode_js, book_url_pattern,
-                     rule_explore, explore_url, enabled_explore, last_update_time, book_source_comment,
-                     concurrent_rate, variable_comment, explore_screen, created_at, updated_at
-              FROM book_sources WHERE enabled = 1 ORDER BY custom_order ASC, weight DESC"
-        )?;
+        let sql = format!(
+            "SELECT {} FROM book_sources WHERE enabled = 1 ORDER BY custom_order ASC, weight DESC",
+            BOOK_SOURCE_COLUMNS
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
 
         let rows = stmt.query_map([], book_source_from_row)?;
         rows.collect()
@@ -168,14 +177,11 @@ impl<'a> SourceDao<'a> {
 
     /// 获取所有书源
     pub fn get_all(&self) -> SqlResult<Vec<BookSource>> {
-        let mut stmt = self.conn.prepare(
-             "SELECT id, name, url, source_type, group_name, enabled, custom_order, weight,
-                     rule_search, rule_book_info, rule_toc, rule_content,
-                     login_url, login_ui, login_check_js, header, js_lib, cover_decode_js, book_url_pattern,
-                     rule_explore, explore_url, enabled_explore, last_update_time, book_source_comment,
-                     concurrent_rate, variable_comment, explore_screen, created_at, updated_at
-              FROM book_sources ORDER BY custom_order ASC, weight DESC"
-        )?;
+        let sql = format!(
+            "SELECT {} FROM book_sources ORDER BY custom_order ASC, weight DESC",
+            BOOK_SOURCE_COLUMNS
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
 
         let rows = stmt.query_map([], book_source_from_row)?;
         rows.collect()
@@ -183,14 +189,11 @@ impl<'a> SourceDao<'a> {
 
     /// 根据 URL 搜索书源
     pub fn get_by_url(&self, url: &str) -> SqlResult<Option<BookSource>> {
-        let mut stmt = self.conn.prepare(
-             "SELECT id, name, url, source_type, group_name, enabled, custom_order, weight,
-                     rule_search, rule_book_info, rule_toc, rule_content,
-                     login_url, login_ui, login_check_js, header, js_lib, cover_decode_js, book_url_pattern,
-                     rule_explore, explore_url, enabled_explore, last_update_time, book_source_comment,
-                     concurrent_rate, variable_comment, explore_screen, created_at, updated_at
-              FROM book_sources WHERE url = ?"
-        )?;
+        let sql = format!(
+            "SELECT {} FROM book_sources WHERE url = ?",
+            BOOK_SOURCE_COLUMNS
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
 
         let mut rows = stmt.query(params![url])?;
 

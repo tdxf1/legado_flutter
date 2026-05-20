@@ -30,7 +30,10 @@ const BOOK_COLUMNS: &str = "id, source_id, source_name, name, author, cover_url,
 /// 份 SQL — DAO 里两条 `&self` / 跨事务变体必须保持列顺序绝对一致。批
 /// 次 69 (BATCH-07b) 抽出后，新增列只需改一处。绑定参数顺序由
 /// [`bind_book_params`] 单一来源管理。
-const BOOK_UPSERT_SQL: &str = "INSERT INTO books (
+///
+/// 跨文件复用：批次 08 (BATCH-08 / F-W1A-011) 提到 `pub(crate)`，让
+/// `backup_dao::upsert_book` 复用同一份 SQL，不再维护重复 inline INSERT。
+pub(crate) const BOOK_UPSERT_SQL: &str = "INSERT INTO books (
         id, source_id, source_name, name, author, cover_url, chapter_count,
         latest_chapter_title, intro, kind, book_url, toc_url, last_check_time, last_check_count,
         total_word_count, can_update, order_time, latest_chapter_time,
@@ -70,6 +73,9 @@ const BOOK_UPSERT_SQL: &str = "INSERT INTO books (
 /// `upsert_in_tx` 两处写两份 `params![...]` 在加列时漏改一处。宏内部
 /// 调 [`rusqlite::params!`]，因此返回值是 rusqlite 期望的 `impl Params`
 /// 类型，对 `Connection::execute` / `Transaction::execute` 都可用。
+///
+/// 跨文件复用：批次 08 (BATCH-08 / F-W1A-011) 通过 `pub(crate) use` 把
+/// 该宏暴露给 `backup_dao::upsert_book` 复用。
 macro_rules! book_upsert_params {
     ($book:expr) => {
         rusqlite::params![
@@ -103,6 +109,9 @@ macro_rules! book_upsert_params {
         ]
     };
 }
+
+// 跨文件复用：批次 08 (BATCH-08 / F-W1A-011)，让 backup_dao 复用本宏。
+pub(crate) use book_upsert_params;
 
 /// 书架排序方式。
 ///

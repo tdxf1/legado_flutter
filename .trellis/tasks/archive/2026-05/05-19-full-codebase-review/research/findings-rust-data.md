@@ -117,6 +117,8 @@
 
 **建议**: 抽 `const BOOK_SOURCE_COLUMNS: &str = "id, name, url, ..."`，4 个 SELECT 用 `format!` 拼，对齐 BookDao 风格。
 
+**Resolution**: Resolved by BATCH-08（commit 待补）— 抽 `pub(crate) const BOOK_SOURCE_COLUMNS: &str = "..."` 在 `source_dao.rs:22`；4 处 SELECT (`get_by_id` / `get_enabled` / `get_all` / `get_by_url`) + `backup_dao::select_all_sources` 第 5 处都改用 `format!("SELECT {} FROM book_sources WHERE ...", BOOK_SOURCE_COLUMNS)`。
+
 ---
 
 ### F-W1A-007 [P1 主要][B-正确性][core-storage/source_dao]
@@ -165,6 +167,8 @@
 
 **建议**: `add_bookmark` 改成 `INSERT ... ON CONFLICT(id) DO UPDATE SET ...`；或文档明确"caller 必须保证 id 全局唯一"。
 
+**Resolution**: Resolved by BATCH-08（commit 待补）— `add_bookmark` 改 upsert（`INSERT ... ON CONFLICT(id) DO UPDATE SET ...`）。抽 `pub(crate) const BOOKMARK_UPSERT_SQL` + `bookmark_upsert_params!` 宏在 `progress_dao.rs:11`，与 `backup_dao::upsert_bookmark` 共享单一来源。重复 id 现在 idempotent 覆盖（caller 通常用 sha256 派生 id，重复 = 同一 bookmark 二次添加）。
+
 ---
 
 ### F-W1A-011 [P1 主要][C-性能 & A-架构][core-storage/backup_dao]
@@ -176,6 +180,8 @@
 **详细**: backup_dao 注释里说"避免依赖 BookDao，因为 BookDao 持有 &Connection 可能与事务嵌套冲突"——这是真问题，但代价是列改一处必改 3 处。schema 加 1 字段就漏一处即 silently 不写入 backup。
 
 **建议**: 把 books / book_sources / replace_rules / bookmarks 的 upsert SQL 抽成 `core-storage::upsert_sql::*` 公共常量，或提供 `BookDao::upsert_in_tx(tx: &Transaction, ...)` 让 backup_dao 直接复用 dao 而不必持有 Connection。
+
+**Resolution**: Resolved by BATCH-07b + BATCH-08（commit 待补）— BATCH-07b 已抽 `book_dao::BOOK_UPSERT_SQL` + `book_upsert_params!` 宏；BATCH-08 把它们提到 `pub(crate)`，让 `backup_dao::upsert_book` 直接复用同一份 SQL（删除 ~80 行重复 inline INSERT）。bookmark upsert 由 BATCH-08 同步抽 `BOOKMARK_UPSERT_SQL` 共享（见 F-W1A-010）。书源 upsert 由 BATCH-07 抽 `SOURCE_UPSERT_SQL` 已共享。
 
 ---
 
@@ -225,6 +231,8 @@
 
 **建议**: 改成 `row.get::<_, String>(0)` 把 SqlResult 直接传上去，让 caller 决定怎么 fallback。
 
+**Resolution**: Resolved by BATCH-08（commit 待补）— `cache_dao::get` 改 `rows.next()?.map(|row| row.get::<_, String>(0)).transpose()`，错误传播让 caller 区分 "key 不存在" vs "value 列读取失败"。新增单测 `get_propagates_column_type_error_instead_of_swallowing` 验证。
+
 ---
 
 ### F-W1A-016 [P1 主要][C-性能 & A-架构][core-storage/download_dao]
@@ -236,6 +244,8 @@
 **详细**: 测试时 set_download_root 设置后会泄漏到下一个测试；多个 Flutter isolate 共用一份配置。Bridge 层在 `download_and_save_chapter` 调 `set_download_root`（api.rs:721），但目录其实由 `db_path` 推断而来，没必要全局保存。
 
 **建议**: 把 `download_root` 作为参数传到 `DownloadDao` 构造函数；删除 `static DOWNLOAD_ROOT`。
+
+**Resolution**: Resolved by BATCH-08（commit 待补）— `static DOWNLOAD_ROOT: RwLock<Option<PathBuf>>` 改 `OnceLock<PathBuf>`（minimal diff，不动 caller）；`set_download_root` 重复 set 静默忽略（OnceLock 语义）；`get_download_root` 直接 `DOWNLOAD_ROOT.get().cloned()`。仍是模块级全局，但去掉 mutable RwLock 噪音；构造参数化方案的成本（10+ caller 改动）超出本批次范围，留待后续重构。
 
 ---
 
@@ -260,6 +270,8 @@
 **详细**: chapters / progress 删除失败但 book 行删除成功时 caller 拿到 Ok，留下孤儿 chapters / progress 数据。schema 上 chapters 有 `ON DELETE CASCADE`（database.rs:162）会兜底删除 chapters，但 `delete_by_book` 显式调用是冗余——不知道是否 caller 关闭了 foreign_keys pragma 兜底。progress 表也有 `ON DELETE CASCADE`，所以这两行**完全是死代码**。
 
 **建议**: 直接删除 `chapter_dao.delete_by_book` 与 `progress_dao.delete`；让 SQLite FK CASCADE 处理。或者写注释说明"本地维护一致性，防 PRAGMA foreign_keys 被外层关掉"。
+
+**Resolution**: Resolved by BATCH-18a + BATCH-08（commit 待补）— BATCH-18a (`c82713c`) 已把 `bridge::api::delete_book` 简化为单一 `book_dao.delete(&id)`，依赖 SQLite FK CASCADE 兜底；BATCH-08 删除残留的两个孤儿 dao fn（`chapter_dao::delete_by_book` + `progress_dao::delete(book_id)`），原位补 `//` 注释说明历史背景与未来重新引入的指引。`database.rs::test_progress_dao` 测试同步迁移到 `book_dao.delete` 触发 CASCADE 路径。
 
 ---
 
@@ -676,6 +688,8 @@
 **详细**: 原 Legado ReplaceRule.id 在 schema 上不是 created_at，是独立的自增 id。本端口反向映射时直接用 created_at*1000 充当 id 实属应急措施，导出数组里多个 id 重复时原 Legado 导入会冲突（取决于其 import 是否容忍）。
 
 **建议**: 用 `r.id` 字符串 hash 出一个 i64，或者用一个全局递增计数器。
+
+**Resolution**: Resolved by BATCH-08（commit 待补）— `storage_replace_rule_to_legado_json` 改 `r.created_at * 1000 + (hash_id_u16(&r.id) as i64)`：高 48 位是 ms 时间戳，低 16 位是 UUID hash 抖动。同 ms 多条规则导出后 PK 不再冲突（< 1/65536 概率）。新增 `hash_id_u16` helper（基于 std `DefaultHasher`，无外部 dep）+ `pk_jitter_avoids_same_ms_collision` / `pk_is_stable_for_same_id` 单测验证。
 
 ---
 
