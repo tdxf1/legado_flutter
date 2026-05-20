@@ -1,6 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../../../core/providers.dart';
+import '../../../core/widgets/safe_setstate.dart';
 import 'text_page.dart';
 import 'page_view_controller.dart';
 import 'delegate/page_delegate.dart';
@@ -94,7 +95,7 @@ class _PageViewWidgetState extends State<PageViewWidget>
   }
 
   void _onControllerChanged() {
-    if (mounted) setState(() {});
+    safeSetState(() {});
   }
 
   void _createDelegate() {
@@ -143,9 +144,9 @@ class _PageViewWidgetState extends State<PageViewWidget>
         _simDegrade!
           ..reset()
           ..attach(
-            onLevelChanged: () {
-              if (mounted) setState(() {});
-            },
+              onLevelChanged: () {
+                safeSetState(() {});
+              },
             onFallbackRequested: () {
               if (!mounted) return;
               setState(() => _useNativeFallback = true);
@@ -257,7 +258,7 @@ class _PageViewWidgetState extends State<PageViewWidget>
     // drag 期间用户手指快速推进时 progress 推进节奏跟不上 currentTouch，
     // 需要主动 setState 让 LayoutBuilder → CustomPaint 重 build → painter
     // 拿到新 currentTouch 触发 shouldRepaint。
-    if (mounted) setState(() {});
+    safeSetState(() {});
   }
 
   void _onPointerUp(PointerUpEvent e) {

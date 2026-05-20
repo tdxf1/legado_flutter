@@ -297,6 +297,10 @@
 
 **建议**: 统一在 `core/widgets/safe_setstate.dart` 加 extension `void safeSetState(VoidCallback fn)`；统一用 `if (!mounted) return;` early return 风格。
 
+**Resolution (BATCH-25, 2026-05-21，缩范围)**: 抽 `flutter_app/lib/core/widgets/safe_setstate.dart` 提供 `extension SafeSetState on State<T>` + `safeSetState(VoidCallback fn)` syntax sugar。在 features 层把 31 处 B 模式（`if (mounted) setState(...)`）机械替换为 `safeSetState(...)`，跨 12 个文件。**顺手修一个真实潜在 bug**：`reader_page.dart::_replaceBookSource` 在 `await replaceBookChapters` + `await saveBook` 双 await 后直接 `setState({...})`，缺 mounted 检查，dialog 关闭后用户立即返回会触发 setState-after-dispose；在 setState 前补 `if (!mounted) return;`。3 case widget test 验证 mounted=true 触发 / mounted=false no-op / 多次累积。回归 flutter analyze 0 issue + flutter test 421/421 PASS。
+
+**未做**：C 模式 57 处（`if (mounted) <非 setState>`）含复合条件、Navigator.pop、ScaffoldMessenger、showDialog 多种异质语义，机械替换风险高 ROI 低，留给后续按需重构；A 模式 132 处（`if (!mounted) return;` 早返回）已是推荐风格不动；D 模式 21 处（`context.mounted` 在 Builder 内 BuildContext 上）与 `State.mounted` 语义不同保留。审查完整 audit 见 BATCH-25 archive `prd.md`。
+
 ---
 
 ### F-W2B-022 [P1 主要][A-架构][cross-feature]

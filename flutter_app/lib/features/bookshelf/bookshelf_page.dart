@@ -10,6 +10,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/persistence/json_store.dart';
 import '../../core/providers.dart';
 import '../../core/util/time_format.dart';
+import '../../core/widgets/safe_setstate.dart';
 import '../../src/rust/api.dart' as rust_api;
 import 'widgets/book_group_dialogs.dart';
 
@@ -63,7 +64,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   void initState() {
     super.initState();
     loadBookshelfGridViewFromDisk().then((value) {
-      if (mounted) setState(() => _isGridView = value);
+      safeSetState(() => _isGridView = value);
     });
   }
 

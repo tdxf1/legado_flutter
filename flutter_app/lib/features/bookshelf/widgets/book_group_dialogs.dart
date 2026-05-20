@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/providers.dart';
+import '../../../core/widgets/safe_setstate.dart';
 import '../../../src/rust/api.dart' as rust_api;
 
 /// 批次 7：分组管理对话框。
@@ -51,7 +52,7 @@ class _GroupManageDialogState extends ConsumerState<GroupManageDialog> {
       );
       _addController.clear();
       ref.invalidate(bookGroupsProvider);
-      if (mounted) setState(() {});
+      safeSetState(() {});
     } catch (e) {
       _showError('创建分组失败: $e');
     }
@@ -93,7 +94,7 @@ class _GroupManageDialogState extends ConsumerState<GroupManageDialog> {
         sortOrder: (group['sort_order'] as int?) ?? 0,
       );
       ref.invalidate(bookGroupsProvider);
-      if (mounted) setState(() {});
+      safeSetState(() {});
     } catch (e) {
       _showError('更新分组失败: $e');
     }
@@ -128,7 +129,7 @@ class _GroupManageDialogState extends ConsumerState<GroupManageDialog> {
       ref.invalidate(bookGroupsProvider);
       // 删分组后书的 group_id 被重置为 0，需要刷新所有 group tab 的列表
       ref.invalidate(booksByGroupProvider);
-      if (mounted) setState(() {});
+      safeSetState(() {});
     } catch (e) {
       _showError('删除分组失败: $e');
     }

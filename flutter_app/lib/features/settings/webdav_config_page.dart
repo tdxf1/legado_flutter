@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/persistence/json_store.dart';
+import '../../core/widgets/safe_setstate.dart';
 import '../../src/rust/api.dart' as rust_api;
 
 /// WebDAV 配置页（批次 11 / 05-19）。
@@ -124,7 +125,7 @@ class _WebDavConfigPageState extends ConsumerState<WebDavConfigPage> {
     } catch (_) {
       // 静默忽略读取失败 — 用户首次配置时也走这里。
     } finally {
-      if (mounted) setState(() => _loaded = true);
+      safeSetState(() => _loaded = true);
     }
   }
 
@@ -157,7 +158,7 @@ class _WebDavConfigPageState extends ConsumerState<WebDavConfigPage> {
         SnackBar(content: Text('连接失败: $e')),
       );
     } finally {
-      if (mounted) setState(() => _testing = false);
+      safeSetState(() => _testing = false);
     }
   }
 
@@ -205,7 +206,7 @@ class _WebDavConfigPageState extends ConsumerState<WebDavConfigPage> {
         SnackBar(content: Text('保存失败: $e')),
       );
     } finally {
-      if (mounted) setState(() => _saving = false);
+      safeSetState(() => _saving = false);
     }
   }
 

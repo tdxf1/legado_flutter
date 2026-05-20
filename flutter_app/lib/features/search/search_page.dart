@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/cover_cache.dart';
 import '../../core/providers.dart';
+import '../../core/widgets/safe_setstate.dart';
 import '../../src/rust/api.dart' as rust_api;
 
 class SearchPage extends ConsumerStatefulWidget {
@@ -78,12 +79,12 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
   Future<void> _loadHistory() async {
     final history = await loadSearchHistoryFromDisk();
-    if (mounted) setState(() => _searchHistory = history);
+    safeSetState(() => _searchHistory = history);
   }
 
   Future<void> _loadPrecisionMode() async {
     final v = await loadSearchPrecisionFromDisk();
-    if (mounted) setState(() => _precisionMode = v);
+    safeSetState(() => _precisionMode = v);
   }
 
   void _togglePrecisionMode() {
@@ -142,13 +143,13 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       _searchHistory = _searchHistory.sublist(0, 20);
     }
     await saveSearchHistoryToDisk(_searchHistory);
-    if (mounted) setState(() {});
+    safeSetState(() {});
   }
 
   Future<void> _clearHistory() async {
     _searchHistory = [];
     await saveSearchHistoryToDisk([]);
-    if (mounted) setState(() {});
+    safeSetState(() {});
   }
 
   Future<void> _saveResultToBookshelf(Map<String, dynamic> result) async {

@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/persistence/json_store.dart';
 import '../../core/providers.dart';
+import '../../core/widgets/safe_setstate.dart';
 import '../../src/rust/api.dart' as rust_api;
 
 /// 书信息编辑页（批次 9 / 05-19）。
@@ -88,7 +89,7 @@ class _BookInfoEditPageState extends ConsumerState<BookInfoEditPage> {
     _customCoverPath = book['custom_cover_path'] as String?;
     // 触发 "name 是否为空" 重渲染（保存按钮 disabled 状态依赖此值）。
     _nameCtl!.addListener(() {
-      if (mounted) setState(() {});
+      safeSetState(() {});
     });
   }
 
@@ -336,7 +337,7 @@ class _BookInfoEditPageState extends ConsumerState<BookInfoEditPage> {
         SnackBar(content: Text('保存失败: $e')),
       );
     } finally {
-      if (mounted) setState(() => _saving = false);
+      safeSetState(() => _saving = false);
     }
   }
 

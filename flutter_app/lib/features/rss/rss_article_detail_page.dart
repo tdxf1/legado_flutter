@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../core/providers.dart';
+import '../../core/widgets/safe_setstate.dart';
 import '../../src/rust/api.dart' as rust_api;
 
 /// RSS 文章详情页（批次 18 / 05-19）。
@@ -262,7 +263,7 @@ class _RssArticleDetailPageState extends ConsumerState<RssArticleDetailPage> {
           await rust_api.rssStarRemove(
               dbPath: dbPath, origin: widget.sourceUrl, link: widget.link);
         }
-        if (mounted) setState(() => _isStarred = false);
+        safeSetState(() => _isStarred = false);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('已取消收藏')),
@@ -280,7 +281,7 @@ class _RssArticleDetailPageState extends ConsumerState<RssArticleDetailPage> {
             sourceName: sourceName,
           );
         }
-        if (mounted) setState(() => _isStarred = true);
+        safeSetState(() => _isStarred = true);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('已加入收藏')),
@@ -294,7 +295,7 @@ class _RssArticleDetailPageState extends ConsumerState<RssArticleDetailPage> {
         );
       }
     } finally {
-      if (mounted) setState(() => _starBusy = false);
+      safeSetState(() => _starBusy = false);
     }
   }
 

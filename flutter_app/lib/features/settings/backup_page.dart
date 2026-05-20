@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/persistence/json_store.dart';
 import '../../core/providers.dart';
 import '../../core/util/import_summary_label.dart';
+import '../../core/widgets/safe_setstate.dart';
 import '../../src/rust/api.dart' as rust_api;
 
 /// 本地备份/恢复页（批次 10 / 05-19）。
@@ -278,7 +279,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
         SnackBar(content: Text('导出失败: $e')),
       );
     } finally {
-      if (mounted) setState(() => _exporting = false);
+      safeSetState(() => _exporting = false);
     }
   }
 
@@ -324,7 +325,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
         SnackBar(content: Text('解析备份文件失败: $e')),
       );
     } finally {
-      if (mounted) setState(() => _importing = false);
+      safeSetState(() => _importing = false);
     }
   }
 
@@ -391,7 +392,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
         SnackBar(content: Text('导入失败: $e')),
       );
     } finally {
-      if (mounted) setState(() => _importing = false);
+      safeSetState(() => _importing = false);
     }
   }
 
@@ -534,7 +535,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
         SnackBar(content: Text('上传失败: $e')),
       );
     } finally {
-      if (mounted) setState(() => _webdavBusy = false);
+      safeSetState(() => _webdavBusy = false);
     }
   }
 
@@ -632,7 +633,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
         SnackBar(content: Text('恢复失败: $e')),
       );
     } finally {
-      if (mounted) setState(() => _webdavBusy = false);
+      safeSetState(() => _webdavBusy = false);
     }
   }
 }

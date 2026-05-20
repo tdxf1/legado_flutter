@@ -15,6 +15,7 @@ import '../../core/dto.dart';
 import '../../core/download_runner.dart';
 import '../../core/platform_webview_executor.dart';
 import '../../core/providers.dart';
+import '../../core/widgets/safe_setstate.dart';
 import '../../src/rust/api.dart' as rust_api;
 import 'page/page_view.dart';
 import 'page/page_view_controller.dart';
@@ -194,13 +195,13 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
   TextEditingController get _searchController => _search.textController;
   late final rsc.ReaderSearchController _search =
       rsc.ReaderSearchController(onChanged: () {
-    if (mounted) setState(() {});
+    safeSetState(() {});
   });
   bool get _isAutoScrolling => _autoScroller.isRunning;
   late final ReaderAutoScroller _autoScroller = ReaderAutoScroller(
     controller: () => _scrollController,
     onChanged: () {
-      if (mounted) setState(() {});
+      safeSetState(() {});
     },
     // 批次 4 (05-18): 分页模式 tick 回调 — 每 pageIntervalMs 触发一次
     // 翻下一页（走与 tap-next 相同的 delegate 动画路径，复用批次 3
@@ -248,7 +249,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     _tts.init(
       rate: _settings.ttsSpeed,
       onStateChanged: () {
-        if (mounted) setState(() {});
+        safeSetState(() {});
       },
       onChapterEndReached: () async {
         // Advance to next chapter and continue speaking with new content.
@@ -833,7 +834,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       _preCacheNextChapter(nextIndex, chapters);
     } catch (e) {
       debugPrint('[Reader] appendNextChapter failed: $e');
-      if (mounted) setState(() => _isAppendingChapter = false);
+      safeSetState(() => _isAppendingChapter = false);
     }
   }
 
@@ -875,7 +876,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       });
     } catch (e) {
       debugPrint('[Reader] prependPrevChapter failed: $e');
-      if (mounted) setState(() => _isPrependingChapter = false);
+      safeSetState(() => _isPrependingChapter = false);
     }
   }
 
@@ -2086,12 +2087,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       _preCachePrevChapter(targetIndex, chapters);
       _measureAdjacentChapters(targetIndex);
     } catch (e) {
-      if (mounted) setState(() => _isLoadingContent = false);
+      safeSetState(() => _isLoadingContent = false);
     }
   }
 
   void _onPageChanged() {
-    if (mounted) setState(() {});
+    safeSetState(() {});
     // T1 (05-18): 章内每翻一页都立即把进度写库，对齐 MD3
     // ReadBook.moveToNextPage / moveToPrevPage 的 saveRead(true)。
     // fire-and-forget，不阻塞 UI。
@@ -2378,6 +2379,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     updatedBook['updated_at'] = now;
 
     await rust_api.saveBook(dbPath: dbPath, bookJson: jsonEncode(updatedBook));
+
+    // BATCH-25 (F-W2B-021)：两个 await 后补 mounted 检查，防 setState-after-dispose。
+    if (!mounted) return;
 
     ref.invalidate(allBooksProvider);
     ref.invalidate(bookByIdProvider(widget.bookId));
