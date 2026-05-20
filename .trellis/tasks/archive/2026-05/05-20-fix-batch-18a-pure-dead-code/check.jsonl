@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/05-20-fix-batch-18a-pure-dead-code/prd.md", "reason": "PRD Acceptance Criteria + Definition of Done"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings.md", "reason": "master report 主题 4：重复 SQL / 重复实现 / 死代码"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-core.md", "reason": "F-W2A-001 详细描述"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-rust-data.md", "reason": "F-W1A-018 详细描述"}
+{"file": "flutter_app/lib/core/dto.dart", "reason": "确认新文件存在且只含 PlatformRequest"}
+{"file": "flutter_app/lib/core/providers.dart", "reason": "确认 7 个 provider 已删 + import 已清"}
+{"file": "flutter_app/lib/features/reader/reader_page.dart", "reason": "确认 import 路径改正"}
+{"file": "core/bridge/src/api.rs", "reason": "确认 delete_book 仅剩 book_dao.delete 调用"}

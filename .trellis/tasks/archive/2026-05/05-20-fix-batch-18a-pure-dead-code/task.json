@@ -1,7 +1,7 @@
 {
-  "id": "full-codebase-review",
-  "name": "full-codebase-review",
-  "title": "Flutter + Rust 全量代码审查与修复",
+  "id": "fix-batch-18a-pure-dead-code",
+  "name": "fix-batch-18a-pure-dead-code",
+  "title": "BATCH-18a 纯死代码删除 (core/api + delete_book)",
   "description": "",
   "status": "completed",
   "dev_type": null,
@@ -10,7 +10,7 @@
   "priority": "P2",
   "creator": "doro",
   "assignee": "doro",
-  "createdAt": "2026-05-19",
+  "createdAt": "2026-05-20",
   "completedAt": "2026-05-20",
   "branch": null,
   "base_branch": "main",
@@ -18,13 +18,8 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [
-    "05-20-fix-batch-01-jnilibs",
-    "05-20-fix-batch-02-manifest-keystore",
-    "05-20-fix-batch-06-cargo-deps",
-    "05-20-fix-batch-18a-pure-dead-code"
-  ],
-  "parent": null,
+  "children": [],
+  "parent": "05-19-full-codebase-review",
   "relatedFiles": [],
   "notes": "",
   "meta": {}

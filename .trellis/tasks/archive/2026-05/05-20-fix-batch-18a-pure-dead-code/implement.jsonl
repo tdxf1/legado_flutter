@@ -1,0 +1,14 @@
+{"file": ".trellis/tasks/05-20-fix-batch-18a-pure-dead-code/prd.md", "reason": "本批次 PRD：缩范围决策 + Flutter 6 文件删除 + Rust 4 行删除"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-core.md", "reason": "Wave 2A 详细 findings（F-W2A-001 描述）"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-rust-data.md", "reason": "Wave 1A 详细 findings（F-W1A-018 描述：FK CASCADE 已兜底）"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-18-flutter-dead-code-and-io-abstract.md", "reason": "路线图原 BATCH-18 文档（缩范围依据）"}
+{"file": "flutter_app/lib/core/api/dto.dart", "reason": "操作目标：抽出 PlatformRequest + 删除 5 个死类"}
+{"file": "flutter_app/lib/core/api/api_client.dart", "reason": "操作目标：整文件删除（确认无消费者）"}
+{"file": "flutter_app/lib/core/api/bookshelf_api.dart", "reason": "整文件删除"}
+{"file": "flutter_app/lib/core/api/reader_api.dart", "reason": "整文件删除"}
+{"file": "flutter_app/lib/core/api/search_api.dart", "reason": "整文件删除"}
+{"file": "flutter_app/lib/core/api/source_api.dart", "reason": "整文件删除"}
+{"file": "flutter_app/lib/core/providers.dart", "reason": "操作目标：删 7 个 provider + 5 个 import"}
+{"file": "flutter_app/lib/features/reader/reader_page.dart", "reason": "操作目标：1 行 import 路径改写（dto.dart 位置变更）"}
+{"file": "core/bridge/src/api.rs", "reason": "操作目标：delete_book L72-80 删 2 行死代码 + 调整注释"}
+{"file": "core/core-storage/src/database.rs", "reason": "上下文：确认 chapters/progress/read_records/bookmarks 全部走 ON DELETE CASCADE（删除前置确认）"}
