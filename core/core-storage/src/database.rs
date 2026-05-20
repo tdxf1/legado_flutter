@@ -31,6 +31,29 @@ pub fn init_database(db_path: &str) -> SqlResult<Connection> {
     // 启用外键约束
     conn.execute("PRAGMA foreign_keys = ON", [])?;
 
+    // WAL 持久性调优（批次 69 / BATCH-07b，F-W1A-004）：
+    //
+    // - `synchronous = NORMAL`：在 WAL 模式下被官方推荐为最佳安全 / 性能
+    //   平衡点。断电仅丢失最近未 fsync 到 -wal 文件的事务，已 commit 的
+    //   事务仍在 WAL 中，下次打开会自动 replay；FULL 太严格（每次 commit
+    //   都同步主 db，慢但本质收益小），OFF 不安全。**注意**：该 PRAGMA
+    //   是连接级（per-connection），下方的 [`get_connection`] 也设一次。
+    //
+    // - `wal_autocheckpoint = 1000`：每累积 1000 页（~4 MB）触发 WAL
+    //   checkpoint，限制 -wal 文件无限增长。SQLite 编译期默认就是 1000，
+    //   显式写出避免编译选项漂移。该 PRAGMA 也是连接级，但因每次新连接
+    //   都从默认值（1000）起跳，复设也无副作用，仅 init 设一次足够。
+    //
+    // 不在每次 [`get_connection`] 重设 wal_autocheckpoint 是因为它的默
+    // 认就是目标值；synchronous 必须每条连接都重设，否则部分 caller 会
+    // 拿到默认 FULL。
+    //
+    // 用 `pragma_update` 而不是 `execute("PRAGMA ... = ...")` 是因为部分
+    // PRAGMA 写形式在 SQLite 新版本里会返回当前值行（execute 不允许有
+    // 结果集），rusqlite `pragma_update` 把 query / update 都封装好。
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    conn.pragma_update(None, "wal_autocheckpoint", 1000_i32)?;
+
     // 检查数据库版本（使用 PRAGMA user_version）
     let version = get_db_version(&conn)?;
     debug!("当前数据库版本: {}", version);
@@ -1057,9 +1080,15 @@ fn table_exists(conn: &Connection, table: &str) -> SqlResult<bool> {
 }
 
 /// 获取数据库连接（便捷函数）
+///
+/// 与 [`init_database`] 配对：每条 fresh 连接都重设 `foreign_keys` 与
+/// `synchronous`（PRAGMA 是连接级，新连接默认会回到 FULL，必须显式调到
+/// NORMAL 才有 WAL 持久性收益）。`wal_autocheckpoint` 默认值就是目标
+/// 1000，仅 init 设一次，这里不重设以省一次 round-trip。
 pub fn get_connection(db_path: &str) -> SqlResult<Connection> {
     let conn = Connection::open(db_path)?;
     conn.execute("PRAGMA foreign_keys = ON", [])?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
     Ok(conn)
 }
 

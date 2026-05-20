@@ -1,0 +1,3 @@
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-rust-data.md", "reason": "F-W1A-004/007/009/021 详细 finding 描述与建议方案"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-07-sqlite-transactions-raii.md", "reason": "本批路线图原文（BATCH-07a 已做 5 条，本批是剩余 4 条）"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-batch-07-sqlite-tx/prd.md", "reason": "BATCH-07a PRD — 了解上一批的决策（unchecked_transaction、in_tx 范式参考）"}

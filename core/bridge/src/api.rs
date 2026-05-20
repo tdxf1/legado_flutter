@@ -770,12 +770,24 @@ pub async fn download_and_save_chapter(
         .unwrap_or(0);
     let file_path = file_path.to_string_lossy().to_string();
 
-    let conn = open_db(&db_path)?;
-    let dao = core_storage::download_dao::DownloadDao::new(&conn);
-    dao.update_chapter_status(&download_chapter_id, 2, Some(&file_path), file_size, None)
+    // 批次 69 (BATCH-07b)：把"成功路径写章节状态 + 重算任务进度"两步
+    // SQL 包进单事务。之前两步独立 commit，中间 panic 时章节标 status=2
+    // 但任务整体进度未刷新，留下脏数据。with_transaction Drop-rollback
+    // 兜底任意 `?` 早返。
+    crate::transaction::with_transaction(&db_path, |tx| {
+        core_storage::download_dao::DownloadDao::update_chapter_status_in_tx(
+            tx,
+            &download_chapter_id,
+            2,
+            Some(&file_path),
+            file_size,
+            None,
+        )
         .map_err(|e| format!("更新章节状态失败: {}", e))?;
-    recompute_download_task_status(&dao, &task_id)
-        .map_err(|e| format!("更新任务状态失败: {}", e))?;
+        recompute_download_task_status_in_tx(tx, &task_id)
+            .map_err(|e| format!("更新任务状态失败: {}", e))?;
+        Ok(())
+    })?;
 
     Ok(file_path)
 }
@@ -807,6 +819,23 @@ fn recompute_download_task_status(
         }
     }
     Ok(())
+}
+
+/// `&Transaction` 版的 [`recompute_download_task_status`]：让 caller 在
+/// 外层事务内调用，与 `update_chapter_status_in_tx` 配对跑单事务（批次
+/// 69 / BATCH-07b）。
+///
+/// 实现上利用 `rusqlite::Transaction: Deref<Target=Connection>`：
+/// `DownloadDao::new(tx)` 通过 deref coercion 把 `&Transaction` 当
+/// `&Connection` 用，所有 `dao.execute(...)` / `dao.query_row(...)`
+/// 都在 caller 提供的事务内执行（SQLite 事务状态是连接级），无需再写
+/// 一份并行的 SQL。
+fn recompute_download_task_status_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    task_id: &str,
+) -> rusqlite::Result<()> {
+    let dao = core_storage::download_dao::DownloadDao::new(tx);
+    recompute_download_task_status(&dao, task_id)
 }
 
 fn resolve_download_root(db_path: &str, download_dir: &str) -> Result<std::path::PathBuf, String> {
@@ -1396,8 +1425,9 @@ pub fn get_backup_password(documents_dir: String) -> Result<String, String> {
 /// 3. 确保虚拟"本地书"书源（id="local"/url="loc_book"）存在
 /// 4. 构造 `Book`：name 优先取 EPUB metadata.title，fallback basename(去扩展)
 ///    `book_url = "loc_book:<copied_path>"`，`source_id = "local"`
-/// 5. 章节适配后 `ChapterDao::replace_by_book`（不保留旧章节正文）
-/// 6. `BookDao::upsert(&book)`
+/// 5. `BookDao::upsert(&book)`（books.id 是 chapters.book_id 外键，必须先写）
+/// 6. 章节适配后 `ChapterDao::replace_by_book`（不保留旧章节正文）；
+///    批次 69 起 5 + 6 包进单事务，避免 FK / 中间错误留脏 book 行
 ///
 /// 不在 scope 内：mobi / pdf / cbz、TxtTocRule 自定义切分、cover 提取。
 pub fn import_local_book(
@@ -1454,8 +1484,15 @@ pub fn import_local_book(
     )?;
 
     // 4. 打开 db + 确保虚拟 source
-    let mut conn = open_db(&db_path)?;
-    let source_id = crate::local_book::ensure_local_source(&mut conn)?;
+    //
+    // ensure_local_source 只 INSERT 一行虚拟书源（幂等：先 SELECT 命中即
+    // return），与下面 book + chapters 写入解耦放在独立连接里执行；即使
+    // 后续 with_transaction 内的 BookDao / ChapterDao 写入失败回滚，已写
+    // 入的虚拟书源也不应回滚（它是公共资源，下一次导入仍要用）。
+    let source_id = {
+        let mut conn = open_db(&db_path)?;
+        crate::local_book::ensure_local_source(&mut conn)?
+    };
 
     // 5. 构造 Book
     let book_url = format!(
@@ -1517,22 +1554,27 @@ pub fn import_local_book(
     };
 
     // 6. 章节适配 + 入库
-    let storage_chapters =
-        crate::local_book::parser_chapters_to_storage(&chapters, &book_id, now);
-    // 注意：必须先 upsert Book（books.id 是 chapters.book_id 外键），再
+    //
+    // 批次 69 (BATCH-07b)：把 BookDao::upsert 与 ChapterDao::replace_by_book
+    // 包进单事务，FK / 中间错误时整批回滚不留脏 book 行。之前两步独立
+    // 事务，先成功 upsert book 后 chapter 写入失败时（很少见，但可能因
+    // SQLite 锁竞争），book 行已 commit 留下"books 表多了一条但 chapters
+    // 全空"的脏数据。
+    //
+    // 必须先 upsert Book（books.id 是 chapters.book_id 外键），再
     // replace_by_book 写章节，否则触发 FOREIGN KEY constraint failed。
-    {
-        let book_dao = core_storage::book_dao::BookDao::new(&conn);
-        book_dao
-            .upsert(&book)
+    let storage_chapters = crate::local_book::parser_chapters_to_storage(&chapters, &book_id, now);
+    crate::transaction::with_transaction(&db_path, |tx| {
+        core_storage::book_dao::BookDao::upsert_in_tx(tx, &book)
             .map_err(|e| format!("写入书籍失败: {}", e))?;
-    }
-    {
-        let mut chapter_dao = core_storage::chapter_dao::ChapterDao::new(&mut conn);
-        chapter_dao
-            .replace_by_book(&book_id, &storage_chapters)
-            .map_err(|e| format!("写入章节失败: {}", e))?;
-    }
+        core_storage::chapter_dao::ChapterDao::replace_by_book_in_tx(
+            tx,
+            &book_id,
+            &storage_chapters,
+        )
+        .map_err(|e| format!("写入章节失败: {}", e))?;
+        Ok(())
+    })?;
 
     serde_json::to_string(&serde_json::json!({ "book_id": book_id }))
         .map_err(|e| format!("序列化失败: {}", e))
@@ -2242,19 +2284,29 @@ fn open_db(db_path: &str) -> Result<rusqlite::Connection, String> {
 /// 序列，下次新增错误分支极易漏一处。抽到这里收口，两个失败分支统一调，
 /// 错误信息也保持一致。成功路径（status=2）参数不同（携带 file_path /
 /// file_size），不走本 helper。
+///
+/// 批次 69 (BATCH-07b)：内部改用 [`crate::transaction::with_transaction`]
+/// 把 update + recompute 包成单事务，与成功路径同样原子。
 fn mark_chapter_failed(
     db_path: &str,
     task_id: &str,
     chapter_id: &str,
     error_message: &str,
 ) -> Result<(), String> {
-    let conn = open_db(db_path)?;
-    let dao = core_storage::download_dao::DownloadDao::new(&conn);
-    dao.update_chapter_status(chapter_id, 3, None, 0, Some(error_message))
+    crate::transaction::with_transaction(db_path, |tx| {
+        core_storage::download_dao::DownloadDao::update_chapter_status_in_tx(
+            tx,
+            chapter_id,
+            3,
+            None,
+            0,
+            Some(error_message),
+        )
         .map_err(|e| format!("更新章节状态失败: {}", e))?;
-    recompute_download_task_status(&dao, task_id)
-        .map_err(|e| format!("更新任务状态失败: {}", e))?;
-    Ok(())
+        recompute_download_task_status_in_tx(tx, task_id)
+            .map_err(|e| format!("更新任务状态失败: {}", e))?;
+        Ok(())
+    })
 }
 
 fn storage_to_source_book_source(

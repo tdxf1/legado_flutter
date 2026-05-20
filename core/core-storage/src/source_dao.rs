@@ -60,7 +60,24 @@ impl<'a> SourceDao<'a> {
         Self { conn }
     }
 
-    /// 插入或更新书源，返回实际写入的 ID（URL 去重时可能与 source.id 不同）
+    /// 插入或更新书源，返回**实际写入的 ID**（可能与 `source.id` 不同）。
+    ///
+    /// **silently-rewrite-id 行为（F-W1A-007）**：当传入的 `source.id`
+    /// 与 DB 中已有行 id 不同、但 `source.url` 与该已有行 url 相同时，
+    /// 本 fn 会把写入目标改为已有行 id（用 URL 去重避免外键
+    /// `book.source_id` 失效）。调用方**必须使用返回值（`effective_id`）
+    /// 而非传入的 `source.id`** 做后续查询/外键关联，否则会出现"按
+    /// `source.id` 查找返回 None 但数据其实在数据库另一行"的诡异。
+    ///
+    /// 示例：
+    /// - 传入 `source { id: "A", url: "U" }`，DB 已有 `{ id: "B", url: "U" }`
+    ///   → 本 fn 走 ON CONFLICT(id=B) DO UPDATE，返回 `"B"`，调用方应据
+    ///   `"B"` 关联 books.source_id；若仍用 `"A"` 会找不到任何行。
+    ///
+    /// 严格语义（"id 冲突直接报错让 caller 决定"）暂未提供；如未来需要，
+    /// 单独补 `try_insert_strict(&self, &BookSource) -> SqlResult<()>`，
+    /// 不复用本 fn 的去重逻辑。批次 69 / BATCH-07b 仅文档化此行为不变更
+    /// 实现。
     pub fn upsert(&self, source: &BookSource) -> SqlResult<String> {
         debug!("插入/更新书源: {} ({})", source.name, source.url);
 

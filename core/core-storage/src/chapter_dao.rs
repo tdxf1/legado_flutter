@@ -152,11 +152,29 @@ impl<'a> ChapterDao<'a> {
 
     pub fn replace_by_book(&mut self, book_id: &str, chapters: &[Chapter]) -> SqlResult<()> {
         let tx = self.conn.transaction()?;
+        Self::replace_by_book_in_tx(&tx, book_id, chapters)?;
+        tx.commit()
+    }
+
+    /// In-transaction variant of [`replace_by_book`] for callers that
+    /// already hold a transaction (e.g. bridge `with_transaction` helper
+    /// combining BookDao::upsert_in_tx + chapter replace into one
+    /// atomic unit so FK failures don't leave orphan book rows).
+    ///
+    /// **Note**: unlike [`replace_by_book_preserving_content_in_tx`] this
+    /// **drops** any cached chapter content — callers should choose the
+    /// preserving variant when refreshing TOC for an existing book where
+    /// already-read chapter bodies should be retained.
+    pub fn replace_by_book_in_tx(
+        tx: &rusqlite::Transaction<'_>,
+        book_id: &str,
+        chapters: &[Chapter],
+    ) -> SqlResult<()> {
         tx.execute("DELETE FROM chapters WHERE book_id = ?", params![book_id])?;
         for chapter in chapters {
-            Self::upsert_using_conn(&tx, chapter)?;
+            Self::upsert_using_conn(tx, chapter)?;
         }
-        tx.commit()
+        Ok(())
     }
 
     /// 根据 ID 获取章节

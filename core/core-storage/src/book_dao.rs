@@ -24,6 +24,86 @@ const BOOK_COLUMNS: &str = "id, source_id, source_name, name, author, cover_url,
     dur_chapter_index, dur_chapter_pos, dur_chapter_title, dur_chapter_time, group_id, \
     created_at, updated_at";
 
+/// books 表 upsert 的 SQL 模板（27 列 INSERT + ON CONFLICT(id) DO UPDATE）。
+///
+/// 抽常量是因为 [`BookDao::upsert`] 与 [`BookDao::upsert_in_tx`] 用同一
+/// 份 SQL — DAO 里两条 `&self` / 跨事务变体必须保持列顺序绝对一致。批
+/// 次 69 (BATCH-07b) 抽出后，新增列只需改一处。绑定参数顺序由
+/// [`bind_book_params`] 单一来源管理。
+const BOOK_UPSERT_SQL: &str = "INSERT INTO books (
+        id, source_id, source_name, name, author, cover_url, chapter_count,
+        latest_chapter_title, intro, kind, book_url, toc_url, last_check_time, last_check_count,
+        total_word_count, can_update, order_time, latest_chapter_time,
+        custom_cover_path, custom_info_json,
+        dur_chapter_index, dur_chapter_pos, dur_chapter_title, dur_chapter_time, group_id,
+        created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+        source_id = excluded.source_id,
+        source_name = excluded.source_name,
+        name = excluded.name,
+        author = excluded.author,
+        cover_url = excluded.cover_url,
+        chapter_count = excluded.chapter_count,
+        latest_chapter_title = excluded.latest_chapter_title,
+        intro = excluded.intro,
+        kind = excluded.kind,
+        book_url = excluded.book_url,
+        toc_url = excluded.toc_url,
+        last_check_time = excluded.last_check_time,
+        last_check_count = excluded.last_check_count,
+        total_word_count = excluded.total_word_count,
+        can_update = excluded.can_update,
+        order_time = excluded.order_time,
+        latest_chapter_time = excluded.latest_chapter_time,
+        custom_cover_path = excluded.custom_cover_path,
+        custom_info_json = excluded.custom_info_json,
+        dur_chapter_index = excluded.dur_chapter_index,
+        dur_chapter_pos = excluded.dur_chapter_pos,
+        dur_chapter_title = excluded.dur_chapter_title,
+        dur_chapter_time = excluded.dur_chapter_time,
+        group_id = excluded.group_id,
+        updated_at = excluded.updated_at";
+
+/// 把一本 [`Book`] 的 27 个字段按 [`BOOK_UPSERT_SQL`] 占位符顺序绑定为
+/// `params!(...)`。与上面 SQL 常量配对的"单一来源"，避免 `upsert` 与
+/// `upsert_in_tx` 两处写两份 `params![...]` 在加列时漏改一处。宏内部
+/// 调 [`rusqlite::params!`]，因此返回值是 rusqlite 期望的 `impl Params`
+/// 类型，对 `Connection::execute` / `Transaction::execute` 都可用。
+macro_rules! book_upsert_params {
+    ($book:expr) => {
+        rusqlite::params![
+            $book.id,
+            $book.source_id,
+            $book.source_name,
+            $book.name,
+            $book.author,
+            $book.cover_url,
+            $book.chapter_count,
+            $book.latest_chapter_title,
+            $book.intro,
+            $book.kind,
+            $book.book_url,
+            $book.toc_url,
+            $book.last_check_time,
+            $book.last_check_count,
+            $book.total_word_count,
+            $book.can_update as i32,
+            $book.order_time,
+            $book.latest_chapter_time,
+            $book.custom_cover_path,
+            $book.custom_info_json,
+            $book.dur_chapter_index,
+            $book.dur_chapter_pos,
+            $book.dur_chapter_title,
+            $book.dur_chapter_time,
+            $book.group_id,
+            $book.created_at,
+            $book.updated_at,
+        ]
+    };
+}
+
 /// 书架排序方式。
 ///
 /// 批次 8 (2026-05): 对齐原 Legado `BookSourceSort.kt` 枚举。Bridge 层
@@ -98,72 +178,28 @@ impl<'a> BookDao<'a> {
         );
 
         // 27 列 → 27 个占位符。批次 6 (v11) 在 v10 基础上新增 5 个 dur_*/group_id 字段。
-        self.conn.execute(
-            "INSERT INTO books (
-                id, source_id, source_name, name, author, cover_url, chapter_count,
-                latest_chapter_title, intro, kind, book_url, toc_url, last_check_time, last_check_count,
-                total_word_count, can_update, order_time, latest_chapter_time,
-                custom_cover_path, custom_info_json,
-                dur_chapter_index, dur_chapter_pos, dur_chapter_title, dur_chapter_time, group_id,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                source_id = excluded.source_id,
-                source_name = excluded.source_name,
-                name = excluded.name,
-                author = excluded.author,
-                cover_url = excluded.cover_url,
-                chapter_count = excluded.chapter_count,
-                latest_chapter_title = excluded.latest_chapter_title,
-                intro = excluded.intro,
-                kind = excluded.kind,
-                book_url = excluded.book_url,
-                toc_url = excluded.toc_url,
-                last_check_time = excluded.last_check_time,
-                last_check_count = excluded.last_check_count,
-                total_word_count = excluded.total_word_count,
-                can_update = excluded.can_update,
-                order_time = excluded.order_time,
-                latest_chapter_time = excluded.latest_chapter_time,
-                custom_cover_path = excluded.custom_cover_path,
-                custom_info_json = excluded.custom_info_json,
-                dur_chapter_index = excluded.dur_chapter_index,
-                dur_chapter_pos = excluded.dur_chapter_pos,
-                dur_chapter_title = excluded.dur_chapter_title,
-                dur_chapter_time = excluded.dur_chapter_time,
-                group_id = excluded.group_id,
-                updated_at = excluded.updated_at",
-            params![
-                book.id,
-                book.source_id,
-                book.source_name,
-                book.name,
-                book.author,
-                book.cover_url,
-                book.chapter_count,
-                book.latest_chapter_title,
-                book.intro,
-                book.kind,
-                book.book_url,
-                book.toc_url,
-                book.last_check_time,
-                book.last_check_count,
-                book.total_word_count,
-                book.can_update as i32,
-                book.order_time,
-                book.latest_chapter_time,
-                book.custom_cover_path,
-                book.custom_info_json,
-                book.dur_chapter_index,
-                book.dur_chapter_pos,
-                book.dur_chapter_title,
-                book.dur_chapter_time,
-                book.group_id,
-                book.created_at,
-                book.updated_at,
-            ],
-        )?;
+        // SQL 文本由共享常量 [`BOOK_UPSERT_SQL`] 提供，与
+        // [`BookDao::upsert_in_tx`] 保持单一来源（批次 69 / BATCH-07b）。
+        self.conn.execute(BOOK_UPSERT_SQL, book_upsert_params!(book))?;
 
+        Ok(())
+    }
+
+    /// `&Transaction` 版的 upsert：caller 在外层事务内复用同一份 SQL，
+    /// 让 [`crate::api::import_local_book`] 等多 DAO 多步写入跑单事务，
+    /// 中间错误时整批 rollback。
+    ///
+    /// `&self` 版与 `_in_tx` 版共用 [`BOOK_UPSERT_SQL`] 与
+    /// [`book_upsert_params!`] 宏，列顺序 / 参数顺序绝对一致。`upsert`
+    /// 自身因 `&Connection` 不能 Deref 成 `&Transaction`，无法 forward
+    /// 到 in_tx；两条路径分别 `execute` 同一常量是当前最简方案。
+    pub fn upsert_in_tx(tx: &rusqlite::Transaction<'_>, book: &Book) -> SqlResult<()> {
+        debug!(
+            "(in_tx) 插入/更新书籍: {} - {}",
+            book.name,
+            book.author.as_deref().unwrap_or("")
+        );
+        tx.execute(BOOK_UPSERT_SQL, book_upsert_params!(book))?;
         Ok(())
     }
 

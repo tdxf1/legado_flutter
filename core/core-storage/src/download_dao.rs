@@ -263,6 +263,26 @@ impl<'a> DownloadDao<'a> {
         Ok(())
     }
 
+    /// `&Transaction` 版的 [`update_chapter_status`]：caller 在外层事务
+    /// 内复用，让"更新单章状态 + 重算任务整体进度"两步 SQL 跑单事务。
+    /// 之前 [`crate::api::download_and_save_chapter`] 走 `&self` 版每步
+    /// 独立 commit，中间 panic 时章节标 status=2 但任务 progress 未刷
+    /// 新留下脏数据（批次 69 / BATCH-07b）。
+    pub fn update_chapter_status_in_tx(
+        tx: &rusqlite::Transaction<'_>,
+        chapter_id: &str,
+        status: i32,
+        file_path: Option<&str>,
+        file_size: i64,
+        error_message: Option<&str>,
+    ) -> SqlResult<()> {
+        tx.execute(
+            "UPDATE download_chapters SET status = ?, file_path = ?, file_size = ?, error_message = ?, updated_at = ? WHERE id = ?",
+            params![status, file_path, file_size, error_message, Utc::now().timestamp(), chapter_id],
+        )?;
+        Ok(())
+    }
+
     pub fn batch_create_chapters(&self, chapters: &[DownloadChapter]) -> SqlResult<()> {
         for chapter in chapters {
             self.upsert_chapter(chapter)?;
