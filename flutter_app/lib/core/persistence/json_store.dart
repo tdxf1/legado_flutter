@@ -70,6 +70,8 @@ Future<String> resolvePersistenceDir({String? directory}) async {
 
 File _settingsFile(String dir) => File('$dir/settings.json');
 
+File _jsonFile(String dir, String fileName) => File('$dir/$fileName');
+
 /// 读取 `settings.json` 中 [key] 对应的值，并通过 [parse] 转成 [T]。
 ///
 /// 任一异常路径（文件不存在 / key 缺失 / JSON 损坏 / [parse] 抛异常 / IO 错误）
@@ -138,6 +140,81 @@ Future<void> deleteJsonKey(String key, {String? directory}) {
       await file.writeAsString(jsonEncode(json));
     } catch (_) {
       // 沿用原 clearPendingRoute 静默策略
+    }
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 整文件 JSON IO（一个 fileName = 一个顶级 JSON 对象）
+//
+// 与上方 [readJsonKey]/[writeJsonKey]/[deleteJsonKey] 区别：
+// - key-based 一组：多个 key 共享 settings.json 单文件，read-modify-write
+//   只动指定 key、不动其它 key；写失败被 helper 吞掉（[errorTag] 控制 log）。
+// - file-based 一组（本组）：每个文件存一个独立顶级对象（webdav.json /
+//   未来扩展）；写为整覆盖，**不**与既有内容合并；写失败 rethrow 让
+//   caller 决定是否给用户 SnackBar。
+//
+// **约定**：settings.json **不要混用** [writeJsonFile] —— 整覆盖会清掉
+// [writeJsonKey] 写过的所有 key。本约定靠 doc 提示 + 单元测试文档化（见
+// `test/json_store_test.dart` 内 'settings.json must not be used with
+// whole-file API' 用例），代码不强制拦截。
+//
+// 引入于 BATCH-18g（F-W2A-058）— webdav.json read-modify-write 模板在
+// webdav_config_page + backup_page 重复，提取到此处。
+// ─────────────────────────────────────────────────────────────────────────
+
+/// 读取 [fileName] 的整个 JSON 顶级对象。
+///
+/// 文件不存在 / 内容损坏 / IO 异常一律 fallback 到 `null`（不抛）—— 与
+/// [readJsonKey] 的"fallback 到 default"策略一致，让 caller 用 null check
+/// 判断"未配置"。
+///
+/// caller 自己负责字段提取与默认值（webdav.json 4 个 String 字段较简单，
+/// 未引入数据类；未来如有更复杂 schema 可在 caller 一侧抽 fromJson）。
+Future<Map<String, dynamic>?> readJsonFile(
+  String fileName, {
+  String? directory,
+}) async {
+  try {
+    final dir = await resolvePersistenceDir(directory: directory);
+    final file = _jsonFile(dir, fileName);
+    if (!await file.exists()) return null;
+    return jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 把 [data] 整体覆盖写入 [fileName]（不是 read-modify-write）。
+///
+/// 串行化保证：与 [writeJsonKey] / [deleteJsonKey] / [deleteJsonFile] 共享
+/// 同一把 [_writeLock]，保证不与其它写并发撕裂（即使是不同 fileName）。
+///
+/// **错误策略与 [writeJsonKey] 不同**：本函数在 IO 失败时 **rethrow**，
+/// 让 caller 外层 try-catch 决定是否给用户 SnackBar。理由是 webdav 配置
+/// 等场景的写失败需要可见反馈，而非 settings.json 那种静默吞错。
+Future<void> writeJsonFile(
+  String fileName,
+  Map<String, dynamic> data, {
+  String? directory,
+}) {
+  return _writeLock.run(() async {
+    final dir = await resolvePersistenceDir(directory: directory);
+    final file = _jsonFile(dir, fileName);
+    await file.writeAsString(jsonEncode(data));
+  });
+}
+
+/// 删除 [fileName]。文件不存在静默 no-op；其它 IO 异常静默吞掉
+/// （与 [deleteJsonKey] 对齐，删除场景通常不需要可见反馈）。
+Future<void> deleteJsonFile(String fileName, {String? directory}) {
+  return _writeLock.run(() async {
+    try {
+      final dir = await resolvePersistenceDir(directory: directory);
+      final file = _jsonFile(dir, fileName);
+      if (await file.exists()) await file.delete();
+    } catch (_) {
+      // 沿用 deleteJsonKey 静默策略
     }
   });
 }

@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -472,27 +471,22 @@ class _BackupPageState extends ConsumerState<BackupPage> {
   /// 读 `<documentsDir>/webdav.json`。返回 `null` 表示未配置（让 caller
   /// 提示"先去配置"）。
   Future<Map<String, String>?> _loadWebDavConfig() async {
-    try {
-      // BATCH-18e (F-W2B-022)：路径走 resolvePersistenceDir 与 db 对齐。
-      // webdav.json read-modify-write 模板与 webdav_config_page 重复，留
-      // BATCH-18g（F-W2A-058）独立批次抽公共 helper。
-      final dir = widget.webdavConfigDirOverride ?? await resolvePersistenceDir();
-      final f = File('$dir/webdav.json');
-      if (!await f.exists()) return null;
-      final text = await f.readAsString();
-      final Map<String, dynamic> map =
-          jsonDecode(text) as Map<String, dynamic>;
-      final url = (map['url'] as String?)?.trim() ?? '';
-      if (url.isEmpty) return null;
-      return {
-        'url': url,
-        'user': (map['user'] as String?) ?? '',
-        'password': (map['password'] as String?) ?? '',
-        'deviceName': (map['deviceName'] as String?) ?? '',
-      };
-    } catch (_) {
-      return null;
-    }
+    // BATCH-18g (F-W2A-058)：走 json_store 公共 helper。readJsonFile 自吞
+    // 异常返回 null（与原 catch (_) → null 等价）。url trim+empty→null
+    // 校验保留在 caller，因为这是 backup_page 特有的"未配置"语义。
+    final map = await readJsonFile(
+      'webdav.json',
+      directory: widget.webdavConfigDirOverride,
+    );
+    if (map == null) return null;
+    final url = (map['url'] as String?)?.trim() ?? '';
+    if (url.isEmpty) return null;
+    return {
+      'url': url,
+      'user': (map['user'] as String?) ?? '',
+      'password': (map['password'] as String?) ?? '',
+      'deviceName': (map['deviceName'] as String?) ?? '',
+    };
   }
 
   /// 拼接远端 backup 文件名。优先用 `deviceName-` 后缀，否则用 `legado_flutter`

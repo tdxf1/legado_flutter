@@ -1,6 +1,3 @@
-import 'dart:convert';
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -105,11 +102,10 @@ class _WebDavConfigPageState extends ConsumerState<WebDavConfigPage> {
   Future<void> _loadConfig() async {
     try {
       final dir = await _resolveConfigDir();
-      final f = File('$dir/webdav.json');
-      if (await f.exists()) {
-        final text = await f.readAsString();
-        final Map<String, dynamic> map =
-            jsonDecode(text) as Map<String, dynamic>;
+      // BATCH-18g (F-W2A-058)：走 json_store 公共 helper 替代 read-modify-write
+      // 模板。文件不存在 / 解析失败 → null，与原 if (await f.exists()) 等价。
+      final map = await readJsonFile('webdav.json', directory: dir);
+      if (map != null) {
         _urlCtl.text = (map['url'] as String?) ?? '';
         _userCtl.text = (map['user'] as String?) ?? '';
         _pwdCtl.text = (map['password'] as String?) ?? '';
@@ -177,14 +173,14 @@ class _WebDavConfigPageState extends ConsumerState<WebDavConfigPage> {
     setState(() => _saving = true);
     try {
       final dir = await _resolveConfigDir();
-      final f = File('$dir/webdav.json');
-      final map = {
+      // BATCH-18g (F-W2A-058)：webdav.json 整文件覆盖式写走 json_store 公共
+      // helper。writeJsonFile rethrow 让外层 try-catch 保留 '保存失败' SnackBar。
+      await writeJsonFile('webdav.json', {
         'url': url,
         'user': _userCtl.text.trim(),
         'password': _pwdCtl.text,
         'deviceName': _deviceCtl.text.trim(),
-      };
-      await f.writeAsString(jsonEncode(map));
+      }, directory: dir);
       // 批次 12: 备份密码独立保存（legado_local.json）。失败不影响 webdav.json。
       try {
         final fn = widget.setBackupPasswordOverride ??
