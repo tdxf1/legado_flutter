@@ -54,7 +54,9 @@ pub use source_dao::SourceDao;
 // 一律走 `core_storage::database::init_database` + 各 DAO 直接构造
 // 的方式（如 `BookDao::new(&conn)`）。
 //
-// 关于 production WAL pragma：见 master report `findings-rust-data.md`
-// F-W1A-014 Resolution 段尾追加的新 finding 记录 — 当前
-// `database::init_database` 不调 `pragma_update("journal_mode","WAL")`，
-// 留独立批次评估是否启用。
+// 关于 production WAL：BATCH-08c（F-W1A-055）已在
+// `database::init_database` 启用 `journal_mode = WAL` — 配合既有的
+// `synchronous = NORMAL` + `wal_autocheckpoint = 1000` 形成 SQLite
+// 官方推荐组合。详见 `database.rs::init_database` 内的 BATCH-08c 段
+// 注释，及 `database.rs::tests` 内 `test_wal_enabled_on_fresh_init` /
+// `test_wal_persists_across_reopens` 两条单测。

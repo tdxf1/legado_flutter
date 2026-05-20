@@ -28,10 +28,33 @@ pub fn init_database(db_path: &str) -> SqlResult<Connection> {
 
     let mut conn = Connection::open(db_path)?;
 
+    // F-W1A-055（BATCH-08c）：启用 WAL 日志模式。
+    //
+    // WAL 是 db 文件级持久化（写入 db header），一次设置后所有后续连接
+    // （包括下方 [`get_connection`] 打开的新连接、r2d2 pool、直调
+    // `Connection::open`）自动继承，无需重设。
+    //
+    // 启用 WAL 是下方 `synchronous = NORMAL` + `wal_autocheckpoint = 1000`
+    // 真正生效的前提：rollback journal mode 下 `synchronous = NORMAL` 不
+    // 安全（应是 FULL），`wal_autocheckpoint` 完全 no-op。BATCH-07b 加
+    // 这两条 pragma 时漏了 journal_mode 设置，本批补齐。
+    //
+    // `PRAGMA journal_mode = WAL` 在 SQLite 协议里返回当前 mode 字符串行，
+    // 用 `pragma_update_and_check` 一并完成 set + 取值。失败时不阻塞启动，
+    // 仅 warn — 启用失败属"不应发生"路径（仅网络文件系统才不支持，
+    // 项目不涉及）。
+    let journal_mode: String =
+        conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))?;
+    if journal_mode.eq_ignore_ascii_case("wal") {
+        info!("数据库 WAL 模式已启用");
+    } else {
+        warn!("WAL 启用失败，当前 journal_mode = {}", journal_mode);
+    }
+
     // 启用外键约束
     conn.execute("PRAGMA foreign_keys = ON", [])?;
 
-    // WAL 持久性调优（批次 69 / BATCH-07b，F-W1A-004）：
+    // WAL 持久性调优（批次 69 / BATCH-07b，F-W1A-004；BATCH-08c 启用 WAL）：
     //
     // - `synchronous = NORMAL`：在 WAL 模式下被官方推荐为最佳安全 / 性能
     //   平衡点。断电仅丢失最近未 fsync 到 -wal 文件的事务，已 commit 的
@@ -1102,6 +1125,59 @@ pub fn execute_sql_file(conn: &Connection, sql: &str) -> SqlResult<()> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// F-W1A-055（BATCH-08c）：验证 init_database 启用 WAL。
+    /// SQLite 返回的 mode 字符串小写 "wal"，需 case-insensitive 比较。
+    #[test]
+    fn test_wal_enabled_on_fresh_init() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir
+            .path()
+            .join("wal_fresh.db")
+            .to_string_lossy()
+            .to_string();
+
+        let conn = init_database(&db_path).unwrap();
+        let mode: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            mode.to_lowercase(),
+            "wal",
+            "fresh init_database should enable WAL"
+        );
+    }
+
+    /// F-W1A-055（BATCH-08c）：验证 WAL 是 db 文件级持久化的。
+    /// init_database 调一次后，第二次直接 `Connection::open`（不走
+    /// init_database，模拟 get_connection / r2d2 pool / js_runtime 直调
+    /// `Connection::open` 的下游路径）拿到的连接也应是 WAL 模式。
+    /// 这是"WAL 是 db-level"假设在我们代码里的间接保护测试。
+    #[test]
+    fn test_wal_persists_across_reopens() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir
+            .path()
+            .join("wal_persist.db")
+            .to_string_lossy()
+            .to_string();
+
+        // 第一次：调 init_database 启用 WAL，drop 第一条连接
+        {
+            let _ = init_database(&db_path).unwrap();
+        }
+
+        // 第二次：不走 init_database，直接 Connection::open
+        let conn2 = rusqlite::Connection::open(&db_path).unwrap();
+        let mode: String = conn2
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            mode.to_lowercase(),
+            "wal",
+            "WAL is db-file level — second open without init_database must still see WAL"
+        );
+    }
 
     #[test]
     fn test_database_init() {
