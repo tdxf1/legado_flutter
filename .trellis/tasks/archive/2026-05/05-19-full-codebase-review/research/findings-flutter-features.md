@@ -233,6 +233,8 @@
 
 **建议**: 重新规划导航：bookshelf 只保留"书架自身相关"操作（导入本地书、管理分组）；其余移到设置页或独立的"工具"页。可作为独立子任务。
 
+**Resolution (BATCH-18f, 2026-05-21，方案 1 保守拆分)**: 闭环。bookshelf AppBar PopupMenu 从 9 项缩到 4 项，仅保留书架场景高频：`manage_groups`（管理分组）+ `import_local`（导入本地书）+ `qr_scan`（扫码导入）+ `rss_source_manage`（RSS 源管理，与 source_page 风格对齐书源/订阅源同级入口）。其余 5 项移到 `settings_page.dart` "工具"段（与既有 `replace_rules` 共置）：`backup`（备份/恢复）+ `read_stats`（阅读统计）+ `cache_management`（缓存管理）+ `rss_favorites`（RSS 收藏）+ `rule_subs`（订阅源）。`router.dart` 路由表 0 改动（入口位置变更，路径不变）。新增 `test/settings_page_test.dart` 2 case 验证工具段 6 项 ListTile 全部存在 + chevron_right 可点击指示。`flutter analyze` 0 issue；`flutter test` 404/404 PASS（旧 402 + 新 2）。BATCH-18 路线图 6 条 Flutter finding 全部清完（W2A-001/002/003/008 + W2B-016/022 + 衍生 F-W2A-081）。
+
 ---
 
 ### F-W2B-017 [P1 主要][C-性能][bookshelf]
