@@ -550,6 +550,8 @@
 
 **建议**: 删除 dev-dependencies 里的 tempfile；cargo 自动包含 deps 的依赖供 test 用。
 
+**Resolution (verified clean by BATCH-23, 2026-05-21)**: 已修复。`core/bridge/Cargo.toml:25-26` 现在仅在 `[dependencies]` 一处含 `tempfile = { workspace = true }`，注释明确说明"统一进 [dependencies] 即够；dev-deps 不再重复"。修复发生在某次早前批次（具体 commit 难追溯，可能 BATCH-06 workspace deps 整理时一并解决），本批仅核实代码与文档对齐 + 补 Resolution 标记。
+
 ---
 
 ### F-W3-031 [P2 次要][E-代码异味][Cargo workspace]

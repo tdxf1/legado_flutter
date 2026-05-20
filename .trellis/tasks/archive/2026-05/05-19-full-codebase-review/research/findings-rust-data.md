@@ -349,6 +349,8 @@
 
 **建议**: 记录 `token_set=true / token_set=false`，不打印实际值；在控制台单独以特殊路径（stderr 一行 + 提示用户复制）输出，且只输出一次（首次启动），后续不重复打。
 
+**Resolution (BATCH-23, 2026-05-21)**: Resolved。`tracing::warn!` 改为只 log 前 8 char 作 fingerprint（`generated ephemeral token (fingerprint: {}…)` 格式），不进结构化日志的完整 token 走 `eprintln!` 一次性写到 stderr。op 仍能定位本次启动用了哪个 token，但 log aggregator / docker logs / journalctl 等 sink 不会落库完整 token。生产部署强烈建议设 `LEGADO_API_TOKEN` 显式提供，不依赖 ephemeral fallback。
+
 ---
 
 ### F-W1A-024 [P2 次要][E-代码异味][core-storage/database]
@@ -432,6 +434,8 @@
 **详细**: `query_map` 的结果是 `MappedRows<F>`，`flatten()` 用在 `Result<Result<T,E>>` 把外层 Err 也丢掉，等同于 `for r in rows.flatten()` 跳过任何返回错误的行。SQL 错误（schema 损坏 / 锁竞争）会 silently skip 然后用部分数据继续，破坏映射表完整性。
 
 **建议**: `for r in rows.collect::<SqlResult<Vec<_>>>()? { ... }`，错误传播上去。
+
+**Resolution (BATCH-23, 2026-05-21)**: Resolved。两处 `for r in rows.flatten()` 改为 `for r in rows { let r = r.map_err(|e| format!("读 ... 行失败: {}", e))?; ... }` 显式 `?` 向上传播。错误从 silent skip 变为可观测，caller 链上层能 surface 给用户。注：原 finding 报 L236-247，实际 BATCH-08 后行号变成 L257 (sources) + L327 (books)。
 
 ---
 
@@ -517,6 +521,8 @@
 
 **建议**: 文件损坏时 log warn + 保留原文件备份（`legado_local.json.bak`）；至少不要 silently overwrite。
 
+**Resolution (BATCH-23, 2026-05-21)**: Resolved。`set_backup_password` 在 JSON 解析失败 / 顶层非 object 时，把损坏内容写到 `legado_local.json.<unix_ts>.bak` 副本（timestamp 后缀防覆盖既存 .bak），同时 `tracing::warn!` 记录损坏原因；然后才用空 Map 重置（行为等价，但有备份兜底用户可手工恢复）。`get_backup_password` 不写文件，加 `tracing::warn!` log 让 op 知道配置已损坏。注：原 finding 报 L1416-1417，实际位于 set_backup_password (L1373-1395)。
+
 ---
 
 ### F-W1A-038 [P2 次要][A-架构][api-server]
@@ -548,6 +554,8 @@
 **问题**: `clean_legado_url(url)` 只做 `trim`，函数名暗示更复杂的清理逻辑。
 
 **建议**: 内联，删掉函数；或者实现真正的 URL 解析校验。
+
+**Resolution (BATCH-23, 2026-05-21)**: Resolved。`clean_legado_url` 删除，caller 内联为 `url.trim().to_string()`。注：原 finding 报 L704-706，实际 BATCH-08 后行号变成 L724/L729-731。
 
 ---
 
@@ -624,6 +632,8 @@
 **问题**: 文件只有一行注释 "DTOs will be added as endpoints are implemented." — 6 个月没动过的 placeholder。
 
 **建议**: 删除整个 dto.rs；DTOs 已经分散在每个 routes/* 文件里定义。
+
+**Resolution (BATCH-23, 2026-05-21)**: Resolved。整文件删除（grep `mod dto|use.*dto` 在 api-server 下 0 命中确认 orphan）。
 
 ---
 

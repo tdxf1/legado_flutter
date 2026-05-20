@@ -31,7 +31,8 @@
     "05-21-batch-18e-f-w2b-022-features-documents",
     "05-21-batch-18g-json-store-filename-webdav-json-helper",
     "05-21-batch-18f-bookshelf-appbar-popupmenu",
-    "05-21-batch-22-flutter-sentinel"
+    "05-21-batch-22-flutter-sentinel",
+    "05-21-batch-23-rust-silent-error-dep"
   ],
   "parent": null,
   "relatedFiles": [],
