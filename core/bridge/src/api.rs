@@ -1372,13 +1372,23 @@ const LEGADO_LOCAL_FILE: &str = "legado_local.json";
 /// 默认值一致）—— 此时备份 zip 仍走 AES 加密但 key = MD5("")。
 pub fn set_backup_password(documents_dir: String, password: String) -> Result<(), String> {
     let path = std::path::Path::new(&documents_dir).join(LEGADO_LOCAL_FILE);
-    // 读现有 JSON（若存在），仅覆盖 password 字段，保留未来其它配置项。
+    // BATCH-23 (F-W1A-037)：legado_local.json 解析失败时，原代码 silent
+    // 用空 Map 覆盖原文件 → 用户其它配置（未来扩展字段）丢失。现在解析
+    // 失败时先把损坏内容写到 `.<unix_ts>.bak` 副本保留，再用空 Map 重置，
+    // 用户可手工恢复。timestamp 后缀防覆盖既存 .bak。
     let mut map: serde_json::Map<String, serde_json::Value> = match std::fs::read_to_string(&path)
     {
-        Ok(text) => serde_json::from_str(&text)
-            .ok()
-            .and_then(|v: serde_json::Value| v.as_object().cloned())
-            .unwrap_or_default(),
+        Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(v) => v.as_object().cloned().unwrap_or_else(|| {
+                // JSON 合法但顶层非 object（如数组 / scalar）— 同样写 .bak。
+                _backup_corrupt_legado_local(&path, &text, "顶层非 JSON object");
+                serde_json::Map::new()
+            }),
+            Err(e) => {
+                _backup_corrupt_legado_local(&path, &text, &format!("JSON 解析失败: {}", e));
+                serde_json::Map::new()
+            }
+        },
         Err(_) => serde_json::Map::new(),
     };
     map.insert(
@@ -1394,6 +1404,29 @@ pub fn set_backup_password(documents_dir: String, password: String) -> Result<()
     std::fs::write(&path, text).map_err(|e| format!("写入 legado_local.json 失败: {}", e))
 }
 
+/// BATCH-23 (F-W1A-037) helper：把损坏的 legado_local.json 内容写到
+/// `.<unix_ts>.bak` 副本以便用户事后恢复。失败仅 log warn，不阻塞主流程。
+fn _backup_corrupt_legado_local(path: &std::path::Path, content: &str, reason: &str) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let bak_path = path.with_extension(format!("json.{}.bak", ts));
+    match std::fs::write(&bak_path, content) {
+        Ok(_) => tracing::warn!(
+            "legado_local.json 损坏（{}）；原内容已备份到 {} ，将以空配置重置",
+            reason,
+            bak_path.display()
+        ),
+        Err(e) => tracing::warn!(
+            "legado_local.json 损坏（{}）；备份到 {} 失败 ({})，将以空配置重置（原内容丢失）",
+            reason,
+            bak_path.display(),
+            e
+        ),
+    }
+}
+
 /// 读取当前备份密码；不存在或 JSON 解析失败时返回空串（等价"未设密码"）。
 pub fn get_backup_password(documents_dir: String) -> Result<String, String> {
     let path = std::path::Path::new(&documents_dir).join(LEGADO_LOCAL_FILE);
@@ -1401,7 +1434,16 @@ pub fn get_backup_password(documents_dir: String) -> Result<String, String> {
         Ok(text) => {
             let v: serde_json::Value = match serde_json::from_str(&text) {
                 Ok(v) => v,
-                Err(_) => return Ok(String::new()),
+                Err(e) => {
+                    // BATCH-23 (F-W1A-037)：read 路径不动文件，但加 warn log
+                    // 让 op 知道配置文件已损坏（set_backup_password 下一次
+                    // 调用时会写 .bak 副本）。
+                    tracing::warn!(
+                        "legado_local.json 解析失败 ({}); 视为未设密码",
+                        e
+                    );
+                    return Ok(String::new());
+                }
             };
             Ok(v.get("password")
                 .and_then(|p| p.as_str())

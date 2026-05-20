@@ -720,14 +720,12 @@ fn merge_search_url(
 ) -> Option<serde_json::Value> {
     let mut value = rule_search.unwrap_or_else(|| serde_json::json!({}));
     if let (Some(url), Some(obj)) = (search_url, value.as_object_mut()) {
+        // BATCH-23 (F-W1A-040)：原 `clean_legado_url(url)` 函数仅做 trim，
+        // 函数名误导（暗示更复杂的清理）。内联到此处避免 indirection。
         obj.entry("search_url".to_string())
-            .or_insert_with(|| serde_json::Value::String(clean_legado_url(url)));
+            .or_insert_with(|| serde_json::Value::String(url.trim().to_string()));
     }
     Some(value)
-}
-
-fn clean_legado_url(url: &str) -> String {
-    url.trim().to_string()
 }
 
 impl<'a> SourceDao<'a> {

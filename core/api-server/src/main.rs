@@ -105,16 +105,26 @@ async fn main() {
     // operator hasn't supplied one, we generate a random UUIDv4 and log
     // it so a local dev session is still ergonomic. The previous
     // "loopback => no auth" exception let any browser tab hit the API.
+    //
+    // BATCH-23 (F-W1A-023)：以前用 tracing::warn! 把完整 ephemeral token
+    // 写进结构化日志（journalctl / docker logs / 云端 sink 都会截留 → 任何
+    // 能读 log 的人都能拿到 token）。现在仅 log 前 8 char 作为 fingerprint
+    // 让 op 能定位本次启动；完整 token 走 eprintln! 一次性写到 stderr，
+    // **不**进 tracing pipeline，避免 sink 落库。生产部署强烈建议用
+    // LEGADO_API_TOKEN 显式提供，不依赖 ephemeral fallback。
     let api_token = std::env::var("LEGADO_API_TOKEN")
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| {
             let generated = uuid::Uuid::new_v4().to_string();
             tracing::warn!(
-                "LEGADO_API_TOKEN not set; generated ephemeral token for this run: {} \
-                 (set LEGADO_API_TOKEN to keep a stable token across restarts)",
-                generated
+                "LEGADO_API_TOKEN not set; generated ephemeral token (fingerprint: {}…); \
+                 set LEGADO_API_TOKEN to keep a stable token across restarts",
+                &generated[..8]
             );
+            // 完整 token 仅 stderr 一次输出，不进结构化日志（避免被 log
+            // aggregator / 云端 sink 落库）。
+            eprintln!("[legado api-server] full ephemeral token: {}", generated);
             generated
         });
     let bind_addr = format!("{}:{}", host, port);

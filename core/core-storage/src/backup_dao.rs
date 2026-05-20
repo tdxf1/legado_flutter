@@ -254,7 +254,12 @@ pub fn import_from_zip(conn: &mut Connection, zip_path: &str) -> Result<ImportSu
         let rows = stmt
             .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
             .map_err(|e| format!("查 sources 失败: {}", e))?;
-        for r in rows.flatten() {
+        // BATCH-23 (F-W1A-030)：原 `for r in rows.flatten()` 把 Result<T> 当
+        // Iterator 处理，Ok→[t] / Err→[]，等同 .filter_map(Result::ok) 静默
+        // 吞 SQL 错误。改 for-loop 显式 ? 向上传播，让 caller 能感知到
+        // 损坏的 sources 行（DB 损坏场景下用户能看到具体错误而非默默错过）。
+        for r in rows {
+            let r = r.map_err(|e| format!("读 sources 行失败: {}", e))?;
             sources_url_to_id.entry(r.1).or_insert(r.0);
         }
     }
@@ -324,7 +329,9 @@ pub fn import_from_zip(conn: &mut Connection, zip_path: &str) -> Result<ImportSu
                 ))
             })
             .map_err(|e| format!("查 books 失败: {}", e))?;
-        for r in rows.flatten() {
+        // BATCH-23 (F-W1A-030)：错误传播取代 silent flatten，同上 sources 路径。
+        for r in rows {
+            let r = r.map_err(|e| format!("读 books 行失败: {}", e))?;
             let key = format!("{}|{}", r.1, r.2.unwrap_or_default());
             book_key_to_id.entry(key).or_insert(r.0);
         }
