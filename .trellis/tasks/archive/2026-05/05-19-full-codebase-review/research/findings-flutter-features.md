@@ -305,6 +305,18 @@
 
 **建议**: 抽 `core/persistence/json_store.dart`：`Future<T> read<T>(String name, T Function(Map) parser, T defaultValue)` + `Future<void> write(String name, Object value)`。features 不再直接接触 path_provider / File。
 
+**Resolution (BATCH-18e, 2026-05-20，方案 A 缩范围)**: F-W2B-022 闭环。BATCH-18c 已建立 `core/persistence/json_store.dart` + `resolvePersistenceDir()` 公开 helper，BATCH-18e 把 features/core 层 6 处 caller 全部收拢到 `resolvePersistenceDir()`：
+- `core/cover_cache.dart:30`（封面缓存目录）
+- `features/bookshelf/bookshelf_page.dart:280`（透传 Rust FRB importLocalBook）
+- `features/bookshelf/book_info_edit_page.dart:286`（封面文件复制）
+- `features/reader/widgets/reader_settings_sheet.dart:57-59`（阅读器背景图，唯一与 json_store 完全重复的 Platform 三元式）
+- `features/settings/webdav_config_page.dart:101-103`（webdav.json 配置目录）
+- `features/settings/backup_page.dart:476-477`（webdav.json 读路径）
+
+顺手修跨平台行为差异：4 处之前直接 `getApplicationDocumentsDirectory()` 不带三元式，桌面端拿到 Documents 目录与 db 路径（Support）不一致；统一走 `resolvePersistenceDir()` 后跨平台对齐。`flutter analyze` 0 issue；`flutter test` 393/393 PASS 维持。`path_provider` import 在 `flutter_app/lib/` 下仅 `json_store.dart` 一处。
+
+**Follow-up — 新 finding (F-W2A-058)**：webdav.json 完整 read-modify-write 模板（"打开 → jsonDecode Map → 字段提取 → 改字段 → jsonEncode → writeAsString"）在 `webdav_config_page.dart:108-117/180-187` + `backup_page.dart:474-494` 重复实现。json_store helper 当前仅支持 `settings.json` 单文件，不能直接迁。修复方向：扩 json_store API 支持任意 fileName（如 `readJsonFile<T>` / `writeJsonFile` / `deleteJsonFile`）+ 迁两处 caller。等价 BATCH-18d audit 列出的方案 B（约 +80 行）。Status: Open（占位，BATCH-18g 处理）。
+
 ---
 
 ### F-W2B-023 [P2 次要][B-正确性][settings/backup]
