@@ -51,11 +51,6 @@ final dbInitializedProvider = FutureProvider<bool>((ref) async {
   }
 });
 
-// one-shot search test (runs during app init)
-// Removed in code review: hardcoded sourceId, print() logs, fired by `watch`
-// would also issue a stray search request. If you need to re-add a smoke,
-// gate it behind kDebugMode and use debugPrint.
-
 final allBooksProvider = FutureProvider<List<Map<String, dynamic>>>((ref) async {
   await ref.watch(dbInitializedProvider.future);
   final dbPath = await ref.watch(dbPathProvider.future);

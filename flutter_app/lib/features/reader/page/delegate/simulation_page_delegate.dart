@@ -52,9 +52,11 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
   double _middleX = 0;
   double _middleY = 0;
 
-  // 5 对贝塞尔关键点 + Vertex
-  final Offset _bezierStart1 = const Offset(0, 0);
-  final Offset _bezierStart2 = const Offset(0, 0);
+  // 5 对贝塞尔关键点 + Vertex（点位通过 _bs1x/y、_bs2x/y、_bc1x/y、_bc2x/y、
+  // _be1x/y、_be2x/y、_bv1x/y、_bv2x/y 8 组双精度成员表达）。
+  // BATCH-22 (F-W2A-047)：删除 `_bezierStart1` / `_bezierStart2` 装饰性
+  // const 字段 + 配套的 `_start1` / `_start2` unused getter（带
+  // `// ignore: unused_element`）— 仅为骗 linter 而存在。
   // Use mutable refs via setters to avoid object churn each frame.
   double _bs1x = 0, _bs1y = 0;
   double _bs2x = 0, _bs2y = 0;
@@ -824,14 +826,6 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
 
   @visibleForTesting
   double get debugAnimStartProgress => _animStartProgress;
-
-  // 借助 [bezierStart1] / [bezierStart2] 字段去消静态分析未使用警告：
-  // 二者的具体值在 _bs1x/y、_bs2x/y 中存放，保留 const 字段是为了让阅读者
-  // 直观看到点位组织。
-  // ignore: unused_element
-  Offset get _start1 => _bezierStart1;
-  // ignore: unused_element
-  Offset get _start2 => _bezierStart2;
 
   @override
   void dispose() {}

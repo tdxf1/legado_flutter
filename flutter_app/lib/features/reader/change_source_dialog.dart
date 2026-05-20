@@ -66,7 +66,6 @@ class _ChangeSourceDialogState extends State<ChangeSourceDialog> {
   }
 
   Future<void> _startSearch() async {
-    print("ZZZZ changeSource _startSearch: bookName=${widget.bookName}");
     setState(() {
       _isSearching = true;
       _errorMessage = null;
@@ -111,21 +110,16 @@ class _ChangeSourceDialogState extends State<ChangeSourceDialog> {
 
         for (final sourceResults in batchResults) {
           for (final r in sourceResults) {
-            final name = (r['name'] as String? ?? '').trim();
-            final _ = (r['author'] as String? ?? '').trim();
-            final bookName = widget.bookName.trim();
-            // Accept all results from the search - let user decide which source to use
-            final nameMatch = true;
-            final authorMatch = true;
-            print("ZZZZ changeSrc: name='$name' book='$bookName' accepted=true");
-            if (nameMatch && authorMatch) {
-              final dedupKey = '${r['source_name']}_${r['source_id']}';
-              final exists = _results.any((existing) =>
-                  '${existing['source_name']}_${existing['source_id']}' ==
-                  dedupKey);
-              if (!exists) {
-                _results.add(r);
-              }
+            // BATCH-22 (F-W2A-031/032)：删调试 print('ZZZZ ...') 与硬编码
+            // `nameMatch=true && authorMatch=true` 死包裹（注释里写的"接受
+            // 所有搜索结果让用户决定用哪个源" — 意图是不做匹配过滤，本批把
+            // 包裹 if 解掉直接执行 body）。
+            final dedupKey = '${r['source_name']}_${r['source_id']}';
+            final exists = _results.any((existing) =>
+                '${existing['source_name']}_${existing['source_id']}' ==
+                dedupKey);
+            if (!exists) {
+              _results.add(r);
             }
           }
           _searchedCount++;

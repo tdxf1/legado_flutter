@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/download_runner.dart';
@@ -13,13 +12,6 @@ import 'src/rust/frb_generated.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  debugRepaintTextRainbowEnabled = false;
-  debugRepaintRainbowEnabled = false;
-  debugPaintSizeEnabled = false;
-  debugPaintBaselinesEnabled = false;
-  debugPaintTextLayoutBoxes = false;
-  debugPaintLayerBordersEnabled = false;
 
   // Apply preferred display mode as early as possible so animations like
   // simulation page-flip can leverage the high refresh rate from first frame.
