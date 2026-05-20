@@ -21,6 +21,20 @@
 //! `bookSource.json` → `bookGroup.json` → `bookshelf.json` → `bookmark.json`
 //! → `replaceRule.json`。原因见 PRD §字段映射表：books 依赖 sources
 //! (origin → source_id)，bookmarks 依赖 books ((name,author) → book_id)。
+//!
+//! ## WAL sidecar 与备份产物的关系（BATCH-08d 审计，F-W1A-056 dismissed）
+//!
+//! BATCH-08c 启用 WAL 后用户 db 目录会多 `legado.db-wal` + `legado.db-shm`
+//! sidecar 文件。本模块**走 SQL `SELECT` → JSON → zip 路径**，全程不接触
+//! 文件系统层 db 文件本身（仓库内 0 处 `fs::copy(.db)` / `VACUUM INTO` /
+//! `sqlite3_backup_init`）。WAL sidecar 对 SQL 层完全透明：已 commit 数据
+//! 由 SQLite 引擎自动合并到 SELECT 结果，未 commit 数据按 ACID 隔离语义
+//! 本就不属于备份范围。**因此备份前无需 `PRAGMA wal_checkpoint`**。
+//!
+//! 若未来新增"二进制级"备份路径（`fs::copy` db 文件 / `VACUUM INTO` /
+//! `sqlite3_backup_init`），那条新路径必须在备份前 checkpoint，否则会丢失
+//! 已 commit 但未 checkpoint 回主 db 的事务。详见 master report F-W1A-057
+//! 占位 finding。
 
 use crate::legado_field_map as map;
 use crate::models::{Book, BookGroup, Bookmark, BookSource, ReplaceRule};
