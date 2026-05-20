@@ -1,0 +1,3 @@
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings.md", "reason": "master report 主题 3：SQLite 事务 / 并发 / 错误处理一致性 — 验收对照"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-rust-data.md", "reason": "Wave 1A 详细 findings 用于消解验证"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-07-sqlite-transactions-raii.md", "reason": "本批路线图自身验收清单 §6（注意：本批是 BATCH-07a 缩范围版，仅 5 条而非 9 条）"}

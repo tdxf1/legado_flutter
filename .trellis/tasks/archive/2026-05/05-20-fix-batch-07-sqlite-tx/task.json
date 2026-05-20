@@ -1,7 +1,7 @@
 {
-  "id": "fix-roadmap",
-  "name": "fix-roadmap",
-  "title": "全量审查修复路线图",
+  "id": "fix-batch-07-sqlite-tx",
+  "name": "fix-batch-07-sqlite-tx",
+  "title": "BATCH-07: SQLite 事务统一 + let _= 吞错治理",
   "description": "",
   "status": "completed",
   "dev_type": null,
@@ -18,10 +18,8 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [
-    "05-20-fix-batch-07-sqlite-tx"
-  ],
-  "parent": null,
+  "children": [],
+  "parent": "05-20-fix-roadmap",
   "relatedFiles": [],
   "notes": "",
   "meta": {}

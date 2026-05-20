@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-rust-data.md", "reason": "F-W1A-002/005/008/017/022 详细 finding 描述与建议方案"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-07-sqlite-transactions-raii.md", "reason": "本批路线图原文（虽然实际 scope 缩到 5 条，但所有 finding 索引/注释/影响文件清单仍来自此文件）"}
