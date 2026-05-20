@@ -400,6 +400,8 @@
 
 **问题**: 留有调试 `print("ZZZZ changeSource ...")`、`print("ZZZZ changeSrc: ...")`——明显未清理的开发期 sentinel。
 
+**Resolution (BATCH-22, 2026-05-21)**: Resolved。删除两处 print。
+
 **建议**: 删除或换 `debugPrint`。
 
 ---
@@ -411,6 +413,8 @@
 **问题**: 注释说 "Accept all results from the search - let user decide"——`nameMatch / authorMatch` 永远 true，那两个 final var 与下面的 if 判断完全是死代码（dart_code_metrics 会报）。
 
 **建议**: 删掉无意义的 `final nameMatch = true; final authorMatch = true; if (nameMatch && authorMatch)` 包裹，直接做 dedup。
+
+**Resolution (BATCH-22, 2026-05-21)**: Resolved。删 2 个 final 死变量 + 1 个 if 死包裹直接执行 body；顺手删除 L113-115 仅服务该 print 的 `name` / `_` / `bookName` 局部变量。
 
 ---
 
@@ -568,6 +572,8 @@
 
 **建议**: 删除两个 const + getter，并把"5 对贝塞尔关键点"的语义直接写在文件头注释里。
 
+**Resolution (BATCH-22, 2026-05-21)**: Resolved。删 2 个 const Offset 字段 + 2 个带 `// ignore: unused_element` 的 getter + 7 行解释注释。"5 对贝塞尔关键点"语义在双精度成员声明上方注释保留。
+
 ---
 
 ### F-W2A-048 [P2][A-架构][core/providers]
@@ -599,6 +605,8 @@
 **问题**: 注释 "Removed in code review: hardcoded sourceId, print() logs..."——是一段被删除代码的"墓志铭"，遗留在文件里没有承载任何运行时意义。
 
 **建议**: 删除。git history 即可追溯。
+
+**Resolution (BATCH-22, 2026-05-21)**: Resolved。删 4 行注释。注：原 finding 报 L114-117，实际在 L54-57（providers.dart 顺序变化导致）。
 
 ---
 
@@ -839,6 +847,8 @@
 **问题**: 6 个 `debugRepaint*` / `debugPaint*` 标志显式置 false——这些 dart:rendering 调试标志的默认值就是 false，写出来反而误导（让人以为这里调过）。
 
 **建议**: 删除这 6 行 + L2 import。
+
+**Resolution (BATCH-22, 2026-05-21)**: Resolved。删 6 行 debugPaint 赋值 + 1 行 `import 'package:flutter/rendering.dart';`。
 
 ---
 
