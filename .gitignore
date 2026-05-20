@@ -1,4 +1,4 @@
-core/target/
+core/target
 *.a
 *.so
 sy/
@@ -6,8 +6,8 @@ sy/
 # 批次 APK 构建产物：占用磁盘大（每个 ~144MB），不入版本库
 # 用户在本地按需 build，不上传仓库
 dist/
-flutter_app/build/
-flutter_app/.dart_tool/
+flutter_app/build
+flutter_app/.dart_tool
 
 # Android jniLibs：build 产物，不入版本库
 # 由 cargo build --release --target aarch64-linux-android 生成，
