@@ -122,32 +122,21 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
             PopupMenuButton<String>(
               tooltip: '更多',
               onSelected: (value) async {
+                // BATCH-18f (F-W2B-016)：bookshelf AppBar 仅保留书架场景高频
+                // 4 项；backup / read_stats / cache_management / rss_favorites
+                // / rule_subs 5 项已移到 settings_page 工具段。router.dart 路
+                // 由表 0 改动（入口位置变更，路径不变）。
                 if (value == 'manage_groups') {
                   await showDialog(
                     context: context,
                     builder: (_) => const GroupManageDialog(),
                   );
-                } else if (value == 'backup') {
-                  // 批次 10 (05-19): 备份/恢复页。
-                  if (context.mounted) context.push('/backup');
                 } else if (value == 'import_local') {
                   // 批次 13 (05-19): 导入本地书。
                   await _onImportLocalBook(context);
-                } else if (value == 'read_stats') {
-                  // 批次 14 (05-19): 阅读统计页。
-                  if (context.mounted) context.push('/read-stats');
-                } else if (value == 'cache_management') {
-                  // 批次 15 (05-19): 缓存管理页。
-                  if (context.mounted) context.push('/cache-management');
                 } else if (value == 'rss_source_manage') {
                   // 批次 16 (05-19): RSS 源管理页。
                   if (context.mounted) context.push('/rss-source-manage');
-                } else if (value == 'rss_favorites') {
-                  // 批次 18 (05-19): RSS 收藏页。
-                  if (context.mounted) context.push('/rss-favorites');
-                } else if (value == 'rule_subs') {
-                  // 批次 19 (05-19): 订阅源页（RuleSub MVP）。
-                  if (context.mounted) context.push('/rule-subs');
                 } else if (value == 'qr_scan') {
                   // 批次 20 (05-19): QR 扫码导入。扫描结果由 qr_scan_page
                   // 自己处理 + pop 后回到原页。
@@ -164,14 +153,6 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                   ),
                 ),
                 PopupMenuItem(
-                  value: 'backup',
-                  child: ListTile(
-                    leading: Icon(Icons.settings_backup_restore),
-                    title: Text('备份/恢复'),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
-                PopupMenuItem(
                   value: 'import_local',
                   child: ListTile(
                     leading: Icon(Icons.note_add),
@@ -180,42 +161,10 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                   ),
                 ),
                 PopupMenuItem(
-                  value: 'read_stats',
-                  child: ListTile(
-                    leading: Icon(Icons.timer_outlined),
-                    title: Text('阅读统计'),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'cache_management',
-                  child: ListTile(
-                    leading: Icon(Icons.cleaning_services_outlined),
-                    title: Text('缓存管理'),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
-                PopupMenuItem(
                   value: 'rss_source_manage',
                   child: ListTile(
                     leading: Icon(Icons.rss_feed),
                     title: Text('RSS 源管理'),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'rss_favorites',
-                  child: ListTile(
-                    leading: Icon(Icons.star_outline),
-                    title: Text('RSS 收藏'),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'rule_subs',
-                  child: ListTile(
-                    leading: Icon(Icons.cloud_sync_outlined),
-                    title: Text('订阅源'),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),

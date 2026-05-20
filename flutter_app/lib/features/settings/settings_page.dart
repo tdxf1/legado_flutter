@@ -179,6 +179,45 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
           ),
           const Divider(indent: 16, endIndent: 16),
           _SectionHeader(title: '工具'),
+          // BATCH-18f (F-W2B-016)：以下 5 项原本在 bookshelf AppBar PopupMenu，
+          // 重组到此处与 replace_rules 同列于"工具"段，bookshelf 仅保留书架
+          // 场景高频 4 项（manage_groups / import_local / qr_scan /
+          // rss_source_manage）。router.dart 路由表 0 改动。
+          ListTile(
+            leading: const Icon(Icons.settings_backup_restore),
+            title: const Text('备份/恢复'),
+            subtitle: const Text('导出/导入书架数据到 zip'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/backup'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.timer_outlined),
+            title: const Text('阅读统计'),
+            subtitle: const Text('查看阅读时长'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/read-stats'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.cleaning_services_outlined),
+            title: const Text('缓存管理'),
+            subtitle: const Text('清理章节内容缓存'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/cache-management'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.star_outline),
+            title: const Text('RSS 收藏'),
+            subtitle: const Text('已收藏的 RSS 文章'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/rss-favorites'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.cloud_sync_outlined),
+            title: const Text('订阅源'),
+            subtitle: const Text('RuleSub 订阅管理'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/rule-subs'),
+          ),
           ListTile(
             leading: const Icon(Icons.rule),
             title: const Text('替换规则'),
