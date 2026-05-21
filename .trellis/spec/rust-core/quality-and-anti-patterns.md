@@ -64,6 +64,38 @@ Canonical example: `java.put` / `java.get` (BATCH-11, F-W1B-011). The dual-bridg
 
 Boundary the pattern applies to: any `core-source/legado/js_runtime` PREAMBLE method that needs state visible across `eval()` calls within a single OS thread. Cross-thread state still belongs to `RuleContext::shared_variables` (Arc<Mutex<...>>), not thread_local.
 
+## Selective `block_in_place` for Sync JS Evaluation in Async Reactor
+
+Sync rule evaluation that **may** trigger long-running blocking work (QuickJS exec + synchronous `java.ajax` HTTP, 5s ~ 30s) inside a function called from an async reactor needs `tokio::task::block_in_place` wrapping — but **only** when the rule actually triggers blocking work, AND only when running in a tokio context with a multi-thread runtime. Always-wrap or never-wrap are both wrong:
+
+- Always wrap: pure CSS / XPath / JSONPath / Regex rules are µs-scale; `block_in_place`'s scheduler-rebalance overhead would dominate hot paths.
+- Never wrap: synchronous JS exec (incl. `java.ajax` 5s default HTTP timeout) on the reactor thread starves co-tenant tasks on the same worker.
+- `spawn_blocking + .await`: requires turning the caller chain async; for `BookSourceParser::run_rule_first`, that's 11 sync callers in `parser.rs` (search / explore / book_info / toc) — full async migration is deferred (estimated +500 lines).
+
+Detection helper lives in the module owning the rule taxonomy, NOT inline at the call site. For Legado rules: `legado::is_blocking_rule(rule)` in `core-source/legado/js_shim.rs` returns `is_js_rule(rule) || rule.contains("<js>")` (covers `@js:` / `js:` / `@js\n` prefixes plus inline `<js>...</js>`). Pub-used through `legado::*` (`legado/mod.rs:18`).
+
+Runtime guard: wrap with `block_in_place` only when `tokio::runtime::Handle::try_current().is_ok()`. This prevents panic on `current_thread` runtime (e.g. sync `#[test]` not under tokio context). Outside tokio, just call the sync path — already on a non-reactor thread, no harm in blocking.
+
+Canonical example: `BookSourceParser::run_rule_first` in `core-source/parser.rs:495` (BATCH-16, F-W1B-038):
+
+```rust
+fn run_rule_first(&self, rule: &str, html: &str, context: &RuleContext) -> Option<String> {
+    if crate::legado::is_blocking_rule(rule)
+        && tokio::runtime::Handle::try_current().is_ok()
+    {
+        tokio::task::block_in_place(|| {
+            self.run_rule(rule, html, context).ok()?.into_iter().next()
+        })
+    } else {
+        self.run_rule(rule, html, context).ok()?.into_iter().next()
+    }
+}
+```
+
+Production multi-thread guarantee: FRB 2.12 default handler (`flutter_rust_bridge::frb_generated_default_handler!()`) uses a multi-thread tokio runtime + `core/Cargo.toml:33 features = ["full"]`, so the gate always passes in production. The content-fetch path was already wrapped in `run_rule_first_blocking` (`parser.rs:1685`) via `spawn_blocking` since pre-BATCH-16; this batch closed the gap on search / explore / book_info / toc.
+
+Boundary the pattern applies to: any sync evaluation of an external-author-controlled rule (i.e. user-imported book source) that might invoke synchronous HTTP/IO. Pure CPU-bound rules don't need it. New rule-evaluation entry-points should reuse `is_blocking_rule` (or extend it in `js_shim.rs`) — do not duplicate the `@js:` / `<js>` detection inline at the call site.
+
 ## Code Hygiene Checks
 
 Before committing:
