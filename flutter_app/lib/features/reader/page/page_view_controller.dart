@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import '../../../core/providers.dart';
 import 'text_page.dart';
 import 'page_measure.dart';
@@ -435,18 +436,39 @@ class PageViewController extends ChangeNotifier {
       currentPageIndex: newPageIndex,
     );
 
-    // R39: always defer the listener notification to the next frame.
-    // The previous code path notified synchronously when `jumpToLast`
-    // was true, which meant calling `notifyListeners()` mid-build if a
-    // widget triggered loadChapter() during its own build phase
-    // (e.g. via a Riverpod selector firing on first read). Deferring is
-    // free for the common path and removes the "setState during build"
-    // assertion as a possible failure mode.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    // F-W2A-013 (BATCH-19c): phase-aware notify。
+    //
+    // 原 R39 强制 postFrame 是为了避免"setState during build"——某个
+    // widget 在 build 阶段触发 loadChapter（典型：Riverpod selector
+    // 在 build 内 read provider 间接触发）→ 同步 notifyListeners 把
+    // 还在 build 的祖先 widget 重入 → assert 触发。但 postFrame 同时
+    // 牺牲了首屏体感：用户看到"加载圆圈 → 短暂空白章节 → 真正内容"
+    // 三段闪，因为 build 帧拿到的还是 `pages = const []`，要等下一帧
+    // 才看到真实内容。
+    //
+    // 折中方案：按 `SchedulerBinding.instance.schedulerPhase` 分流。
+    // - idle / postFrameCallbacks：当前不在 widget 树 build/layout/paint
+    //   过程中，可以同步 notify 不会重入。loadChapter 多由用户操作
+    //   或 Future.then 等异步路径触发，落在 idle 是常态，省一帧空白。
+    // - 其他 phase（build / layout / paint / persistentCallbacks）：
+    //   保留 postFrame 兜底，避免 setState during build assert。
+    //
+    // 详见 .trellis/spec/flutter-app/quality-and-anti-patterns.md
+    // 「Reader 渲染边界 (BATCH-19c)」。
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    final canNotifySync = phase == SchedulerPhase.idle ||
+        phase == SchedulerPhase.postFrameCallbacks;
+    if (canNotifySync) {
       if (!_disposed && _currentChapter?.chapterIndex == chapterIndex) {
         notifyListeners();
       }
-    });
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_disposed && _currentChapter?.chapterIndex == chapterIndex) {
+          notifyListeners();
+        }
+      });
+    }
   }
 
   @override

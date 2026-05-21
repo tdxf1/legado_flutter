@@ -328,6 +328,32 @@ class _PageViewWidgetState extends State<PageViewWidget>
           onPointerUp: _onPointerUp,
           onPointerCancel: _onPointerCancel,
           child: AnimatedBuilder(
+            // F-W2A-012 子项 1 (BATCH-19c): Listenable.merge 拆层评估后
+            // 保留现状。Controller 7 处 notifyListeners 调用点全部是低
+            // 频离散事件——
+            //   1. setNeighborChapter (邻章注入)        每次跨章 1 次
+            //   2. commitToNextChapter (跨章前进)       每次跨章 1 次
+            //   3. commitToPrevChapter (跨章后退)       每次跨章 1 次
+            //   4. jumpToPage (TOC 跳转)                每次用户跳章 1 次
+            //   5. goToNextPage (章内翻页)              每次 tap/翻页 1 次
+            //   6. goToPrevPage (章内翻页)              每次 tap/翻页 1 次
+            //   7. _measureChapter (BATCH-19c phase-aware)
+            //                                            每次章节加载 1 次
+            // —— 实际并发上限 ≈ 用户 tap 频率（≤ 3-5 次/秒）。合并 listenable
+            // 引入的"无效 painter rebuild"成本（合并后 controller notify
+            // 触发 _PageViewPainter rebuild，但 shouldRepaint 大部分字段
+            // 都比上次相等）可忽略，只在 anim 跑完后偶尔多一次空跑。
+            //
+            // 嵌套方案（外 anim-only / 内 controller-only）每帧 anim 仍
+            // 重建内层 builder + painter，并不省 paint；仅在 anim **未跑**
+            // 时收益（controller 单独 notify 不触发 painter）。但已经分析
+            // 那种情况频率极低，不值嵌套引入的复杂度。
+            //
+            // 复评触发条件：若未来引入 controller 高频更新（例如滚动
+            // 同步进度条 / 实时书签 hover 高亮），单 controller notify
+            // 频率超过 10 次/秒，重新拆嵌套。
+            // 详见 .trellis/spec/flutter-app/quality-and-anti-patterns.md
+            // 「Reader 渲染边界 (BATCH-19c)」。
             animation: Listenable.merge([widget.controller, _animController!]),
             builder: (context, child) {
               return CustomPaint(
