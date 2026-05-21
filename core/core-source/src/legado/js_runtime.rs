@@ -603,8 +603,32 @@ fn js_script_to_expression(script: &str) -> String {
     let script = script.trim();
     let is_iife = script.starts_with("(function(") || script.starts_with("(function ");
     if contains_return_statement(script) && !is_iife {
+        // Bare `return` is illegal at script top level; wrap in IIFE so
+        // the surrounding `JSON.stringify((...))` captures the value.
         format!("(function(){{{}}})()", script)
     } else if needs_direct_eval(script) && !is_iife {
+        // F-W1B-013 (BATCH-10): kept as `eval(JSON_STRING)` rather than
+        // a uniform IIFE wrap. This is **Resolved-by-Design** — see
+        // `.trellis/spec/rust-core/quality-and-anti-patterns.md`
+        // ("F-W1B-013 业务边界") for the rationale. In short:
+        //
+        // - `serde_json::to_string(script)` produces a well-formed JS
+        //   string literal (proper escaping for `'`, `"`, `\n`,
+        //   `\u00xx`, `</script>`, etc.). The eval'd content is the
+        //   user's script verbatim — *not* a string-concat injection.
+        //   `test_js_script_to_expression_eval_branch_escapes_meta_chars`
+        //   pins this contract.
+        // - An IIFE wrap would force callers to inject an explicit
+        //   `return` for the trailing expression, but the production
+        //   call shape is `JSON.stringify((expr))` over the wrapped
+        //   form, and that breaks for multi-statement scripts whose
+        //   tail is a bare expression statement (the IIFE would
+        //   return undefined). Empirically, swapping to IIFE on this
+        //   branch broke ~30 unit tests — see BATCH-10 PRD §F-W1B-013
+        //   "决策路径".
+        // - `direct_eval` keeps QuickJS's top-level "last expression
+        //   value is the eval result" semantic, which the bare-script
+        //   branch (`script.to_string()`) also relies on.
         format!(
             "eval({})",
             serde_json::to_string(script).unwrap_or_else(|_| "''".into())
@@ -1928,6 +1952,10 @@ fn java_js_get(key: String) -> String {
 
 #[cfg(feature = "js-quickjs")]
 fn java_get_zip_string_content(url: String, path: String) -> String {
+    if !is_safe_zip_entry_path(&path) {
+        tracing::warn!("zip-slip blocked in java.getZipStringContent: {path}");
+        return String::new();
+    }
     let bytes = get_zip_entry_bytes(&url, &path).unwrap_or_default();
     String::from_utf8(bytes.clone()).unwrap_or_else(|_| {
         let (decoded, _, _) = encoding_rs::GBK.decode(&bytes);
@@ -1937,12 +1965,46 @@ fn java_get_zip_string_content(url: String, path: String) -> String {
 
 #[cfg(feature = "js-quickjs")]
 fn java_get_zip_byte_array_content(url: String, path: String) -> String {
+    if !is_safe_zip_entry_path(&path) {
+        tracing::warn!("zip-slip blocked in java.getZipByteArrayContent: {path}");
+        return "[]".into();
+    }
     let bytes = get_zip_entry_bytes(&url, &path).unwrap_or_default();
     serde_json::to_string(&bytes).unwrap_or_else(|_| "[]".into())
 }
 
 const MAX_ZIP_DOWNLOAD: u64 = 10 * 1024 * 1024;
 const MAX_ZIP_ENTRY: u64 = 10 * 1024 * 1024;
+
+/// F-W1B-005 (BATCH-10): reject zip entry paths that could escape the
+/// archive sandbox. Rejects:
+/// - any `..` segment (parent traversal)
+/// - any absolute path: leading `/` (Unix) or `<drive-letter>:` segment (Windows)
+/// - empty segment (`/foo` after split, leading `\\`, or `a//b`)
+///
+/// Used by `java.getZipStringContent` / `java.getZipByteArrayContent`
+/// before calling `archive.by_name(path)`. The zip 0.6 crate does not
+/// itself canonicalize entry paths, so callers must validate.
+#[cfg(feature = "js-quickjs")]
+fn is_safe_zip_entry_path(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    // Reject Unix absolute paths and Windows backslash separators.
+    if path.starts_with('/') || path.starts_with('\\') || path.contains('\\') {
+        return false;
+    }
+    for segment in path.split('/') {
+        if segment.is_empty() || segment == ".." {
+            return false;
+        }
+        // Windows drive letter prefix (e.g. `C:`, `D:foo`).
+        if segment.ends_with(':') {
+            return false;
+        }
+    }
+    true
+}
 
 #[cfg(feature = "js-quickjs")]
 fn get_zip_entry_bytes(url: &str, path: &str) -> Option<Vec<u8>> {
@@ -2412,12 +2474,23 @@ fn java_read_txt_file(path: String, charset: String) -> String {
 
 #[cfg(feature = "js-quickjs")]
 fn read_allowed_file(path: &str) -> Option<Vec<u8>> {
+    // F-W1B-005 (BATCH-10): reject `..` segments and absolute paths
+    // explicitly *before* `canonicalize`, closing the symlink-resolution
+    // window where `canonicalize` could follow a symlink whose target
+    // sits outside `LEGADO_FILE_ROOT`. The trailing `starts_with(&root)`
+    // check still runs as defence in depth.
+    let trimmed = path.trim_start_matches('/');
+    if std::path::Path::new(trimmed).is_absolute() {
+        return None;
+    }
+    for segment in trimmed.split(['/', '\\']) {
+        if segment == ".." {
+            return None;
+        }
+    }
     let root = std::env::var("LEGADO_FILE_ROOT").ok()?;
     let root = std::path::PathBuf::from(root).canonicalize().ok()?;
-    let requested = root
-        .join(path.trim_start_matches('/'))
-        .canonicalize()
-        .ok()?;
+    let requested = root.join(trimmed).canonicalize().ok()?;
     if !requested.starts_with(&root) || !requested.is_file() {
         return None;
     }
@@ -3858,5 +3931,174 @@ mod tests {
             matches!(recovered, LegadoValue::Int(2)),
             "post-timeout eval should return 2, got {recovered:?}"
         );
+    }
+
+    /// F-W1B-005 (BATCH-10): `java.getZipStringContent` and friends must
+    /// reject zip entry paths containing `..` segments, absolute prefixes,
+    /// Windows backslashes, or empty segments — the unit-level guard
+    /// that complements the zip-archive-level `archive.by_name` lookup
+    /// (which itself does not canonicalize entry paths).
+    #[test]
+    fn test_is_safe_zip_entry_path_rejects_traversal_and_absolute() {
+        // Allowed shapes (positive cases first to confirm the helper isn't
+        // over-eager).
+        assert!(is_safe_zip_entry_path("a.txt"));
+        assert!(is_safe_zip_entry_path("dir/a.txt"));
+        assert!(is_safe_zip_entry_path("a/b/c/d.txt"));
+
+        // Rejected shapes.
+        assert!(!is_safe_zip_entry_path(""), "empty path");
+        assert!(!is_safe_zip_entry_path(".."), "bare dotdot");
+        assert!(!is_safe_zip_entry_path("../etc/passwd"), "leading dotdot");
+        assert!(
+            !is_safe_zip_entry_path("dir/../etc/passwd"),
+            "embedded dotdot"
+        );
+        assert!(!is_safe_zip_entry_path("/etc/passwd"), "unix absolute");
+        assert!(
+            !is_safe_zip_entry_path("\\windows\\system32"),
+            "windows backslash absolute"
+        );
+        assert!(
+            !is_safe_zip_entry_path("dir\\file"),
+            "embedded backslash separator"
+        );
+        assert!(
+            !is_safe_zip_entry_path("C:/Windows/System32"),
+            "windows drive absolute"
+        );
+        assert!(
+            !is_safe_zip_entry_path("a//b.txt"),
+            "double slash leaves empty segment"
+        );
+    }
+
+    /// F-W1B-005 (BATCH-10): the `java.getZipStringContent` bridge
+    /// returns an empty string for a `..` traversal path without ever
+    /// hitting the network (no mock asserted; the SSRF / fetch path
+    /// must short-circuit before the HTTP call).
+    #[test]
+    fn test_java_get_zip_string_content_rejects_traversal() {
+        let server = httpmock::MockServer::start();
+        // Mock is set up but should NOT be hit for a rejected path.
+        let _mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET).path("/test.zip");
+            then.status(200).body(b"never-served".to_vec());
+        });
+
+        let rt = DefaultJsRuntime::new();
+        let vars = HashMap::new();
+        let script = format!(
+            "java.getZipStringContent('{}', '../etc/passwd')",
+            server.url("/test.zip")
+        );
+        let result = rt.eval(&script, &vars).unwrap();
+        assert_eq!(
+            result.as_str(),
+            Some(""),
+            "traversal path must yield empty string"
+        );
+    }
+
+    /// F-W1B-005 (BATCH-10): the `java.getZipByteArrayContent` bridge
+    /// returns `[]` for a `..` traversal path.
+    #[test]
+    fn test_java_get_zip_byte_array_content_rejects_traversal() {
+        let server = httpmock::MockServer::start();
+        let _mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET).path("/bytes.zip");
+            then.status(200).body(b"never-served".to_vec());
+        });
+
+        let rt = DefaultJsRuntime::new();
+        let vars = HashMap::new();
+        let script = format!(
+            "java.getZipByteArrayContent('{}', '../etc/passwd').length",
+            server.url("/bytes.zip")
+        );
+        let result = rt.eval(&script, &vars).unwrap();
+        assert!(
+            matches!(result, LegadoValue::Int(0)),
+            "traversal path must yield zero-length byte array, got {result:?}"
+        );
+    }
+
+    /// F-W1B-005 (BATCH-10): `read_allowed_file` must reject `..`
+    /// segments *before* `canonicalize`, closing the symlink-resolution
+    /// window. Even if `LEGADO_FILE_ROOT` happens to canonicalize to the
+    /// same parent as the `..` target, the explicit segment check
+    /// rejects first.
+    #[test]
+    fn test_read_allowed_file_rejects_dotdot_segment() {
+        let _guard = file_env_lock().lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let inner = dir.path().join("inner");
+        std::fs::create_dir(&inner).unwrap();
+        // A file the test could otherwise read, sitting two levels up
+        // from `inner`. The traversal path `subdir/../../escape.txt`
+        // would be rejected by the segment check, regardless of
+        // canonicalize behaviour.
+        std::fs::write(dir.path().join("escape.txt"), b"escape").unwrap();
+        std::env::set_var("LEGADO_FILE_ROOT", &inner);
+
+        // No `..` is allowed even when the target ultimately stays
+        // within root.
+        assert!(read_allowed_file("subdir/../../escape.txt").is_none());
+        assert!(read_allowed_file("../escape.txt").is_none());
+        // Absolute paths also rejected.
+        assert!(read_allowed_file("/etc/passwd").is_none());
+    }
+
+    /// F-W1B-013 (BATCH-10): the `eval(JSON_STRING)` branch's safety
+    /// rests on `serde_json::to_string` producing a well-formed JS
+    /// string literal. This test pins that contract: a script
+    /// containing every metacharacter that could break naive concat
+    /// (single quote, double quote, backslash, newline, carriage
+    /// return, tab, NULL, `</script>`) is safely escaped and re-eval'd
+    /// to its original value.
+    ///
+    /// If somebody ever swaps the JSON-stringify call for a manual
+    /// concat, this test will trip — proving the escape is doing real
+    /// work even though the eval'd text is the user's verbatim script.
+    #[test]
+    fn test_js_script_to_expression_eval_branch_escapes_meta_chars() {
+        // A multi-line script (forces the `needs_direct_eval` branch
+        // because `script.contains('\n')` is true). The script writes
+        // a tricky string literal then returns its length so we can
+        // assert the eval'd content matches our expectation byte-for-byte.
+        let script = "var s = '\\'\"\\\\\\n\\r\\t';\ns.length";
+        let wrapped = js_script_to_expression(script);
+        assert!(
+            wrapped.starts_with("eval("),
+            "multi-line script should hit the eval branch, got {wrapped}"
+        );
+        // The wrapped form must round-trip through QuickJS to the same
+        // numeric value as the script (string length 6: `'`, `"`, `\`,
+        // `\n`, `\r`, `\t`).
+        let rt = DefaultJsRuntime::new();
+        let vars = HashMap::new();
+        let result = rt.eval(script, &vars).unwrap();
+        assert!(
+            matches!(result, LegadoValue::Int(6)),
+            "escape contract broken: got {result:?}"
+        );
+    }
+
+    /// F-W1B-013 (BATCH-10): explicit `return` keeps the IIFE wrap.
+    /// Confirms `js_script_to_expression` still routes a leading-`return`
+    /// script through the `(function(){...})()` form, not the
+    /// `eval(...)` branch.
+    #[test]
+    fn test_js_script_to_expression_iife_wraps_return_in_var_decl() {
+        // `contains_return_statement` matches `\nreturn ` and the
+        // leading `return ` form. Use a multiline script so the IIFE
+        // branch is the one that fires.
+        let script = "var x = 1;\nreturn x";
+        let wrapped = js_script_to_expression(script);
+        assert!(
+            wrapped.starts_with("(function(){"),
+            "explicit return should hit IIFE branch, got {wrapped}"
+        );
+        assert!(wrapped.ends_with("})()"));
     }
 }

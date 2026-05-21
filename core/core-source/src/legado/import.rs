@@ -55,6 +55,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
+/// F-W1B-009 (BATCH-10): import-time DoS guards.
+///
+/// Legado source JSON files are user-provided (URL or file pick) and
+/// can be shaped to exhaust memory or pin the parser thread. These
+/// caps are the entry-point gate before `serde_json::from_str` ever
+/// sees the input.
+const MAX_IMPORT_BYTES: usize = 5 * 1024 * 1024;
+const MAX_IMPORT_ENTRIES: usize = 5000;
+/// Per-source rough size cap. We don't iterate the source's individual
+/// rule fields; instead we re-serialize the parsed source and reject
+/// anything larger than `MAX_FIELD_BYTES * 5`. That covers a single
+/// pathological field (e.g. 1 MiB `js_lib`) without hand-rolling
+/// per-field accounting.
+const MAX_FIELD_BYTES: usize = 256 * 1024;
+
 /// Legado 书源 JSON 导出格式
 #[derive(Debug, Clone, Deserialize)]
 pub struct LegadoBookSource {
@@ -225,6 +240,23 @@ fn value_to_string(value: Option<JsonValue>) -> Option<String> {
     }
 }
 
+/// F-W1B-009 (BATCH-10): cheap upper-bound length estimate for an
+/// optional `JsonValue` rule field. We `to_string` the value (one
+/// allocation per source per field, only in the import path) to get
+/// the serialized length; this is the same shape we use elsewhere when
+/// stringifying these fields for storage.
+fn json_value_len(value: Option<&JsonValue>) -> usize {
+    match value {
+        None | Some(JsonValue::Null) => 0,
+        Some(JsonValue::String(s)) => s.len(),
+        Some(other) => other.to_string().len(),
+    }
+}
+
+fn opt_str_len(value: Option<&str>) -> usize {
+    value.map(|s| s.len()).unwrap_or(0)
+}
+
 /// 导入 Legado 书源，返回内部 BookSource 的字段集合。
 /// 注意：这里返回的是一个中间表示，调用者负责生成 ID 并插入数据库。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,8 +294,23 @@ pub struct ImportedSource {
 
 /// 将 Legado 书源 JSON 字符串转换为 ImportedSource 列表
 pub fn import_legado_source(json: &str) -> Result<Vec<ImportedSource>, String> {
+    if json.len() > MAX_IMPORT_BYTES {
+        return Err(format!(
+            "导入数据超过 {} MiB 上限",
+            MAX_IMPORT_BYTES / (1024 * 1024)
+        ));
+    }
+
     let legado_sources: Vec<LegadoBookSource> =
         serde_json::from_str(json).map_err(|e| format!("Legado JSON 解析失败: {}", e))?;
+
+    if legado_sources.len() > MAX_IMPORT_ENTRIES {
+        return Err(format!(
+            "导入条目数 {} 超过 {} 上限",
+            legado_sources.len(),
+            MAX_IMPORT_ENTRIES
+        ));
+    }
 
     legado_sources
         .iter()
@@ -272,6 +319,35 @@ pub fn import_legado_source(json: &str) -> Result<Vec<ImportedSource>, String> {
 }
 
 fn legado_to_imported(source: &LegadoBookSource) -> Result<ImportedSource, String> {
+    // F-W1B-009 (BATCH-10): per-source size guard. Sum the lengths of
+    // the long string-shaped fields (rules, js_lib, header, login URLs,
+    // patterns) and reject if the total exceeds `MAX_FIELD_BYTES * 5`.
+    // This catches a single 1+ MiB pathological field without
+    // re-serializing the whole source struct.
+    let total: usize = json_value_len(source.rule_search.as_ref())
+        + json_value_len(source.rule_explore.as_ref())
+        + json_value_len(source.rule_book_info.as_ref())
+        + json_value_len(source.rule_toc.as_ref())
+        + json_value_len(source.rule_content.as_ref())
+        + opt_str_len(source.js_lib.as_deref())
+        + opt_str_len(source.cover_decode_js.as_deref())
+        + opt_str_len(source.header.as_deref())
+        + opt_str_len(source.login_url.as_deref())
+        + opt_str_len(source.login_ui.as_deref())
+        + opt_str_len(source.login_check_js.as_deref())
+        + opt_str_len(source.search_url.as_deref())
+        + opt_str_len(source.explore_url.as_deref())
+        + source.book_url_pattern.len()
+        + opt_str_len(source.concurrent_rate.as_deref())
+        + opt_str_len(source.variable_comment.as_deref());
+    let cap = MAX_FIELD_BYTES * 5;
+    if total > cap {
+        return Err(format!(
+            "source '{}' 字段超长（{} > {} bytes）",
+            source.name, total, cap
+        ));
+    }
+
     let now = Utc::now().timestamp();
     let rule_search = merge_search_url(source.rule_search.clone(), source.search_url.as_deref());
 
@@ -898,5 +974,66 @@ mod tests {
             serde_json::from_str(imported[1].rule_toc.as_deref().unwrap()).unwrap();
         assert!(toc["chapter_list"].as_str().unwrap().starts_with("@js:"));
         assert!(toc["chapter_name"].as_str().unwrap().contains("<js>"));
+    }
+
+    /// F-W1B-009 (BATCH-10): top-level byte cap. A 6 MiB blob must be
+    /// rejected before `serde_json::from_str` parses anything, so a
+    /// well-formed but oversized JSON array still fails.
+    #[test]
+    fn test_import_rejects_oversized_json() {
+        // Build a syntactically valid but ≥ 5 MiB JSON array. We just
+        // pad one source's `bookSourceComment` (a free-form string) with
+        // 6 MiB of `x`. That trips the byte cap before the per-source
+        // field cap.
+        let padding = "x".repeat(6 * 1024 * 1024);
+        let json = format!(
+            r#"[{{"bookSourceUrl":"https://example.com","bookSourceName":"X","bookSourceComment":"{padding}"}}]"#
+        );
+        let err = import_legado_source(&json).expect_err("oversized JSON should reject");
+        assert!(
+            err.contains("MiB 上限") || err.contains("超过"),
+            "expected size-limit message, got {err}"
+        );
+    }
+
+    /// F-W1B-009 (BATCH-10): entries cap. 5001 minimal-shape sources
+    /// should reject after parse but before field-loop work.
+    #[test]
+    fn test_import_rejects_too_many_entries() {
+        // Each entry is ~70 bytes; 5001 entries ≈ 350 KiB total — well
+        // under MAX_IMPORT_BYTES, so the entries cap is what trips.
+        let mut s = String::with_capacity(5001 * 80);
+        s.push('[');
+        for i in 0..5001 {
+            if i > 0 {
+                s.push(',');
+            }
+            s.push_str(&format!(
+                r#"{{"bookSourceUrl":"https://e/{i}","bookSourceName":"n{i}"}}"#
+            ));
+        }
+        s.push(']');
+        let err = import_legado_source(&s).expect_err("too many entries should reject");
+        assert!(
+            err.contains("条目数") && err.contains("上限"),
+            "expected entries-limit message, got {err}"
+        );
+    }
+
+    /// F-W1B-009 (BATCH-10): per-source aggregate field cap. A single
+    /// 1.5 MiB `jsLib` (above the `MAX_FIELD_BYTES * 5 = 1.25 MiB`
+    /// budget but below the 5 MiB top-level cap) must be rejected at
+    /// `legado_to_imported` rather than passed through.
+    #[test]
+    fn test_import_rejects_oversized_per_source_fields() {
+        let big = "y".repeat(1500 * 1024); // 1.5 MiB
+        let json = format!(
+            r#"[{{"bookSourceUrl":"https://example.com","bookSourceName":"Big","jsLib":"{big}"}}]"#
+        );
+        let err = import_legado_source(&json).expect_err("oversized jsLib should reject");
+        assert!(
+            err.contains("字段超长"),
+            "expected per-source field-limit message, got {err}"
+        );
     }
 }

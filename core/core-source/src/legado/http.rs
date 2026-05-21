@@ -27,6 +27,7 @@ impl LegadoHttpClient {
             .timeout_global(Some(Duration::from_secs(30)))
             .user_agent(USER_AGENT)
             .https_only(false)
+            .max_redirects(5)
             .build()
             .new_agent();
 
@@ -48,6 +49,7 @@ impl LegadoHttpClient {
             .timeout_global(Some(Duration::from_secs(30)))
             .user_agent(USER_AGENT)
             .https_only(false)
+            .max_redirects(5)
             .proxy(Some(proxy))
             .build()
             .new_agent();
@@ -231,5 +233,43 @@ mod tests {
         let result = client.request_with_legado_url(&server.url("/original"), &legado_url, "", 1).await.unwrap();
         mock.assert();
         assert_eq!(result, "changed-ok");
+    }
+
+    /// F-W1B-007 (BATCH-10): the ureq agent's redirect cap is 5 hops.
+    /// A chain of 6 sequential 302 redirects must error rather than
+    /// silently follow all the way to the terminal endpoint. We chain
+    /// `/r1 -> /r2 -> /r3 -> /r4 -> /r5 -> /r6 -> /final` (6 hops) so
+    /// the agent must give up partway and the final body is never
+    /// returned to the caller.
+    #[tokio::test]
+    async fn test_legado_http_client_redirect_limited() {
+        let server = httpmock::MockServer::start();
+        for i in 1..=6 {
+            let next = if i == 6 {
+                server.url("/final")
+            } else {
+                server.url(&format!("/r{}", i + 1))
+            };
+            let path = format!("/r{}", i);
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET).path(path);
+                then.status(302).header("Location", &next);
+            });
+        }
+        let final_mock = server.mock(|when, then| {
+            when.method(httpmock::Method::GET).path("/final");
+            then.status(200).body("should-not-arrive");
+        });
+
+        let client = LegadoHttpClient::new();
+        let url = server.url("/r1");
+        let result = client.get(&url, &[], None).await;
+        assert!(
+            result.is_err(),
+            "6-hop redirect chain must error under max_redirects(5), got {:?}",
+            result
+        );
+        // Defence in depth: the terminal endpoint must never be hit.
+        final_mock.assert_hits(0);
     }
 }

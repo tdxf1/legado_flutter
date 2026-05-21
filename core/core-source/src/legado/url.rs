@@ -182,6 +182,34 @@ pub fn resolve_post_body(body: &str, keyword: &str, page: i32) -> String {
 static TEMPLATE_RE: std::sync::LazyLock<regex::Regex> =
     std::sync::LazyLock::new(|| regex::Regex::new(r"\{\{([\s\S]*?)\}\}").unwrap());
 
+/// Whitelisted template variable names that take a fast-path direct
+/// `vars` lookup, bypassing the JS evaluator entirely.
+///
+/// F-W1B-008 (BATCH-10): keeping this list explicit (rather than only
+/// implicit in [`build_template_vars`]) makes the safe-by-construction
+/// path obvious to auditors. Names listed here cannot trigger JS
+/// evaluation, so URL/body templates that only use these vars carry
+/// zero JS-injection surface.
+const TEMPLATE_VAR_WHITELIST: &[&str] = &[
+    "key",
+    "keyword",
+    "page",
+    "encodeKey",
+    "encode_keyword",
+];
+
+/// Resolve `{{...}}` template expressions in URL paths or POST bodies.
+///
+/// Two paths:
+/// 1. **Whitelist fast-path**: when the trimmed expression is one of
+///    [`TEMPLATE_VAR_WHITELIST`], read directly from the `vars` map. No
+///    JS engine spin-up, no injection surface.
+/// 2. **JS eval fallback**: anything else (e.g. `(page-1)*20`,
+///    `java.base64Encode(key)`, ternaries) goes through `runtime.eval`.
+///    These templates are author-controlled in the book-source JSON,
+///    which is itself trusted at the source-import audit step (the user
+///    chooses which sources to install). The JS sandbox boundary
+///    (BATCH-04) still applies inside the eval.
 fn resolve_template_expressions(input: &str, keyword: &str, page: i32) -> String {
     let vars = build_template_vars(keyword, page);
     let runtime = DefaultJsRuntime::new();
@@ -194,16 +222,26 @@ fn resolve_template_expressions(input: &str, keyword: &str, page: i32) -> String
         };
         result.push_str(&input[last..full_match.start()]);
         let expr = caps.get(1).map(|m| m.as_str()).unwrap_or_default().trim();
-        let replacement = vars
-            .get(expr)
-            .map(|value| value.as_string_lossy())
-            .or_else(|| {
-                runtime
-                    .eval(expr, &vars)
-                    .ok()
-                    .map(|value| value.as_string_lossy())
-            })
-            .unwrap_or_default();
+        let replacement = if TEMPLATE_VAR_WHITELIST.contains(&expr) {
+            // Whitelist fast-path: direct vars lookup, never touches JS.
+            vars.get(expr)
+                .map(|value| value.as_string_lossy())
+                .unwrap_or_default()
+        } else {
+            // Fallback: still consult `vars` first in case future builds
+            // extend the var map with non-whitelisted aliases, then fall
+            // through to JS eval for legitimate expressions like
+            // `(page-1)*20`.
+            vars.get(expr)
+                .map(|value| value.as_string_lossy())
+                .or_else(|| {
+                    runtime
+                        .eval(expr, &vars)
+                        .ok()
+                        .map(|value| value.as_string_lossy())
+                })
+                .unwrap_or_default()
+        };
         result.push_str(&replacement);
         last = full_match.end();
     }
