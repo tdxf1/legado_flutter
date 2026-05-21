@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-rust-logic.md", "reason": "Wave 1B findings F-W1B-001~010 详细分析"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-cross-config.md", "reason": "F-W3-015 LegadoJsBridge 详细分析"}
+{"file": "core/core-source/src/legado/js_runtime.rs", "reason": "JS 桥接主体：SSRF / 内存 / 文件桥 / queryTtf / 响应大小"}
+{"file": "core/core-source/src/legado/http.rs", "reason": "LegadoHttpClient SSRF 防护"}
+{"file": "core/core-source/src/legado/mod.rs", "reason": "加 pub mod ssrf_guard"}
+{"file": "core/core-source/Cargo.toml", "reason": "确认 url crate 依赖"}
+{"file": "flutter_app/android/app/src/main/kotlin/io/legado/app/flutter/MainActivity.kt", "reason": "LegadoJsBridge capability gate"}
+{"file": ".trellis/tasks/05-22-batch-04-harden-js-sandbox-core/prd.md", "reason": "本批 PRD"}

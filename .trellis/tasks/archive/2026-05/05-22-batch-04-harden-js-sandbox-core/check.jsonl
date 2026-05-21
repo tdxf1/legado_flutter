@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings.md", "reason": "master report 主题 1 JS 沙箱"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-rust-logic.md", "reason": "Wave 1B 详细 findings"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-04-harden-js-sandbox-core.md", "reason": "本批次 roadmap 验收清单"}
+{"file": "core/core-source/src/legado/ssrf_guard.rs", "reason": "新建 SSRF 防护模块"}
+{"file": "core/core-source/src/legado/js_runtime.rs", "reason": "改动核验"}
+{"file": "core/core-source/src/legado/http.rs", "reason": "改动核验"}
+{"file": "flutter_app/android/app/src/main/kotlin/io/legado/app/flutter/MainActivity.kt", "reason": "capability gate 核验"}
