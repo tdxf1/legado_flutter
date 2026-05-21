@@ -26,7 +26,8 @@
     "05-21-batch-14-parser-rule-perf-misc",
     "05-21-batch-11-js-runtime-correctness",
     "05-21-batch-16-legado-url-import-cleanup",
-    "05-21-batch-20-settings-testability-cleanup"
+    "05-21-batch-20-settings-testability-cleanup",
+    "05-21-batch-13-quickjs-runtime-pool"
   ],
   "parent": null,
   "relatedFiles": [],

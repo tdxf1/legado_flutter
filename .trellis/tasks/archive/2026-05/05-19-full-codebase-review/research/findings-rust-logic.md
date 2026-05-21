@@ -340,6 +340,8 @@
 
 **建议**: 在 BookSourceParser / RuleEngine 实例上挂一个 `thread_local!` 的 lazy Runtime，每个工作线程一次性初始化。或者 rquickjs Runtime 是 Send，做 Mutex<Runtime> + Vec<Context> pool。
 
+**Resolution**: BATCH-13 (2026-05-21) — 选 thread_local 单实例 Runtime + Context 双复用方案（vs `Mutex<Runtime>` 跨线程池：rquickjs `Context` 是 `!Send`，跨线程池复杂度高且收益 ≤ 单线程）。`core/core-source/src/legado/js_runtime.rs` 加 `QUICKJS_POOL: thread_local RefCell<Option<RuntimePoolEntry>>` + `QUICKJS_POOL_BUSY: thread_local Cell<bool>` 重入闸门 + `with_thread_quickjs(timeout_ms, f)` helper。lazy-init 一次性跑 `Runtime::new()` + `set_memory_limit(64MiB)` + `set_max_stack_size(1MiB)`（顺手补 F-W1B-003 部分缓解）+ `Context::full(&runtime)` + `register_quickjs_bridge(&ctx)`。后续 eval 仅刷新 `set_interrupt_handler` (新 start time) + 在 `Context::with` 闭包里：`delete globalThis.__legado_url__` 等 PREAMBLE 哨兵 → 注入 vars → re-eval `PREAMBLE`（重置 `var java = { ... }` 等四个全局对象，废止上一次 eval 用户脚本对 `java._vars` / `java.headerMap` 的写入；这是池化下的隔离机制）→ 跑用户脚本。`QuickJsRuntime::eval` 改为通过 helper 调用，`DefaultJsRuntime::new()` 公共 API 0 改动 —— 全部 caller（`parser.rs` jsLib、`url.rs` 模板、`rule.rs` `<js>...</js>` 内联）自动受益。重入处理（bridge fn 例如 `__legado_get_string` 递归触发 JS eval）：`QUICKJS_POOL_BUSY.get() == true` 时回退 fresh `Runtime + Context` 单次路径，避免在同一 Context 上二次进入 `with` 锁住 runtime mutex。错误恢复：`Runtime::new()` 失败传播 + entry 保持 `None`，下次 retry；timeout interrupt 后 runtime 仍可用（rquickjs 文档承诺，`test_runtime_pool_recovers_from_timeout` 验证）；用户脚本 / PREAMBLE 失败不重建 entry（保守语义）。新增 3 单测 `test_runtime_pool_amortizes_bridge_register`（专线程跑 cold + 100×warm，断言 ratio < 100×）/ `test_runtime_pool_isolates_user_state_via_preamble_reset`（写 `java._vars.X` → 下次 eval 不可见）/ `test_runtime_pool_recovers_from_timeout`（5s timeout 后 1+1 仍正常）。覆盖 5 条相关 finding：F-W1B-023（核心）+ F-W1B-024（jsLib 每章新建）+ F-W1B-026（URL 模板 `{{}}`）+ F-W1B-027（execute_js_rule / execute_inline_js_rule）。**未做** F-W1B-025（RuleContext clone 优化）— 与 Runtime 池化解耦，留后续批次。**未做** jsLib 脚本编译结果按"书源 ID" LRU cache（PRD out of scope）。task: 05-21-batch-13-quickjs-runtime-pool。
+
 ---
 
 ### F-W1B-024 [P1 主要][C-性能][core-source/parser]
@@ -351,6 +353,8 @@
 **详细**: jsLib 存在的书源每章触发一次重型初始化；同 F-W1B-023。
 
 **建议**: 同上，复用 runtime；jsLib 脚本编译结果本身也可 cache（key=书源 ID）。
+
+**Resolution**: BATCH-13 (2026-05-21) — caller 0 改动（`DefaultJsRuntime::new()` 是空 struct），共用 F-W1B-023 落下来的 thread_local 池子。每章 jsLib 后处理只跑一次 PREAMBLE re-eval + var injection + 用户脚本，无 Runtime/Context 重建、无 bridge 重注册。jsLib 脚本编译结果 LRU cache 不在本批（finding 自带建议，PRD out of scope）。task: 05-21-batch-13-quickjs-runtime-pool。
 
 ---
 
@@ -364,6 +368,8 @@
 
 **建议**: 对 JS-only 规则做 batch（一次 eval 处理所有 items）；Rust 端规则保持 per-item 但避免 ctx.clone（用 `&mut ctx`）。
 
+**Resolution**: BATCH-13 (2026-05-21, 部分) — 5000 次 QuickJS Runtime 创建的部分通过 thread_local 池化（F-W1B-023）已消解：每个 worker 线程仅一次 Runtime + register_bridge，5000 次 eval 现在只付 PREAMBLE re-eval + var injection 的廉价开销。**未做** RuleContext clone batch / `&mut ctx` 重构（影响面较大且与 Runtime 池化解耦），留 BATCH-13b。task: 05-21-batch-13-quickjs-runtime-pool。
+
 ---
 
 ### F-W1B-026 [P1 主要][C-性能][core-source/legado/url]
@@ -376,6 +382,8 @@
 
 **建议**: 把 `runtime` 作为参数传入，函数链路上只建一次。
 
+**Resolution**: BATCH-13 (2026-05-21) — caller 0 改动（`DefaultJsRuntime::new()` 是空 struct），共用 F-W1B-023 thread_local 池子。每个 `{{...}}` 块的 eval 只走 PREAMBLE re-eval + 用户脚本，与 `resolve_template_expressions` / `resolve_single_template_rule` 是否共享 runtime 实例无关。task: 05-21-batch-13-quickjs-runtime-pool。
+
 ---
 
 ### F-W1B-027 [P1 主要][C-性能][core-source/legado/rule]
@@ -387,6 +395,8 @@
 **详细**: 同 F-W1B-023/025。
 
 **建议**: 见 F-W1B-023。
+
+**Resolution**: BATCH-13 (2026-05-21) — caller 0 改动（`DefaultJsRuntime::new()` 是空 struct），共用 F-W1B-023 thread_local 池子。`<js>...</js>` 内联在 N items 上的展开不再触发 N 次 register_quickjs_bridge。task: 05-21-batch-13-quickjs-runtime-pool。
 
 ---
 

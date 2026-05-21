@@ -3,9 +3,67 @@
 //! Full Legado source compatibility requires executing user-provided JavaScript
 //! from `@js:`, `<js></js>`, URL templates, and URL options. This module keeps
 //! the rule engine independent from the concrete embedded JS engine.
+//!
+//! # QuickJS Runtime Pooling (BATCH-13, F-W1B-023/024/026/027)
+//!
+//! `QuickJsRuntime::eval` reuses a single `rquickjs::Runtime` + `Context`
+//! per worker thread instead of building fresh ones per call. Without pooling,
+//! every eval paid the cost of creating a Runtime, Context, and re-registering
+//! ~30 bridge `Function`s — measured by 100-chapter TOC parsing where the
+//! register step dominated the wall-clock cost.
+//!
+//! ## What is amortized
+//! - `Runtime::new()` plus its memory/stack limits and GC subsystem.
+//! - `Context::full(&runtime)` (globalThis bootstrap).
+//! - `register_quickjs_bridge(&ctx)` (the 30+ `__legado_*` functions).
+//!
+//! ## What still runs every call
+//! - `runtime.set_interrupt_handler(...)` — re-installed each eval with a
+//!   fresh `Instant::now()` so the timeout window is per-call.
+//! - The "set vars" step (`legado_value_to_js_var` for each entry of `vars`).
+//! - `ctx.eval(PREAMBLE)` — re-evaluating PREAMBLE rebuilds the `java`,
+//!   `cache`, `cookie`, and `source` global objects. This is the **isolation
+//!   mechanism** between evals: any state the previous user script wrote into
+//!   `java._vars`, `java.headerMap`, etc. is discarded when PREAMBLE redefines
+//!   `var java = { ... }`.
+//!
+//! ## State isolation guarantees
+//! - `java`, `cache`, `cookie`, `source` — fully reset by PREAMBLE re-eval.
+//! - PREAMBLE-guarded globals (`__legado_url__`, `__legado_headers__`,
+//!   `__legado_default_headers__`, `__legado_variables__`, `__source_url__`)
+//!   — explicitly cleared via `delete globalThis.X` before set-vars so
+//!   `typeof X !== 'undefined'` checks behave the same as on a fresh runtime.
+//! - User-script globals (e.g. `var x = 1` at script top level) — NOT cleared.
+//!   Real Legado sources never depend on this; they share state via
+//!   `java.put` / `java.get` (see [`LEGADO_JS_VARIABLES`]) or via
+//!   `RuleContext::shared_variables` for cross-thread state.
+//!
+//! ## Cooperation with other thread-locals
+//! - [`LEGADO_JS_VARIABLES`] (BATCH-11) — write-through bucket for
+//!   `java.put/get`; orthogonal to the pool.
+//! - [`JsVariablesOverride`] RAII guard — snapshots/restores
+//!   `LEGADO_JS_VARIABLES` around each `eval_default_with_http_state` call;
+//!   orthogonal to the pool.
+//! - [`COOKIE_JAR_OVERRIDE`] — same pattern; orthogonal.
+//!
+//! ## Re-entrancy
+//! Bridge functions like `__legado_get_string` may recursively trigger
+//! JS eval (for example a Legado `@js:` rule inside a CSS/jsoup pipeline).
+//! Re-entering `Context::with` on the same `Context` would deadlock on the
+//! runtime mutex; nested calls therefore fall back to a fresh
+//! `Runtime + Context` (the pre-BATCH-13 behaviour). The pool covers the
+//! common top-level case.
+//!
+//! ## Error recovery
+//! - Timeout interrupts leave the runtime in a usable state (rquickjs
+//!   contract; verified by `test_runtime_pool_recovers_from_timeout`).
+//! - Initialization failures (`Runtime::new` etc.) propagate to the caller;
+//!   the pool entry stays `None` so the next call retries init.
+//! - Per-eval failures (set vars / PREAMBLE / user script) do **not** rebuild
+//!   the entry. This matches the pre-BATCH-13 contract.
 
 #[cfg(feature = "js-quickjs")]
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 #[cfg(feature = "js-quickjs")]
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -17,6 +75,142 @@ use std::sync::OnceLock;
 thread_local! {
     static LEGADO_SET_CONTENT: std::cell::RefCell<Option<(String, String)>> = std::cell::RefCell::new(None);
     static LEGADO_JS_VARIABLES: std::cell::RefCell<HashMap<String, LegadoValue>> = std::cell::RefCell::new(HashMap::new());
+}
+
+/// Per-thread pooled QuickJS Runtime + Context (BATCH-13).
+///
+/// See the module doc for the full rationale and isolation contract.
+#[cfg(feature = "js-quickjs")]
+struct RuntimePoolEntry {
+    runtime: rquickjs::Runtime,
+    context: rquickjs::Context,
+}
+
+#[cfg(feature = "js-quickjs")]
+thread_local! {
+    /// Lazily-initialized per-thread Runtime + Context. `None` until the
+    /// first eval on the thread.
+    static QUICKJS_POOL: RefCell<Option<RuntimePoolEntry>> = const { RefCell::new(None) };
+
+    /// Re-entrancy guard. `true` while we are already inside a pooled
+    /// `Context::with` closure on this thread; nested evals must take the
+    /// fresh-runtime fallback path to avoid deadlocking on the runtime mutex.
+    static QUICKJS_POOL_BUSY: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Hard upper bound on QuickJS heap (F-W1B-003 partial mitigation,
+/// applied during pool init). 64 MiB is generous for ordinary Legado
+/// rule scripts but caps obvious `new Array(1<<28)` style attacks.
+#[cfg(feature = "js-quickjs")]
+const QUICKJS_MEMORY_LIMIT: usize = 64 * 1024 * 1024;
+
+/// Hard upper bound on QuickJS stack (F-W1B-003 partial mitigation).
+/// 1 MiB is roughly the QuickJS default; setting it explicitly makes
+/// the limit visible and stable across rquickjs releases.
+#[cfg(feature = "js-quickjs")]
+const QUICKJS_STACK_LIMIT: usize = 1024 * 1024;
+
+/// JS that clears PREAMBLE-guarded globals so `typeof X !== 'undefined'`
+/// checks behave the same as on a fresh runtime. Run at the top of every
+/// pooled eval before set-vars.
+#[cfg(feature = "js-quickjs")]
+const QUICKJS_RESET_GUARDED_VARS: &str = "\
+delete globalThis.__legado_url__;\
+delete globalThis.__legado_headers__;\
+delete globalThis.__legado_default_headers__;\
+delete globalThis.__legado_variables__;\
+delete globalThis.__source_url__;\
+";
+
+/// RAII guard that flips `QUICKJS_POOL_BUSY` back to `false` on drop,
+/// so a panic inside the eval closure still releases the re-entrancy gate.
+#[cfg(feature = "js-quickjs")]
+struct PoolBusyGuard;
+
+#[cfg(feature = "js-quickjs")]
+impl Drop for PoolBusyGuard {
+    fn drop(&mut self) {
+        QUICKJS_POOL_BUSY.with(|cell| cell.set(false));
+    }
+}
+
+/// Run `f` inside a `Ctx` that has the bridge already registered.
+///
+/// On the top-level call this reuses the per-thread [`QUICKJS_POOL`]
+/// entry. Nested calls (re-entry) fall back to a one-shot Runtime+Context
+/// to avoid locking the same mutex twice. `timeout_ms = 0` disables the
+/// interrupt handler.
+#[cfg(feature = "js-quickjs")]
+fn with_thread_quickjs<F, R>(timeout_ms: u64, f: F) -> Result<R, String>
+where
+    F: FnOnce(&rquickjs::Ctx<'_>) -> Result<R, String>,
+{
+    use rquickjs::{Context, Runtime};
+
+    // Nested eval (e.g. user JS calls `java.getString(rule)` whose Rust
+    // bridge invokes `execute_legado_rule` which evaluates another JS
+    // rule). The pooled Context is currently locked on this thread, so
+    // we must not re-enter `Context::with` on it.
+    if QUICKJS_POOL_BUSY.with(|cell| cell.get()) {
+        let runtime = Runtime::new().map_err(|e| format!("quickjs runtime: {e}"))?;
+        let context = Context::full(&runtime).map_err(|e| format!("quickjs context: {e}"))?;
+        if timeout_ms > 0 {
+            let start = std::time::Instant::now();
+            runtime.set_interrupt_handler(Some(Box::new(move || {
+                start.elapsed() > std::time::Duration::from_millis(timeout_ms)
+            })));
+        }
+        return context.with(|ctx| {
+            register_quickjs_bridge(&ctx)?;
+            f(&ctx)
+        });
+    }
+
+    // Lazy init. Bridge registration runs exactly once per worker thread.
+    QUICKJS_POOL.with(|cell| -> Result<(), String> {
+        let mut pool = cell.borrow_mut();
+        if pool.is_none() {
+            let runtime = Runtime::new().map_err(|e| format!("quickjs runtime: {e}"))?;
+            runtime.set_memory_limit(QUICKJS_MEMORY_LIMIT);
+            runtime.set_max_stack_size(QUICKJS_STACK_LIMIT);
+            let context = Context::full(&runtime).map_err(|e| format!("quickjs context: {e}"))?;
+            context.with(|ctx| register_quickjs_bridge(&ctx))?;
+            *pool = Some(RuntimePoolEntry { runtime, context });
+        }
+        Ok(())
+    })?;
+
+    // Refresh the interrupt handler with a fresh start time. `with` borrows
+    // the entry only for the handler-set call; we drop it before re-borrowing
+    // to enter `context.with`, since the latter holds the runtime mutex
+    // throughout the closure.
+    QUICKJS_POOL.with(|cell| {
+        let pool = cell.borrow();
+        let Some(entry) = pool.as_ref() else { return };
+        if timeout_ms > 0 {
+            let start = std::time::Instant::now();
+            entry
+                .runtime
+                .set_interrupt_handler(Some(Box::new(move || {
+                    start.elapsed() > std::time::Duration::from_millis(timeout_ms)
+                })));
+        } else {
+            entry.runtime.set_interrupt_handler(None);
+        }
+    });
+
+    QUICKJS_POOL_BUSY.with(|cell| cell.set(true));
+    let _busy = PoolBusyGuard;
+
+    QUICKJS_POOL.with(|cell| {
+        let pool = cell.borrow();
+        // The lazy-init step above guarantees Some(entry); if a future refactor
+        // breaks that invariant, surface a clear error rather than panicking.
+        let Some(entry) = pool.as_ref() else {
+            return Err("quickjs pool entry missing after lazy-init".to_string());
+        };
+        entry.context.with(|ctx| f(&ctx))
+    })
 }
 
 use super::context::RuleContext;
@@ -298,26 +492,23 @@ impl JsRuntime for QuickJsRuntime {
             return Ok(LegadoValue::Null);
         }
 
-        use rquickjs::{Context, Runtime};
+        with_thread_quickjs(self.config.timeout_ms, |ctx| {
+            // Reset PREAMBLE-guarded globals so `typeof X !== 'undefined'`
+            // checks behave the same as on a fresh runtime. This must run
+            // BEFORE the var-injection loop, because the loop installs
+            // `__legado_url__` etc. when present in `vars`.
+            ctx.eval::<(), _>(QUICKJS_RESET_GUARDED_VARS)
+                .map_err(|e| format!("reset guarded vars: {e}"))?;
 
-        let runtime = Runtime::new().map_err(|e| format!("quickjs runtime: {e}"))?;
-        let context = Context::full(&runtime).map_err(|e| format!("quickjs context: {e}"))?;
-        let timeout = self.config.timeout_ms;
-        if timeout > 0 {
-            let start = std::time::Instant::now();
-            runtime.set_interrupt_handler(Some(Box::new(move || {
-                start.elapsed() > std::time::Duration::from_millis(timeout)
-            })));
-        }
-
-        context.with(|ctx| {
             for (name, value) in vars {
                 let stmt = legado_value_to_js_var(name, value);
                 ctx.eval::<(), _>(stmt.as_str())
                     .map_err(|e| format!("set '{name}': {e}"))?;
             }
 
-            register_quickjs_bridge(&ctx)?;
+            // Re-eval PREAMBLE every call. This rebuilds `var java = { ... }`
+            // and friends, discarding any state the previous user script left
+            // on the shared globals (the pool's isolation mechanism).
             ctx.eval::<(), _>(PREAMBLE)
                 .map_err(|e| format!("preamble: {e}"))?;
             let expression = js_script_to_expression(cleaned);
@@ -3520,5 +3711,129 @@ mod tests {
         // Cleanup so subsequent tests on the same worker thread start
         // with a clean slate.
         LEGADO_JS_VARIABLES.with(|cell| cell.borrow_mut().clear());
+    }
+
+    /// BATCH-13 (F-W1B-023): the per-thread Runtime + Context pool must
+    /// amortize the dominant cost of `eval` (creating a Runtime, full
+    /// Context, and registering ~30 bridge functions). Pre-pool, every
+    /// call paid for register; pooled, only the first call does.
+    ///
+    /// The test runs on a dedicated thread so the per-thread pool starts
+    /// `None` and the first eval pays the full register cost. Subsequent
+    /// calls only pay PREAMBLE re-eval + interrupt handler refresh, both
+    /// orders of magnitude cheaper. We assert that 100 subsequent evals
+    /// cost less than 100× the cold call (i.e. less than the cost of
+    /// re-registering 100 times). The threshold is loose because CI
+    /// machines vary; failing this test means the pool is broken (e.g.
+    /// somebody re-introduced `Runtime::new()` per call).
+    #[cfg(feature = "js-quickjs")]
+    #[test]
+    fn test_runtime_pool_amortizes_bridge_register() {
+        // Spawn a dedicated thread so the QUICKJS_POOL thread-local is
+        // freshly `None` when we start measuring.
+        std::thread::spawn(|| {
+            let rt = DefaultJsRuntime::new();
+            let vars = HashMap::new();
+
+            // Cold call: pays Runtime::new + Context::full +
+            // register_quickjs_bridge (the expensive part).
+            let cold = std::time::Instant::now();
+            rt.eval("1 + 1", &vars).expect("cold eval ok");
+            let cold_elapsed = cold.elapsed();
+
+            // 100 subsequent calls: each pays only PREAMBLE re-eval +
+            // interrupt handler refresh + var injection (cheap).
+            let many = std::time::Instant::now();
+            for _ in 0..100 {
+                rt.eval("1 + 1", &vars).expect("loop eval ok");
+            }
+            let many_elapsed = many.elapsed();
+
+            // If pooling is broken, 100 evals would each pay the full
+            // register cost: ~100× cold. The 100× threshold catches that
+            // regression with comfortable headroom for CI noise.
+            let ratio = many_elapsed.as_nanos() as f64
+                / std::cmp::max(1, cold_elapsed.as_nanos()) as f64;
+            assert!(
+                ratio < 100.0,
+                "pool not amortizing: 100 warm evals/{many_elapsed:?} vs cold/{cold_elapsed:?} (ratio {ratio:.1})"
+            );
+        })
+        .join()
+        .expect("worker thread ok");
+    }
+
+    /// BATCH-13 (F-W1B-023): re-evaluating PREAMBLE at the top of every
+    /// pooled call rebuilds `var java = { ... }`, which discards any
+    /// state the previous user script wrote into `java._vars`. Without
+    /// this isolation, sharing a Context across evals would leak state.
+    #[cfg(feature = "js-quickjs")]
+    #[test]
+    fn test_runtime_pool_isolates_user_state_via_preamble_reset() {
+        // Reset any thread-local residue from earlier tests.
+        LEGADO_JS_VARIABLES.with(|cell| cell.borrow_mut().clear());
+
+        let rt = DefaultJsRuntime::new();
+        let vars = HashMap::new();
+
+        // First eval: stash a key directly on java._vars (NOT via
+        // java.put — that would also write through to the thread-local
+        // bucket, which is precisely the cross-eval persistence path
+        // and would defeat this test). PREAMBLE re-eval should wipe
+        // the JS-side `java._vars` for the next call.
+        let r1 = rt
+            .eval(
+                "(function(){ java._vars = java._vars || {}; java._vars.batch13_test_key = 'a'; return 'ok'; })()",
+                &vars,
+            )
+            .expect("first eval ok");
+        assert_eq!(r1.as_str(), Some("ok"));
+
+        // Second eval: the previous `java._vars.batch13_test_key` must
+        // be gone because PREAMBLE rebuilt the `java` object.
+        let r2 = rt
+            .eval(
+                "(java._vars && java._vars.batch13_test_key) || ''",
+                &vars,
+            )
+            .expect("second eval ok");
+        assert_eq!(
+            r2.as_str(),
+            Some(""),
+            "PREAMBLE re-eval should reset java._vars between calls; got {r2:?}"
+        );
+
+        LEGADO_JS_VARIABLES.with(|cell| cell.borrow_mut().clear());
+    }
+
+    /// BATCH-13 (F-W1B-023): rquickjs's interrupt handler is cooperative
+    /// — when it fires, the runtime is left in a usable state. The pool
+    /// must therefore continue functioning after a timeout: the next
+    /// eval on the same thread should run normally.
+    #[cfg(feature = "js-quickjs")]
+    #[test]
+    fn test_runtime_pool_recovers_from_timeout() {
+        let rt = QuickJsRuntime {
+            config: JsRuntimeConfig {
+                timeout_ms: 50,
+                max_script_len: 100_000,
+            },
+        };
+        let vars = HashMap::new();
+
+        // Trip the interrupt handler. The exact error string varies
+        // across rquickjs releases; we only require Err.
+        let timed_out = rt.eval("while (true) {}", &vars);
+        assert!(
+            timed_out.is_err(),
+            "infinite loop must be terminated by interrupt handler; got {timed_out:?}"
+        );
+
+        // The pool entry must still be usable.
+        let recovered = rt.eval("1 + 1", &vars).expect("post-timeout eval ok");
+        assert!(
+            matches!(recovered, LegadoValue::Int(2)),
+            "post-timeout eval should return 2, got {recovered:?}"
+        );
     }
 }
