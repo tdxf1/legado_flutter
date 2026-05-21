@@ -51,6 +51,19 @@ When a `findings-*.md` entry has been substantively addressed by an earlier chan
 
 This prevents future audits from re-flagging the issue and reading the comment makes the intent clear without code archaeology. References: F-W3-030 (BATCH-23), F-W1B-030 (BATCH-14).
 
+## JS PREAMBLE × Rust thread_local State Sharing
+
+When state needs to flow across `eval()` calls in `core-source/legado/js_runtime`, neither side alone is enough — you need **paired write-through + read-fallback bridges**:
+
+- **Write side**: PREAMBLE method writes to JS-local `_vars` (fast in-eval reads) AND calls `__legado_xxx_put` Rust bridge (writes thread_local `LEGADO_JS_VARIABLES`). Both ends, every put.
+- **Read side**: PREAMBLE method first checks JS-local `_vars[k]` (covers same-eval put-then-get); on miss, calls `__legado_xxx_get` Rust bridge (covers cross-eval persistence).
+
+Why both bridges, not one: each `eval()` builds a fresh QuickJS Runtime + Context with `_vars` reseeded from `__legado_variables__` (a snapshot, not a live binding). Write-through alone makes the next `eval()` see the value via `build_runtime_vars` reading the thread_local, but only if `JsVariablesOverride::install` was called at frame entry — that guard is installed by `eval_default_with_http_state` but **not** by raw `DefaultJsRuntime::new().eval(...)`. The read-fallback bridge fills that gap and makes the cross-eval contract work for all callers, including unit tests using raw `eval()`.
+
+Canonical example: `java.put` / `java.get` (BATCH-11, F-W1B-011). The dual-bridge pair is `__legado_js_put` + `__legado_js_get`.
+
+Boundary the pattern applies to: any `core-source/legado/js_runtime` PREAMBLE method that needs state visible across `eval()` calls within a single OS thread. Cross-thread state still belongs to `RuleContext::shared_variables` (Arc<Mutex<...>>), not thread_local.
+
 ## Code Hygiene Checks
 
 Before committing:
