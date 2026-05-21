@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/rust-core/index.md", "reason": "Rust workspace 概览 + crate 边界"}
+{"file": ".trellis/spec/rust-core/directory-structure.md", "reason": "core-source 模块归属，确认 legado/import / legado/url / parser / rss 的职责边界"}
+{"file": ".trellis/spec/rust-core/error-handling.md", "reason": "Result<T,String> 跨边界 + 删 helper 后 caller 错误处理变化"}
+{"file": ".trellis/spec/rust-core/quality-and-anti-patterns.md", "reason": "block_in_place 使用边界 + 双实现去重 + Resolved-by-Design 流程"}
+{"file": ".trellis/spec/rust-core/testing.md", "reason": "新增 5 条单测 + 1 条迁移的测试布局规则"}
+{"file": ".trellis/spec/rust-core/logging.md", "reason": "新增 helper 时 tracing 用法（rule_requires_blocking / clean_legado_url 删除路径）"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-rust-logic.md", "reason": "F-W1B-034/036/038/039/042 finding 原文 + master 建议"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-16-legado-url-and-import-cleanup.md", "reason": "批次自身验收 + 测试策略"}
