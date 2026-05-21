@@ -8,22 +8,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/providers.dart';
+import '../../core/services/source_validation_service.dart';
 import '../../src/rust/api.dart' as rust_api;
-
-/// 注入用：测试模式下让 [_LiveTestDialog] 不真的调 FRB，而是用这个钩子返回
-/// 一份 fake [`LiveTestReport`] JSON。生产环境保持 null。
-///
-/// 批次 21 (05-19)。签名故意与 [rust_api.validateSourceLive] 一致。
-typedef LiveTestRunner = Future<String> Function(
-    {required String dbPath, required String sourceId, required String keyword});
-
-/// 测试钩子的全局开关 — 仅在 widget test 内 setUp/tearDown 切换，避免给每个
-/// 调用站点都加 ref/parameter。`null` = 走真实 FRB。
-LiveTestRunner? debugLiveTestRunnerOverride;
 
 /// `@visibleForTesting` — 让 widget test 能直接弹出 [`_LiveTestDialog`] 而不必
 /// 走完整 SourcePage → 列表 tap → 校验规则的链路（避免连 FRB 真实调用）。
 /// 仅在 source_validation_live_test_test.dart 用。
+///
+/// BATCH-20 (F-W2B-020)：原 module-level `LiveTestRunner` typedef +
+/// `debugLiveTestRunnerOverride` global mutable 删除；测试通过
+/// `ProviderScope.overrides` 注入 fake [SourceValidationService]，
+/// 不再依赖全局 mutable state。
 @visibleForTesting
 Future<void> showLiveTestDialogForTesting(
   BuildContext context, {
@@ -609,8 +604,9 @@ class _SourcePageState extends ConsumerState<SourcePage> {
 /// 显示 [CircularProgressIndicator]，完成后切换为 check / error 图标 +
 /// sample / error 文本 + 延迟 ms。
 ///
-/// 测试钩子：[debugLiveTestRunnerOverride] 设置后会替代真实的 FRB 调用。
-class _LiveTestDialog extends StatefulWidget {
+/// BATCH-20 (F-W2B-020)：通过 [sourceValidationServiceProvider] 注入实现，
+/// 测试用 `ProviderScope.overrides` 替换 fake，生产走真实 FRB 调用。
+class _LiveTestDialog extends ConsumerStatefulWidget {
   final String dbPath;
   final String sourceId;
   final String sourceName;
@@ -621,10 +617,10 @@ class _LiveTestDialog extends StatefulWidget {
   });
 
   @override
-  State<_LiveTestDialog> createState() => _LiveTestDialogState();
+  ConsumerState<_LiveTestDialog> createState() => _LiveTestDialogState();
 }
 
-class _LiveTestDialogState extends State<_LiveTestDialog> {
+class _LiveTestDialogState extends ConsumerState<_LiveTestDialog> {
   late final TextEditingController _keywordCtrl;
   bool _running = false;
   String? _error;
@@ -671,8 +667,8 @@ class _LiveTestDialogState extends State<_LiveTestDialog> {
       _staticIssues = const [];
     });
     try {
-      final runner = debugLiveTestRunnerOverride ?? rust_api.validateSourceLive;
-      final json = await runner(
+      final svc = ref.read(sourceValidationServiceProvider);
+      final json = await svc.validateLive(
         dbPath: widget.dbPath,
         sourceId: widget.sourceId,
         keyword: keyword,

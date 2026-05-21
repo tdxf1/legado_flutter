@@ -60,10 +60,28 @@ class _CacheManagementPageState extends ConsumerState<CacheManagementPage> {
   String? _error;
   List<Map<String, dynamic>> _records = const [];
 
+  /// BATCH-20 (F-W2B-008)：缓存 sum('cached_chapters') / sum('total_chapters')
+  /// 结果，避免 build 内每次 O(N) 遍历。`_records` 仅在 _load() 内变更，
+  /// 每次刷新统一更新这两个字段。
+  int _cachedTotal = 0;
+  int _totalTotal = 0;
+
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  /// 计算 cached / total 总和。`_records` 改值后调一次。
+  void _recomputeTotals() {
+    var cached = 0;
+    var total = 0;
+    for (final r in _records) {
+      cached += ((r['cached_chapters'] as num?)?.toInt() ?? 0);
+      total += ((r['total_chapters'] as num?)?.toInt() ?? 0);
+    }
+    _cachedTotal = cached;
+    _totalTotal = total;
   }
 
   Future<void> _load() async {
@@ -73,6 +91,7 @@ class _CacheManagementPageState extends ConsumerState<CacheManagementPage> {
         if (!mounted) return;
         setState(() {
           _records = widget.recordsOverride!;
+          _recomputeTotals();
           _loading = false;
         });
         return;
@@ -85,6 +104,7 @@ class _CacheManagementPageState extends ConsumerState<CacheManagementPage> {
       if (!mounted) return;
       setState(() {
         _records = records;
+        _recomputeTotals();
         _loading = false;
       });
     } catch (e) {
@@ -96,17 +116,8 @@ class _CacheManagementPageState extends ConsumerState<CacheManagementPage> {
     }
   }
 
-  /// 求总和。`field` 取 'cached_chapters' 或 'total_chapters'。
-  int _sum(String field) {
-    var total = 0;
-    for (final r in _records) {
-      total += ((r[field] as num?)?.toInt() ?? 0);
-    }
-    return total;
-  }
-
   Future<void> _onClearAll() async {
-    final cachedTotal = _sum('cached_chapters');
+    final cachedTotal = _cachedTotal;
     if (cachedTotal == 0) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -231,8 +242,8 @@ class _CacheManagementPageState extends ConsumerState<CacheManagementPage> {
     if (_error != null) {
       return Center(child: Text('加载失败: $_error'));
     }
-    final cachedTotal = _sum('cached_chapters');
-    final totalTotal = _sum('total_chapters');
+    final cachedTotal = _cachedTotal;
+    final totalTotal = _totalTotal;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [

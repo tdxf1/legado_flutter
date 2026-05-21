@@ -25,7 +25,8 @@
     "05-20-fix-batch-18a-pure-dead-code",
     "05-21-batch-14-parser-rule-perf-misc",
     "05-21-batch-11-js-runtime-correctness",
-    "05-21-batch-16-legado-url-import-cleanup"
+    "05-21-batch-16-legado-url-import-cleanup",
+    "05-21-batch-20-settings-testability-cleanup"
   ],
   "parent": null,
   "relatedFiles": [],

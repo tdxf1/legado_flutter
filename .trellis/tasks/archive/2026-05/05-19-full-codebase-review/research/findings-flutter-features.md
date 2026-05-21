@@ -77,6 +77,8 @@
 
 **建议**: 在 `_onNotificationSwitchToggled` 进入 `_showDisableNotificationDialog` 前加 mounted check；同时统一使用 `if (!mounted) return;` early return 而不是 nested `if (mounted) {}`。
 
+**Resolution (BATCH-20, 2026-05-21)**: `settings_page._onNotificationSwitchToggled` 改为 `if (!mounted) return;` early-return 风格统一。删除冗余的 `if (mounted) ScaffoldMessenger...` 包装（line 53 已有 `if (!mounted) return;` 早返回）。`_showDisableNotificationDialog()` 调用前补 `if (!mounted) return;`。无新单测（行为不变）。task: 05-21-batch-20-settings-testability-cleanup。
+
 ---
 
 ### F-W2B-004 [P1 主要][A-架构][settings/backup]
@@ -88,6 +90,8 @@
 **详细**: 9 个 `xxxOverride` 字段全部用于 widget test 注入 fake FRB 调用；同模式在 bookshelf_page (4 个 override)、cache_management_page (4 个)、rss_*_page (3-7 个)、qr_scan_page (6 个)、rule_sub_page (6 个) 大量重复。这种"在 widget 公共构造函数加 fake hook"模式让构造函数难读、文档冗余，且实质是把 testability 与 production API 耦合。
 
 **建议**: 抽出 `RssApiClient` / `BackupApiClient` / `WebDavApiClient` 类（仅是 FRB 函数的命名包装），通过 Riverpod provider 注入，测试中 override provider 即可——既消除构造函数的 N 个钩子，又让 features 间共享相同抽象。这条件需要批次级重构，建议作为独立子任务。
+
+**Resolution (BATCH-20, 2026-05-21)**: BackupPage 10 个 `*Override`（`pickDirectoryOverride` / `pickFileOverride` / `exportBackupOverride` / `importBackupOverride` / `validateZipOverride` / `webdavConfigDirOverride` / `webdavUploadOverride` / `webdavListOverride` / `webdavDownloadOverride`）全部删除。新建 `flutter_app/lib/core/services/backup_api_client.dart`（包装 `exportBackupZip` / `importBackupZip` / `validateBackupZip` / `webdavUploadBackup` / `webdavListBackups` / `webdavDownloadBackup` 6 个 FRB 调用 + `backupApiClientProvider`）+ `core/services/file_picker_service.dart`（包装 `FilePicker.platform.getDirectoryPath` / `pickFiles(zip)` + `filePickerServiceProvider`）。`backup_page.dart` 业务逻辑改 `ref.read(backupApiClientProvider).xxx()` / `ref.read(filePickerServiceProvider).pickXxx()`。`backup_page_test.dart` 2 个 case 全部迁到 `ProviderScope(overrides: [backupApiClientProvider.overrideWithValue(_FakeBackupApiClient(...)), filePickerServiceProvider.overrideWithValue(_FakeFilePickerService(...))], child: ...)`。`_FakeBackupApiClient extends BackupApiClient` 用可选回调字段（`onExport` / `onImport` / `onValidate`）覆写需要追踪调用次数 / 参数的方法，未配置的方法抛 `UnimplementedError`，比 PRD 草稿的"单 returnJson 字段"模式更接近原 `*Override` 语义。**`dbPathOverride` 保留**（cross-feature 测试 db 路径模式，与 fake FRB 性质不同）。task: 05-21-batch-20-settings-testability-cleanup。
 
 ---
 
@@ -138,6 +142,8 @@
 **详细**: build 内调 `_sum` 两次（line 240-241），`_buildList` 内又对 records 走 ListView.builder（这是正常的）。但加载完成后 `_records` 不变，sum 应只算一次。
 
 **建议**: 把 cachedTotal/totalTotal 缓存为 `_cachedTotal` / `_totalTotal` State 字段，在 `_load` / `_onClearAll` 后一次算好；或用 late final lazy。
+
+**Resolution (BATCH-20, 2026-05-21)**: `_CacheManagementPageState` 加 `int _cachedTotal = 0` + `int _totalTotal = 0` 两个 State 字段 + 私有 helper `_recomputeTotals()`。`_load()` 在 `_records = ...` 写入后立即调 `_recomputeTotals()`（生产路径 + `recordsOverride` 路径都覆盖）；错误路径保持 `_records = const []` + 默认 0 不变。`_onClearAll` 用 `_cachedTotal` 替代 `_sum('cached_chapters')`。`build()` 内 line 234/235 改读缓存字段 O(1)。`_sum` 函数删除。无新单测（行为不变，性能优化）。task: 05-21-batch-20-settings-testability-cleanup。
 
 ---
 
@@ -284,6 +290,8 @@
 **详细**: 这是 testability 漏出到 module API 的重灾区。生产代码读者看到顶部 30 行全是测试基础设施才能开始读 SourcePage 业务。同模式在 bookshelf_page (10 个 override 参数)、qr_scan_page、rss_*_page 重复出现，但 source_page 是最严重的（用了 module-level 可变 global）。
 
 **建议**: 把 typedef + override + showLiveTestDialogForTesting 移到 `test/source_page_test_hooks.dart`（仅 test target 引入），生产代码完全不知道它们存在。需要的话用 `assert` block 或 conditional import 控制。
+
+**Resolution (BATCH-20, 2026-05-21)**: `source_page.dart` 顶部 module-level `LiveTestRunner` typedef + `debugLiveTestRunnerOverride` global mutable 全部删除。新建 `flutter_app/lib/core/services/source_validation_service.dart`：`class SourceValidationService { Future<String> validateLive({required dbPath, required sourceId, required keyword}) → rust_api.validateSourceLive(...) }` + `sourceValidationServiceProvider`。`_LiveTestDialog` 从 `StatefulWidget` 转 `ConsumerStatefulWidget`（state class 转 `ConsumerState`），`runner = debugLiveTestRunnerOverride ?? rust_api.validateSourceLive` 替换为 `ref.read(sourceValidationServiceProvider).validateLive(...)`。**`showLiveTestDialogForTesting` 保留**（带 `@visibleForTesting` 注解的合法 export，与 mutable global 性质不同；属 PRD 显式保留边界）。`source_validation_live_test_test.dart` 2 个 case 迁到 `ProviderScope(overrides: [sourceValidationServiceProvider.overrideWithValue(_FakeSourceValidationService(...))])`，删除 `setUp/tearDown` 重置 `debugLiveTestRunnerOverride` 的样板。task: 05-21-batch-20-settings-testability-cleanup。
 
 ---
 
@@ -838,6 +846,8 @@
 **详细**: 注释说"不持久化（不靠 SharedPreferences）— 每次启动 app 重新提示一次"，但全局 mutable bool 在测试中难以 reset（widget test 复用同一进程时会让第二个测试拿不到 SnackBar）。同时这个 flag 不在任何 dispose 中重置。
 
 **建议**: 改为 `final _r24NoticeShownProvider = StateProvider<bool>((_) => false);`，测试可 override。
+
+**Resolution (BATCH-20, 2026-05-21)**: `replace_rule_page.dart::_r24NoticeShown` module-level mutable bool 删除。新建私有 `final _r24NoticeShownProvider = StateProvider<bool>((_) => false);`。`_ReplaceRulePageState.initState` 改用 `ref.read(_r24NoticeShownProvider)` 读 + `ref.read(_r24NoticeShownProvider.notifier).state = true` 写。生产行为完全不变（同进程内仍只显示一次 SnackBar 提示），但测试可通过 `ProviderScope.overrides` 重置该 flag 而无需考虑跨测试静态状态泄漏。无新单测。task: 05-21-batch-20-settings-testability-cleanup。
 
 ---
 

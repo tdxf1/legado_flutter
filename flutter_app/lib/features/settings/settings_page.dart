@@ -52,15 +52,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       final granted = await NotificationService.requestPermission();
       if (!mounted) return;
       setState(() => _notificationPermissionGranted = granted);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(granted ? '通知权限已开启' : '通知权限请求被拒绝'),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
+      // BATCH-20 (F-W2B-003)：删冗余 if (mounted) 包装，line 53 已 early-return
+      // 后续不需要再 check；统一 if (!mounted) return; early-return 风格。
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(granted ? '通知权限已开启' : '通知权限请求被拒绝'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
     } else {
+      // value 来自 Switch 异步回调，从规范角度 dialog 入口前补一次 mounted check。
+      if (!mounted) return;
       _showDisableNotificationDialog();
     }
   }

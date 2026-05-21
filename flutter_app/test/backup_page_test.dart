@@ -2,31 +2,105 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:legado_flutter/core/services/backup_api_client.dart';
+import 'package:legado_flutter/core/services/file_picker_service.dart';
 import 'package:legado_flutter/features/settings/backup_page.dart';
 
 /// 批次 10 (05-19): 备份/恢复页 widget 测试。
 ///
-/// 通过 BackupPage 的 *Override 测试钩子注入 fake 实现，绕过
-/// FRB 桥 / file_picker / path_provider，验证：
+/// BATCH-20 (F-W2B-004)：原 10 个 `*Override` 构造函数测试钩子全部删除，
+/// 改为通过 `ProviderScope.overrides` 注入 [_FakeBackupApiClient] +
+/// [_FakeFilePickerService]，绕过真实 FRB 桥 / file_picker / path_provider。
+///
+/// 验证点：
 /// 1. 页面渲染两个 Card（"导出备份" + "导入备份"），且导入按钮在
 ///    未选 zip 时只显示"选择 zip 文件"按钮，没有"确认导入"按钮。
 /// 2. 选 zip 文件后，validate 被调用，UI 显示"识别到 N 项 ...";
-///    然后点"确认导入"经 AlertDialog 确认会调到 importBackupOverride
+///    然后点"确认导入"经 AlertDialog 确认会调到 fake importBackup
 ///    一次，且会显示 ImportSummary 摘要。
+
+/// 测试用 fake：所有方法默认抛 UnimplementedError，调用方按需 override。
+class _FakeBackupApiClient extends BackupApiClient {
+  final Future<void> Function({required String dbPath, required String outZipPath})?
+      onExport;
+  final Future<String> Function({required String dbPath, required String zipPath})?
+      onImport;
+  final Future<List<String>> Function({required String zipPath})? onValidate;
+
+  const _FakeBackupApiClient({
+    this.onExport,
+    this.onImport,
+    this.onValidate,
+  });
+
+  @override
+  Future<void> exportBackup({
+    required String dbPath,
+    required String outZipPath,
+  }) {
+    if (onExport == null) {
+      throw UnimplementedError('exportBackup not configured');
+    }
+    return onExport!(dbPath: dbPath, outZipPath: outZipPath);
+  }
+
+  @override
+  Future<String> importBackup({
+    required String dbPath,
+    required String zipPath,
+  }) {
+    if (onImport == null) {
+      throw UnimplementedError('importBackup not configured');
+    }
+    return onImport!(dbPath: dbPath, zipPath: zipPath);
+  }
+
+  @override
+  Future<List<String>> validateZip({required String zipPath}) {
+    if (onValidate == null) {
+      throw UnimplementedError('validateZip not configured');
+    }
+    return onValidate!(zipPath: zipPath);
+  }
+}
+
+class _FakeFilePickerService extends FilePickerService {
+  final Future<String?> Function()? onPickZipFile;
+
+  const _FakeFilePickerService({
+    this.onPickZipFile,
+  });
+
+  @override
+  Future<String?> pickDirectory() => Future.value(null);
+
+  @override
+  Future<String?> pickZipFile() {
+    if (onPickZipFile == null) return Future.value(null);
+    return onPickZipFile!();
+  }
+}
+
 void main() {
   testWidgets('BackupPage renders two cards and disabled import flow initially',
       (WidgetTester tester) async {
     await tester.pumpWidget(
       ProviderScope(
-        child: MaterialApp(
+        overrides: [
+          backupApiClientProvider.overrideWithValue(
+            _FakeBackupApiClient(
+              onExport: ({required String dbPath, required String outZipPath}) async {},
+              onImport: ({required String dbPath, required String zipPath}) async => '{}',
+              onValidate: ({required String zipPath}) async => <String>[],
+            ),
+          ),
+          filePickerServiceProvider.overrideWithValue(
+            const _FakeFilePickerService(),
+          ),
+        ],
+        child: const MaterialApp(
           home: BackupPage(
             dbPathOverride: '/tmp/legado-test.db',
-            // 这两个不会在本测试里被触发，但传 stub 防误调真实平台通道。
-            pickDirectoryOverride: () async => null,
-            pickFileOverride: () async => null,
-            exportBackupOverride: (_, __) async {},
-            importBackupOverride: (_, __) async => '{}',
-            validateZipOverride: (_) async => <String>[],
           ),
         ),
       ),
@@ -46,7 +120,7 @@ void main() {
   });
 
   testWidgets(
-      'BackupPage validate after pick + confirm import calls override exactly once',
+      'BackupPage validate after pick + confirm import calls fake exactly once',
       (WidgetTester tester) async {
     String? capturedDbPath;
     String? capturedZipPath;
@@ -55,31 +129,39 @@ void main() {
 
     await tester.pumpWidget(
       ProviderScope(
-        child: MaterialApp(
+        overrides: [
+          backupApiClientProvider.overrideWithValue(
+            _FakeBackupApiClient(
+              onExport: ({required String dbPath, required String outZipPath}) async {},
+              onValidate: ({required String zipPath}) async {
+                validateCalls++;
+                return <String>['bookshelf.json', 'bookGroup.json'];
+              },
+              onImport: ({required String dbPath, required String zipPath}) async {
+                importCalls++;
+                capturedDbPath = dbPath;
+                capturedZipPath = zipPath;
+                return '{"books":3,"groups":2,"bookmarks":5,'
+                    '"replace_rules":1,"sources":4,"errors":[]}';
+              },
+            ),
+          ),
+          filePickerServiceProvider.overrideWithValue(
+            _FakeFilePickerService(
+              onPickZipFile: () async => '/tmp/some-backup.zip',
+            ),
+          ),
+        ],
+        child: const MaterialApp(
           home: BackupPage(
             dbPathOverride: '/tmp/legado-test.db',
-            pickFileOverride: () async => '/tmp/some-backup.zip',
-            validateZipOverride: (zip) async {
-              validateCalls++;
-              return <String>['bookshelf.json', 'bookGroup.json'];
-            },
-            importBackupOverride: (db, zip) async {
-              importCalls++;
-              capturedDbPath = db;
-              capturedZipPath = zip;
-              return '{"books":3,"groups":2,"bookmarks":5,'
-                  '"replace_rules":1,"sources":4,"errors":[]}';
-            },
-            // 不应被触发；传 stub 让生产代码路径不进。
-            pickDirectoryOverride: () async => null,
-            exportBackupOverride: (_, __) async {},
           ),
         ),
       ),
     );
     await tester.pumpAndSettle();
 
-    // 1. 点"选择 zip 文件" → 触发 pickFileOverride + validateZipOverride。
+    // 1. 点"选择 zip 文件" → 触发 fake pickZipFile + validateZip。
     await tester.tap(find.text('选择 zip 文件'));
     await tester.pumpAndSettle();
     expect(validateCalls, 1, reason: '点选 zip 后必须调一次 validate');
@@ -97,7 +179,7 @@ void main() {
     await tester.tap(importBtn);
     await tester.pumpAndSettle();
 
-    // 3. importBackupOverride 应被调一次，参数正确。
+    // 3. importBackup 应被调一次，参数正确。
     expect(importCalls, 1);
     expect(capturedDbPath, '/tmp/legado-test.db');
     expect(capturedZipPath, '/tmp/some-backup.zip');

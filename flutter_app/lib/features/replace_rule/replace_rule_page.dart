@@ -10,7 +10,11 @@ import '../../src/rust/api.dart' as rust_api;
 /// R24: 进程级标志位，避免在同一次 app 运行内重复显示迁移说明。
 /// 不持久化（不靠 SharedPreferences）— 每次启动 app 重新提示一次，
 /// 这是有意为之的弱提示，确保关心的用户能注意到。
-bool _r24NoticeShown = false;
+///
+/// BATCH-20 (F-W2B-065)：原 module-level mutable `bool _r24NoticeShown` 改为
+/// StateProvider，让测试可 override 重置；行为与原来一致（同一进程内只显示
+/// 一次）。私有可见（双下划线前缀）确保不被外部 watch / mutate。
+final _r24NoticeShownProvider = StateProvider<bool>((_) => false);
 
 class ReplaceRulePage extends ConsumerStatefulWidget {
   const ReplaceRulePage({super.key});
@@ -24,8 +28,9 @@ class _ReplaceRulePageState extends ConsumerState<ReplaceRulePage> {
   void initState() {
     super.initState();
     // R24: 提示 schema 已升级、原"作用范围"信息已重置为全局。
-    if (!_r24NoticeShown) {
-      _r24NoticeShown = true;
+    final shown = ref.read(_r24NoticeShownProvider);
+    if (!shown) {
+      ref.read(_r24NoticeShownProvider.notifier).state = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(

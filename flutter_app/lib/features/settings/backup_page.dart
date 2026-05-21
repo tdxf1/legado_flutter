@@ -1,15 +1,15 @@
 import 'dart:convert';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/persistence/json_store.dart';
 import '../../core/providers.dart';
+import '../../core/services/backup_api_client.dart';
+import '../../core/services/file_picker_service.dart';
 import '../../core/util/import_summary_label.dart';
 import '../../core/widgets/safe_setstate.dart';
-import '../../src/rust/api.dart' as rust_api;
 
 /// 本地备份/恢复页（批次 10 / 05-19）。
 ///
@@ -25,72 +25,18 @@ import '../../src/rust/api.dart' as rust_api;
 /// **入口**：GoRouter `/backup`。bookshelf_page AppBar PopupMenu 加
 /// "备份/恢复" 项触发跳转。
 ///
-/// **测试**：所有 FRB 桥 / file_picker / path_provider 调用都通过
-/// 同名 `*Override` 测试钩子注入 fake 实现，让 widget test 不依赖
-/// 真实平台通道。生产代码不传 override 时走真实路径。
+/// **测试**：BATCH-20 (F-W2B-004) 起，所有 FRB / file_picker /
+/// path_provider 调用都通过 Riverpod provider 注入；widget test 用
+/// `ProviderScope.overrides` 替换 [backupApiClientProvider] /
+/// [filePickerServiceProvider] / [dbPathProvider]，不再依赖构造函数 *Override。
+/// `dbPathOverride` 保留作为简易测试 hook（与 cache_management 等保持一致）。
 class BackupPage extends ConsumerStatefulWidget {
   /// 测试钩子：注入假 dbPath 避免 widget test 走 path_provider。
   final String? dbPathOverride;
 
-  /// 测试钩子：注入假的目录选择函数，返回选中目录或 null。
-  final Future<String?> Function()? pickDirectoryOverride;
-
-  /// 测试钩子：注入假的 zip 文件选择函数，返回文件绝对路径或 null。
-  final Future<String?> Function()? pickFileOverride;
-
-  /// 测试钩子：注入假 exportBackupZip。
-  final Future<void> Function(String dbPath, String outZipPath)?
-      exportBackupOverride;
-
-  /// 测试钩子：注入假 importBackupZip，返回 ImportSummary JSON。
-  final Future<String> Function(String dbPath, String zipPath)?
-      importBackupOverride;
-
-  /// 测试钩子：注入假 validateBackupZip，返回识别到的文件名列表。
-  final Future<List<String>> Function(String zipPath)? validateZipOverride;
-
-  // ---- 批次 11 / WebDAV ----
-
-  /// 测试钩子：注入假 documents 目录路径（用来读 webdav.json）。
-  final String? webdavConfigDirOverride;
-
-  /// 测试钩子：注入假 webdavUploadBackup。
-  final Future<void> Function({
-    required String dbPath,
-    required String url,
-    required String user,
-    required String password,
-    required String fileName,
-  })? webdavUploadOverride;
-
-  /// 测试钩子：注入假 webdavListBackups,返回 JSON 字符串数组。
-  final Future<String> Function({
-    required String url,
-    required String user,
-    required String password,
-  })? webdavListOverride;
-
-  /// 测试钩子：注入假 webdavDownloadBackup,返回 ImportSummary JSON。
-  final Future<String> Function({
-    required String dbPath,
-    required String url,
-    required String user,
-    required String password,
-    required String fileName,
-  })? webdavDownloadOverride;
-
   const BackupPage({
     super.key,
     this.dbPathOverride,
-    this.pickDirectoryOverride,
-    this.pickFileOverride,
-    this.exportBackupOverride,
-    this.importBackupOverride,
-    this.validateZipOverride,
-    this.webdavConfigDirOverride,
-    this.webdavUploadOverride,
-    this.webdavListOverride,
-    this.webdavDownloadOverride,
   });
 
   @override
@@ -257,18 +203,15 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     if (_exporting) return;
     setState(() => _exporting = true);
     try {
-      final pickDir = widget.pickDirectoryOverride ??
-          () => FilePicker.getDirectoryPath();
-      final dir = await pickDir();
+      final picker = ref.read(filePickerServiceProvider);
+      final dir = await picker.pickDirectory();
       if (dir == null || dir.isEmpty) {
         return;
       }
       final dbPath = await _resolveDbPath();
       final outPath = '$dir/${_buildBackupFileName()}';
-      final exportFn = widget.exportBackupOverride ??
-          (String db, String out) =>
-              rust_api.exportBackupZip(dbPath: db, outZipPath: out);
-      await exportFn(dbPath, outPath);
+      final api = ref.read(backupApiClientProvider);
+      await api.exportBackup(dbPath: dbPath, outZipPath: outPath);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('已导出: $outPath')),
@@ -290,16 +233,8 @@ class _BackupPageState extends ConsumerState<BackupPage> {
       _pickedZipRecognized = null;
     });
     try {
-      final pickFile = widget.pickFileOverride ??
-          () async {
-            final result = await FilePicker.pickFiles(
-              type: FileType.custom,
-              allowedExtensions: ['zip'],
-            );
-            if (result == null || result.files.isEmpty) return null;
-            return result.files.single.path;
-          };
-      final path = await pickFile();
+      final picker = ref.read(filePickerServiceProvider);
+      final path = await picker.pickZipFile();
       if (path == null || path.isEmpty) {
         if (mounted) {
           setState(() => _pickedZipPath = null);
@@ -307,13 +242,8 @@ class _BackupPageState extends ConsumerState<BackupPage> {
         return;
       }
       // dry-run validate：列出 zip 内识别到的 Legado 备份文件名。
-      final validateFn = widget.validateZipOverride ??
-          (String zip) async {
-            final json = await rust_api.validateBackupZip(zipPath: zip);
-            final List<dynamic> list = jsonDecode(json);
-            return list.cast<String>();
-          };
-      final names = await validateFn(path);
+      final api = ref.read(backupApiClientProvider);
+      final names = await api.validateZip(zipPath: path);
       if (!mounted) return;
       setState(() {
         _pickedZipPath = path;
@@ -359,10 +289,8 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     setState(() => _importing = true);
     try {
       final dbPath = await _resolveDbPath();
-      final importFn = widget.importBackupOverride ??
-          (String db, String zip) =>
-              rust_api.importBackupZip(dbPath: db, zipPath: zip);
-      final summaryJson = await importFn(dbPath, path);
+      final api = ref.read(backupApiClientProvider);
+      final summaryJson = await api.importBackup(dbPath: dbPath, zipPath: path);
       if (!mounted) return;
       // 解析 ImportSummary：{books, groups, bookmarks, replace_rules, sources, errors}
       final label = formatImportSummaryLabel(
@@ -464,10 +392,11 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     // BATCH-18g (F-W2A-058)：走 json_store 公共 helper。readJsonFile 自吞
     // 异常返回 null（与原 catch (_) → null 等价）。url trim+empty→null
     // 校验保留在 caller，因为这是 backup_page 特有的"未配置"语义。
-    final map = await readJsonFile(
-      'webdav.json',
-      directory: widget.webdavConfigDirOverride,
-    );
+    //
+    // BATCH-20 (F-W2B-004)：删 webdavConfigDirOverride 测试钩子；测试改用
+    // tempDir 注入到 path_provider mock 即可（与 webdav_config_page_test.dart
+    // 一致）。
+    final map = await readJsonFile('webdav.json');
     if (map == null) return null;
     final url = (map['url'] as String?)?.trim() ?? '';
     if (url.isEmpty) return null;
@@ -504,21 +433,8 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     try {
       final dbPath = await _resolveDbPath();
       final fileName = _buildRemoteBackupFileName(cfg['deviceName']);
-      final fn = widget.webdavUploadOverride ??
-          ({
-            required String dbPath,
-            required String url,
-            required String user,
-            required String password,
-            required String fileName,
-          }) =>
-              rust_api.webdavUploadBackup(
-                  dbPath: dbPath,
-                  url: url,
-                  user: user,
-                  password: password,
-                  fileName: fileName);
-      await fn(
+      final api = ref.read(backupApiClientProvider);
+      await api.webdavUpload(
         dbPath: dbPath,
         url: cfg['url']!,
         user: cfg['user']!,
@@ -551,15 +467,8 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     }
     setState(() => _webdavBusy = true);
     try {
-      final listFn = widget.webdavListOverride ??
-          ({
-            required String url,
-            required String user,
-            required String password,
-          }) =>
-              rust_api.webdavListBackups(
-                  url: url, user: user, password: password);
-      final json = await listFn(
+      final api = ref.read(backupApiClientProvider);
+      final json = await api.webdavList(
         url: cfg['url']!,
         user: cfg['user']!,
         password: cfg['password']!,
@@ -590,22 +499,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
       if (!mounted) return;
       // 下载 + 导入
       final dbPath = await _resolveDbPath();
-      final dlFn = widget.webdavDownloadOverride ??
-          ({
-            required String dbPath,
-            required String url,
-            required String user,
-            required String password,
-            required String fileName,
-          }) =>
-              rust_api.webdavDownloadBackup(
-                dbPath: dbPath,
-                url: url,
-                user: user,
-                password: password,
-                fileName: fileName,
-              );
-      final summaryJson = await dlFn(
+      final summaryJson = await api.webdavDownload(
         dbPath: dbPath,
         url: cfg['url']!,
         user: cfg['user']!,
