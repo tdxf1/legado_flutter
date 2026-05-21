@@ -23,6 +23,7 @@ These guides help you **ask the right questions before coding**.
 |-------|---------|-------------|
 | [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md) | Identify patterns and reduce duplication | When you notice repeated patterns |
 | [Cross-Layer Thinking Guide](./cross-layer-thinking-guide.md) | Think through data flow across layers | Features spanning multiple layers |
+| [Backup AES Thinking Guide](./backup-aes-thinking-guide.md) | Decide whether to use, extend, or replace `legado_aes` | Before any change involving backup encryption or `legado_aes.rs` |
 
 ---
 
@@ -46,6 +47,15 @@ These guides help you **ask the right questions before coding**.
 - [ ] **You're creating a new utility/helper function** ← Search first!
 
 → Read [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md)
+
+### When to Think About Backup Encryption
+
+- [ ] You are about to call `encrypt_legado_aes` / `decrypt_legado_aes` / `try_decrypt_or_passthrough_array`
+- [ ] You are about to add a new "encrypted backup" feature
+- [ ] You are touching `backup_dao::import_from_zip` / `export_to_zip`
+- [ ] You see `tracing::warn!` related to "weak crypto" and want to silence it
+
+→ Read [Backup AES Thinking Guide](./backup-aes-thinking-guide.md)
 
 ---
 
