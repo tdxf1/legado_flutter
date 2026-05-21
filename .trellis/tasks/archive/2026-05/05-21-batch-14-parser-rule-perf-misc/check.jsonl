@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/rust-core/index.md", "reason": "Rust workspace 概览（含 quick verification 命令）"}
+{"file": ".trellis/spec/rust-core/quality-and-anti-patterns.md", "reason": "Code review 反模式清单（global state / 锁粒度等）"}
+{"file": ".trellis/spec/rust-core/error-handling.md", "reason": "Result<T,String> 边界 + 错误传递审查"}
+{"file": ".trellis/spec/rust-core/testing.md", "reason": "测试覆盖度 + 测试布局合规"}
+{"file": ".trellis/spec/rust-core/logging.md", "reason": "tracing 规范 + secret 扫描"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings.md", "reason": "master report 总索引（4 条 finding 状态需更新 Resolution）"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-rust-logic.md", "reason": "Wave 1B finding 原文（确认 4 条 finding Resolution 写哪）"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-14-parser-rule-perf-misc.md", "reason": "批次自身验收清单 vs 实际实现差异审查"}
+{"file": ".trellis/tasks/05-21-batch-14-parser-rule-perf-misc/prd.md", "reason": "本批 PRD 验收 + DoD"}
