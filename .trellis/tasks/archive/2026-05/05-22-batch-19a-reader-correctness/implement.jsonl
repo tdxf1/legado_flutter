@@ -1,0 +1,6 @@
+{"role": "system", "content": "BATCH-19a implement context"}
+{"file": ".trellis/tasks/05-22-batch-19a-reader-correctness/prd.md", "reason": "本批 PRD（4 P1 + ReaderSettings ==/hashCode）"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-core.md", "reason": "Wave 2A 详细 finding（F-W2A-004 line 84 / 005 line 96 / 006 line 108 / 007 line 120）"}
+{"file": "flutter_app/lib/core/providers.dart", "reason": "ReaderSettings ==/hashCode + replaceRuleGenerationProvider"}
+{"file": "flutter_app/lib/features/reader/reader_page.dart", "reason": "build watch 链路 + _onScroll debounce 拆 + _fetchSourceInfo setState 修复"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "Reader 正确性边界 + ReaderSettings 等价性契约"}

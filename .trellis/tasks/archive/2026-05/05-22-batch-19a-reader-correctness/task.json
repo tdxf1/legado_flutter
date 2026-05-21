@@ -1,0 +1,17 @@
+{
+  "id": "05-22-batch-19a-reader-correctness",
+  "title": "BATCH-19a Reader 正确性修复（4 P1 + ReaderSettings 等价性）",
+  "createdAt": "2026-05-22",
+  "completedAt": "2026-05-22",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "depends_on": ["05-22-batch-10-js-sandbox-extra-security"],
+  "context": {
+    "findings": ["F-W2A-004", "F-W2A-005", "F-W2A-006", "F-W2A-007"],
+    "roadmap": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-19-reader-state-machine-controller.md",
+    "split": "BATCH-19 拆 19a/19b/19c：19a 4 个 B-正确性 finding，19b 2 个性能 (selector + GlobalKey)，19c 2 个性能 (Listenable 拆层 + measure 同步化)"
+  }
+}
