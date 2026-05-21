@@ -51,6 +51,52 @@ Rules for adding a new settings key:
 
 The full list of keys is documented in `core/persistence/json_store.dart` doc-comment. Do not introduce a parallel persistence file for one-off keys; the `settings.json` shared object is intentional (BATCH-18c rationalized 17 ad-hoc files into one).
 
+## API Client Service Providers
+
+For pages that wrap one or more `rust_api.xxx` FRB calls, prefer wrapping the calls in a service class under `core/services/` rather than passing optional `*Override` callbacks through page constructors.
+
+Pattern (see `core/services/backup_api_client.dart`, `core/services/source_validation_service.dart` for canonical examples — both added in BATCH-20):
+
+```dart
+class BackupApiClient {
+  const BackupApiClient();
+
+  Future<void> exportBackup({required String dbPath, required String outZipPath}) {
+    return rust_api.exportBackupZip(dbPath: dbPath, outZipPath: outZipPath);
+  }
+  // ... methods 1:1 mirror rust_api.xxx names
+}
+
+final backupApiClientProvider = Provider<BackupApiClient>((ref) => const BackupApiClient());
+```
+
+Pages call `final api = ref.read(backupApiClientProvider); await api.exportBackup(...)`. Tests inject fakes via `ProviderScope(overrides: [backupApiClientProvider.overrideWithValue(_FakeBackupApiClient(...))])`. The fake extends (not implements) the real class so missing-override methods inherit production behavior — typically you only override the methods the test exercises.
+
+Why this pattern over the constructor `*Override` pattern documented in [testing.md](./testing.md):
+
+- Page constructors stay clean (no 10-field `*Override` lists like the pre-BATCH-20 `BackupPage`).
+- Multiple pages can share one client without re-declaring each override.
+- ProviderScope.overrides composes — multiple service overrides apply additively without constructor combinatorics.
+
+When to use which pattern:
+
+- **Service provider** (this section): when wrapping FRB calls grouped by feature area (backup, source validation, file picking).
+- **`*Override` constructor** (still allowed, see [testing.md](./testing.md)): when a single page has 1-3 cross-cutting overrides (e.g. `dbPathOverride` for path_provider bypass that doesn't fit a service abstraction). `BackupPage::dbPathOverride` is the canonical surviving example (BATCH-20 explicitly preserved).
+- **Riverpod provider override** (e.g. `dbPathProvider.overrideWith(...)`): when overriding existing provider-backed state, not adding new injection points.
+
+Existing services in `core/services/` (as of BATCH-20):
+
+- `backup_api_client.dart` — backup zip export/import + WebDAV upload/list/download
+- `file_picker_service.dart` — file_picker wrapper (directory + zip file pick)
+- `source_validation_service.dart` — `rust_api.validateSourceLive` wrapper for source liveness test
+
+Naming conventions:
+
+- File: `<feature>_<role>.dart` (e.g. `backup_api_client.dart`, not `backup_client.dart`).
+- Class: `XxxApiClient` for FRB wrappers, `XxxService` for cross-cutting helpers.
+- Provider: `xxxClientProvider` / `xxxServiceProvider` lowercase suffix.
+- Constructor: `const XxxApiClient()` — services are stateless.
+
 ## Derived State (Single Source of Truth)
 
 `fontSizeProvider` is **not** a `StateProvider`; it is a derived `Provider` reading from `readerSettingsProvider`:

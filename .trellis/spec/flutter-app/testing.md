@@ -38,6 +38,66 @@ Rules:
 - Override types match the production FRB signature. Use `String` / `int` / `bool` for primitives.
 - Always combine `dbPathOverride` with at least one FRB override. A test that fakes the FRB call but uses real `dbPath` still touches `path_provider`.
 
+## ProviderScope.overrides (preferred for new code)
+
+For new pages and refactors, prefer the `ProviderScope.overrides` pattern over `*Override` constructor params. See [state-and-providers.md::API Client Service Providers](./state-and-providers.md) for the rationale.
+
+Test pattern (canonical example: `test/backup_page_test.dart` post-BATCH-20):
+
+```dart
+testWidgets('BackupPage validate after pick + confirm', (tester) async {
+  int validateCalls = 0;
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        backupApiClientProvider.overrideWithValue(
+          _FakeBackupApiClient(
+            onValidate: (zip) async {
+              validateCalls++;
+              return ['bookshelf.json', 'bookGroup.json'];
+            },
+          ),
+        ),
+        filePickerServiceProvider.overrideWithValue(
+          _FakeFilePickerService(onPickZipFile: () async => '/tmp/test.zip'),
+        ),
+      ],
+      child: const MaterialApp(
+        home: BackupPage(dbPathOverride: '/tmp/legado-test.db'),
+      ),
+    ),
+  );
+  // ... assertions
+});
+
+class _FakeBackupApiClient extends BackupApiClient {
+  final Future<List<String>> Function(String)? onValidate;
+  // ... other optional callbacks
+  const _FakeBackupApiClient({this.onValidate, ...}) : super();
+
+  @override
+  Future<List<String>> validateZip({required String zipPath}) {
+    final fn = onValidate;
+    if (fn == null) throw UnimplementedError('onValidate not configured');
+    return fn(zipPath);
+  }
+  // ... only override methods the test exercises
+}
+```
+
+Rules for fakes:
+
+- `extends`, not `implements` — production behavior inherited for un-overridden methods.
+- Optional callback fields per method — lets tests configure precisely the methods they exercise; un-configured methods throw `UnimplementedError` to surface accidental real calls.
+- `const` constructor when callbacks are nullable.
+- Place fakes at the top of the test file unless 2+ tests share the same fake (then move to `test/_helpers/fakes.dart`).
+- Fakes are package-private (`_FakeXxx` underscore prefix) unless shared across files.
+
+When still to use `*Override` constructor (legacy pattern):
+
+- Single cross-cutting injection that doesn't fit a service abstraction. `dbPathOverride` for path_provider bypass is the canonical surviving example (preserved by BATCH-20).
+- Existing pages with established `*Override` test surface — don't migrate just for consistency; migrate when refactoring the page anyway.
+
 ## Helper Tests
 
 Pure helpers in `core/util/` get plain `test(...)` blocks (no widget tree):
