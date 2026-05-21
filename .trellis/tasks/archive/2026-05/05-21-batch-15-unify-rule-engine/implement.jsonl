@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/rust-core/index.md", "reason": "Rust workspace 概览 + crate 边界"}
+{"file": ".trellis/spec/rust-core/directory-structure.md", "reason": "core-source 模块归属确认（rule_engine / legado/rule 子模块）"}
+{"file": ".trellis/spec/rust-core/error-handling.md", "reason": "Result<T,String> + 静默错误禁令（BATCH-23 sweep）+ #[deprecated] 与 -D warnings 关系"}
+{"file": ".trellis/spec/rust-core/quality-and-anti-patterns.md", "reason": "Forbidden Patterns + Performance Traps + Resolved-by-Design 模板（本批要加 Legado 规则单一执行路径段）"}
+{"file": ".trellis/spec/rust-core/testing.md", "reason": "新单测布局 + sy/*.json 回归测试集惯例"}
+{"file": ".trellis/spec/rust-core/logging.md", "reason": "tracing::warn! ladder（execute_css_rule || 分支 Err 加 warn 用）"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-rust-logic.md", "reason": "F-W1B-032/033/035/037/040/041 finding 原文"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-15-unify-rule-engine.md", "reason": "批次自身验收 + 测试策略"}
