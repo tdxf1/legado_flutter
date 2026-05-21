@@ -189,6 +189,12 @@
 
 **建议**: 在 Rust 端加 `rss_article_get_by_origin_link(origin, link) -> RssArticle` 桥；同时 detail 页用 `Future.wait` 并行发 list + is_starred + fetch_html（list 改成单条查询后开销可忽略）。
 
+**Resolution (BATCH-21, 2026-05-21，方案 A 仅 Flutter 层)**: 闭环（缩范围）。`rss_article_detail_page.dart::_bootstrap` 把 source / article / isStarred 三个独立 FRB 调用包成 `Future.wait`（互不依赖），mark_read 仍串行（依赖 article.read_time），fetchHtml 也保留独立串行（保留独立错误分支语义：fetch 失败仍能展示 source/article 元数据 + 错误占位）。三个并行 fn 各自包 `Future`：sourceOverride 优先，否则 `rust_api.rssSourceGet`；articleOverride 优先，否则 `rssListArticles` + 全量遍历找 widget.link；isStarredOverride 优先，否则 `rssStarIsStarred`，并加 `.catchError((_) => false)` 与原静默 catch 语义对齐。Latency 收益：list (~50ms) + isStarred (~10ms) 串行 → 并行 max(50, 10) = 50ms，消减 ~10ms；FRB 桥 + fetchHtml 完全并行（含网络 ~200ms）需要 fetchHtml 加入 Future.wait，本批未做（保留独立错误分支语义优先）。
+
+**未做**：FRB 桥 `rss_article_get_by_origin_link`（Rust dao 已有 line 147 + 单测 line 464，但缺 FRB pub fn + binding regen + .so 重打包）— PRD Out of Scope，留 BATCH-21b。FRB 桥能把全数组遍历从 ~50ms 降到 ~5ms（单条 SELECT），收益清晰但跨层 effort 大。
+
+新增 1 case widget test 验证 isStarred future 在 fetch 启动前先发起（用 `Completer<bool>` + `Completer<Map>` 跟踪 started flag，验并行启动顺序）。
+
 ---
 
 ### F-W2B-010 [P1 主要][D-安全][rss/article_detail]
@@ -229,6 +235,10 @@
 
 **建议**: detail 页通过 GoRouter `state.extra` 或 Riverpod 通知 list 页"实际持久化结果"，list 页根据回调要么保留 optimistic 状态要么 rollback；最少加注释说明这是"软一致"行为。
 
+**Resolution (BATCH-21, 2026-05-21，仅文档化)**: 闭环（缩范围）。`rss_article_list_page.dart::_onArticleTap` 既有注释扩充"软一致语义"段，明确说明：(a) optimistic 已读 dot 在点击时立即变灰；(b) mark_read 真正写入由 detail 页 init 完成（避免列表 + 详情双写）；(c) detail 写库失败时本次返回 list 仍显示已读（optimistic），但下次 _loadArticles 拉取会恢复 stale read_time = 0；(d) trade-off：避免双写 + 立即视觉反馈，代价是失败时下次自然修正而不是立即 rollback。
+
+**未做**：detail → list 的 rollback 通信机制（GoRouter `state.extra` 回传 / Riverpod 通知）— PRD Out of Scope，留 BATCH-21c future work（rollback 复杂度高 ROI 低）。
+
 ---
 
 ### F-W2B-013 [P1 主要][C-性能][rss/article_list]
@@ -241,6 +251,12 @@
 
 **建议**: 把每个 tab 的 article 列表抽成 ConsumerWidget 配合 `StateProvider<List<...>>.family((sort))`，仅订阅自己 sort 的 provider；或退而求其次用 `AutomaticKeepAliveClientMixin` 让未激活 tab 不参与 build。
 
+**Resolution (BATCH-21, 2026-05-21，方案 A 退而求其次 KeepAlive)**: 闭环（PRD 选 KeepAlive 不选 family 重构）。`rss_article_list_page.dart` 把 `_buildArticleList` 方法抽成 `_ArticleTabView extends StatefulWidget` + `_ArticleTabViewState with AutomaticKeepAliveClientMixin`；`wantKeepAlive => true`，build 内必须调 `super.build(context)`。`_buildArticleTile` / `_buildThumbnail` 同步从 `_RssArticleListPageState` 私有 method 改为 file-private top-level fn（无状态依赖，可独立提取）。TabBarView children 从 `[for t in _tabs _buildArticleList(context, t.name)]` 改为 `[for (final t in _tabs) _ArticleTabView(key: ValueKey('rss_tab_${t.name}'), sortName: t.name, articles: _articlesBySort[t.name], onRefresh: () => _loadArticles(t.name, refresh: true), onTap: _onArticleTap)]`；ValueKey 让 tab 列表重排时正确复用。父组件 setState 重建 TabBarView 时，KeepAlive 让切走的 tab 保留 ListView state + scroll position（不丢）。
+
+新增 1 case widget test 验证：30 条文章的 tab 滚到中段 → 切到另一 tab → 切回原 tab，验"标题 0"仍不可见（KeepAlive 保留 scroll offset；如失效会回到顶部）。
+
+**未做**：`StateProvider<List<...>>.family((sort))` 完整 per-tab 重构（roadmap 推荐方案）— PRD Out of Scope，~150 行 article_list_page.dart 重写，KeepAlive 是退而求其次方案，最小改动消除 tab 切换 scroll position 丢失 + ListView state 重建问题。
+
 ---
 
 ### F-W2B-014 [P1 主要][B-正确性][rss/source_manage]
@@ -252,6 +268,21 @@
 **详细**: 这种 in-place 修改在 immutable-data 风格的 Riverpod / setState 流程里属于异类。注释承认"局部更新 record 避免重拉整个列表（也方便测试断言）"，但混合 mutable 与 immutable 状态后期维护风险高。
 
 **建议**: 改用 `_records = List.of(_records)..[idx] = {...record, 'enabled': newValue}`，保持 immutable update。
+
+**Resolution (BATCH-21, 2026-05-21)**: 闭环。`rss_source_manage_page.dart::_onToggleEnabled` 把 `setState(() { record['enabled'] = newValue; })` 改成：
+
+```dart
+final idx = _records.indexOf(record);
+if (idx < 0) return; // record 已不在列表（被 import/delete 替换）
+setState(() {
+  _records = List.of(_records)
+    ..[idx] = {...record, 'enabled': newValue};
+});
+```
+
+`List.of(_records)` 复制顶层 list；`{...record, 'enabled': newValue}` 复制目标 record map；旧 `_records` 引用 / 旧 record 引用都不变 —— 调用方持原引用做对比时拿到原值，不会被原地改写。`indexOf` 用 reference equality（Map 没 override `==`），符合"找到 record 自身"语义；若 record 已不在列表（比如导入/删除发生在 await 期间）idx = -1 早返回，不抛错。
+
+新增 1 case widget test 验证：持原 record 引用，toggle 后 `originalRecord['enabled']` 仍是旧值（true，未被原地改），UI Switch.value 已显示新值（false）。
 
 ---
 
@@ -303,6 +334,10 @@
 
 **建议**: throttle SSE updates（如 100ms 一批），或仅在 stream 累积到一定数量时触发 setState；同时 precision 过滤结果可缓存（增量计算：新到的条目单独过滤后追加）。
 
+**Resolution (BATCH-18b, 2026-05-19，间接 Resolved)**: 闭环。BATCH-18b 在 search_page.dart 整体重构时删除了 `_doSearchViaSse` 路径（连同 transport / SSE 整组 ~700 行），search 改回纯 Future-based 多书源并行模式。`List.unmodifiable` 在 search_page.dart 中已无残留（grep 0 命中）。F-W2B-018 描述的"SSE 每条 result 都重算 precision 过滤"问题随 SSE 路径删除自然消失。
+
+BATCH-21 PRD 实测确认本 finding 已 Resolved，未做任何额外改动；master findings.md 双 Resolution 标记 (Resolved by BATCH-18b)。
+
 ---
 
 ### F-W2B-019 [P1 主要][B-正确性][search]
@@ -314,6 +349,14 @@
 **详细**: 用户输入"剑来" → enter → 同时输入"凡人" → enter；旧"剑来"的 futures 仍在跑，后完成时 `_results.value = ...` 会覆盖"凡人"的结果。`_loading` flag 也跟着变化，导致 UI 抖动。
 
 **建议**: 用 `int _searchSeq` 自增 token，每次 `_doSearch` 检查"我是不是最新一次"再 setState；或退而求其次只在 `mounted && _searchCtrl.text == keyword` 时才更新结果。SSE 路径 `_doSearchViaSse` 同问题。
+
+**Resolution (BATCH-21, 2026-05-21)**: 闭环。`search_page.dart::_SearchPageState` 加 `int _searchSeq = 0;` 字段 + `@visibleForTesting int get debugSearchSeq`。`_doSearch` 入口先 `final seq = ++_searchSeq;` 再走原 await 链；每个 await 后 + finally 内都改 `if (!mounted || seq != _searchSeq) return;`（替代原 `if (!mounted) return;`），共 ~9 处校验点。语义：用户在第一次 search 未完成时启动第二次 → seq 从 1 自增到 2，第一次 await 完成后 `seq=1 ≠ _searchSeq=2` 拦截 early-return，不会写 `_results.value` / 不会改 `_loading`。第二次 search seq=2 与 _searchSeq 一致，正常完成。
+
+SSE 路径已被 BATCH-18b 删除（见 F-W2B-018），不再涉及。
+
+新增 1 case widget test 验证：用 hanging `dbInitializedProvider` future 让两次 `_doSearch` 都悬停在 await 处；第一次输入 "A" 后 `_searchSeq=1`、`_lastSearchKeyword='A'`；第二次输入 "B" 经 `onSubmitted` 触发后 `_searchSeq=2`、`_lastSearchKeyword='B'`；解开 future 后两次 await 都恢复，但旧的 seq 校验拦截，`_lastSearchKeyword` 仍为 'B'（未被旧 future 覆盖回 'A'）。
+
+`grep _searchSeq lib/features/search/search_page.dart` 命中 15 处（声明 + debug getter + 入口自增 + 多个 await 后校验 + finally 内）。
 
 ---
 
@@ -496,6 +539,22 @@
 **详细**: 异步 await rssGetArticles 失败后，setState 已检查 mounted（line 254 `if (!mounted) return;` 在 try 中），catch 中也有 `if (!mounted) return;`（line 254）但 ScaffoldMessenger 调用在 setState 之后无 mounted 重检；理论上 setState 调用本身在 unmounted 时是 no-op，但 ScaffoldMessenger 抛 assertion。
 
 **建议**: 在 ScaffoldMessenger 调用前加 mounted 检查，或把 try-catch 内 mounted check 提到方法开头并用 early return。
+
+**Resolution (BATCH-21, 2026-05-21，verified clean)**: 闭环（实测无需改动）。审查 `rss_article_list_page.dart::_loadArticles` 当前 catch 块（line 253-259）已是 early-return 风格：
+
+```dart
+} catch (e) {
+  if (!mounted) return;            // ← line 254 已有早返回
+  setState(() => _refreshingSort = null);
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('拉取失败: $e')),
+  );
+}
+```
+
+Finding 描述"没有 if (!mounted) return; 保护"略不准 —— 254 行已经有 early-return，后续 setState + ScaffoldMessenger 都安全。BATCH-21 PRD 实测确认本 finding 已 OK，未做任何代码改动；仅在 master findings 标 Resolved-by-BATCH-21 让索引一致。
+
+姊妹 catch 块（`_bootstrap` line 169-175 + `_RssSourceManagePageState._load` 等）抽样审查，均已是 early-return 风格，无需修改。BATCH-25 已完成 features 层 `safeSetState` 系统性扫荡，覆盖了 mounted check 风格统一议题。
 
 ---
 

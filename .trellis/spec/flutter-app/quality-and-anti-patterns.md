@@ -40,6 +40,9 @@ This is acceptable because the extension is a thin syntactic wrapper. New `// ig
 | `Uri.parse(remoteUrl)` 不经 `enforceWebViewScheme` 直接走 `loadRequest` / `dio.get` | 让 `file://` / `javascript:` / `data:` 越界 scheme 进 webview 是 SSRF / 任意代码执行入口。任何远端 URL 必经 scheme 白名单。 | BATCH-05 (`webview_safety.dart`) |
 | New webview caller uses `JavaScriptMode.unrestricted` without ADR | reader is the only business-justified case; new callers default to `disabled` and must document the necessity. | BATCH-05 |
 | JS 返回值 fallback `text.substring(1, text.length - 1)` 粗暴去引号 | 在 JSON-string 含转义时丢内容；用 `safeJsResultDecode(rawResult)`。 | BATCH-05 (F-W2A-010) |
+| `record['x'] = newValue` 原地修改 list-of-maps 元素 | 列表上多个 caller 持原 record 引用时 mutation aliasing；用 `_records = List.of(_records)..[idx] = {...record, 'x': newValue}` immutable update。 | BATCH-21 (F-W2B-014) |
+| 多 future 调用入口缺 seq token | 用户连续触发同一 async action（搜索、刷新）时旧 future 后完成会"幽灵"覆盖新结果；加 `int _xxxSeq` 自增 token + 每个 await 后 `seq == _xxxSeq` 校验 + finally 内同样校验。 | BATCH-21 (F-W2B-019) |
+| TabBarView children 直接 `[for t in _tabs _buildXxx(...)]` method 返回 | 父 setState 让所有 tab 同时 rebuild + 切走的 tab 丢 scroll position；抽 `_XxxTabView` `StatefulWidget` + `AutomaticKeepAliveClientMixin`，build 内调 `super.build(context)`。 | BATCH-21 (F-W2B-013) |
 
 ## 凭据保险柜 (Credential Vault, BATCH-03)
 
@@ -210,6 +213,123 @@ QR 扫码 `_fetchText` 加：
 ### 测试钩子
 
 `webview_safety.dart` 是纯函数，无需 override 钩子；在 widget test 里直接调 `enforceWebViewScheme('https://x') / classifyHost('http://192.168.1.1')` 即可。caller-level 测试（如 `qr_scan_page_test.dart`）通过既有 `*Override` 钩子覆盖（`scanResultOverride` / `permissionDeniedOverride` 等）。
+
+
+## 列表 reactivity 模式 (BATCH-21)
+
+**TabBarView 多 tab 列表、list-of-maps 局部 update、长 async 链路下的旧 future 防护**三个高频场景在 RSS / search 主题集中出现。BATCH-21 把它们的最小防御模板沉淀下来。
+
+### KeepAlive vs StateProvider.family 选择
+
+| 场景 | 推荐方案 |
+|---|---|
+| TabBarView children 直接 method 返回 widget，setState 重建 → 多 tab 同时 build + scroll position 丢 | 抽 `_XxxTabView extends StatefulWidget` + `AutomaticKeepAliveClientMixin`（退而求其次） |
+| 同上 + 单 tab 数据需要细粒度订阅 / 跨页面共享 | `StateProvider.family((sort))` per-tab（最优，但侵入大） |
+
+`AutomaticKeepAliveClientMixin` 模板：
+
+```dart
+class _XxxTabView extends StatefulWidget {
+  final String sortName;
+  final List<Map<String, dynamic>>? articles;
+  // ... callbacks ...
+  const _XxxTabView({super.key, ...});
+
+  @override
+  State<_XxxTabView> createState() => _XxxTabViewState();
+}
+
+class _XxxTabViewState extends State<_XxxTabView>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context); // KeepAlive 必须，否则 mixin 不生效
+    // ... build body
+  }
+}
+```
+
+TabBarView children 用 ValueKey 锁 tab 名，让 tab 列表重排时正确复用：
+
+```dart
+TabBarView(
+  controller: _tabController,
+  children: [
+    for (final t in _tabs)
+      _XxxTabView(
+        key: ValueKey('xxx_tab_${t.name}'),
+        sortName: t.name,
+        // ...
+      ),
+  ],
+)
+```
+
+KeepAlive 让切走的 tab 保留 ListView state + scroll position。父组件 setState 重建 TabBarView 时，未激活 tab 不参与 build。
+
+### Immutable update 模板
+
+list-of-maps 局部更新单个元素：
+
+```dart
+// ❌ 反模式：原地修改 record map
+setState(() {
+  record['enabled'] = newValue;
+});
+
+// ✅ 推荐：immutable update
+final idx = _records.indexOf(record);
+if (idx < 0) return; // record 已不在列表（被另一 codepath 替换）
+setState(() {
+  _records = List.of(_records)
+    ..[idx] = {...record, 'enabled': newValue};
+});
+```
+
+`List.of(_records)` 复制顶层 list；`{...record, 'enabled': newValue}` 复制目标 record map。旧 `_records` / 旧 record 引用都不变 —— 多个 caller 持引用时拿到原值，不会被原地改写造成 mutation aliasing。
+
+`indexOf` 用 reference equality（Map 没 override `==`），符合"找到 record 自身"语义；找不到 idx = -1 早返回不抛错。
+
+### Future seq token 模板
+
+用户连续触发同一 async action（搜索 / 刷新 / 加载下一页）时，旧 future 仍在跑（FRB 无 cancel API），后完成时会"幽灵"覆盖新结果。模板：
+
+```dart
+class _XxxState extends State<XxxPage> {
+  int _xxxSeq = 0;
+
+  Future<void> _doXxx() async {
+    // ...入口校验 + 同步赋值...
+    final seq = ++_xxxSeq;
+    setState(() => _loading = true);
+    try {
+      final dbPath = await ref.read(dbPathProvider.future);
+      if (!mounted || seq != _xxxSeq) return;
+      final data = await rust_api.fetchSomething(dbPath: dbPath);
+      if (!mounted || seq != _xxxSeq) return;
+      // ...处理结果，写 _data...
+    } catch (e) {
+      if (!mounted || seq != _xxxSeq) return;
+      // ...处理错误...
+    } finally {
+      if (mounted && seq == _xxxSeq) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+}
+```
+
+每个 await 后判 `seq == _xxxSeq` 拦截旧 future；finally 内同样校验避免旧 future 把 _loading 改回 false。建议加 `@visibleForTesting int get debugXxxSeq => _xxxSeq;` 让 widget test 验证 seq 自增 + 旧值不被覆盖。
+
+### 测试钩子（BATCH-21 范本）
+
+- `rss_article_list_page_test.dart::BATCH-21 (F-W2B-013): KeepAlive` — 30 篇文章滚到中段 → 切 tab → 切回，验"标题 0"仍不可见（如 KeepAlive 失效会回到顶）
+- `rss_source_manage_page_test.dart::BATCH-21 (F-W2B-014): immutable update` — 持原 record 引用，toggle 后断言原引用未被原地改写
+- `search_page_test.dart::BATCH-21 (F-W2B-019): seq token` — 用 hanging dbInitializedProvider future 让两次 `_doSearch` 都悬停，验 `debugSearchSeq` 从 1 自增到 2，`debugLastSearchKeyword` 不被旧 future 覆盖
 
 
 ## Performance Notes
