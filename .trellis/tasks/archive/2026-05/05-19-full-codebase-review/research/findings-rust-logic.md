@@ -176,6 +176,8 @@
 
 **建议**: 让 Runtime/Context 在 BookSourceParser 实例上下文里复用（per-source 池）；或显式把 `java.put` 写到 `LEGADO_JS_VARIABLES` thread_local（write-through），这样下次 eval 还能拿到。
 
+**Resolution**: BATCH-11 (2026-05-21) — 选 write-through 方案（pool 化属 BATCH-13）。新增 `__legado_js_put` bridge：PREAMBLE `java.put(k, v)` 同时写 JS 端 `_vars` + Rust 端 `LEGADO_JS_VARIABLES` thread_local。配套加 `__legado_js_get` bridge 让 PREAMBLE `java.get(k)` 在 JS-side `_vars` 缺值时回落到 thread_local。下次 eval（即使 Runtime 重建）的 `java.get` 仍能拿到上一轮 put 的值。新增单测 `test_java_put_persists_across_eval` 覆盖跨 eval 持久化（同一 OS 线程内）。生产路径 `eval_default_with_http_state` 的 `JsVariablesOverride` RAII guard 仍按帧快照/恢复 thread_local，更长跨度的状态共享留给 `RuleContext::shared_variables`。task: 05-21-batch-11-js-runtime-correctness。
+
 ---
 
 ### F-W1B-012 [P1 主要][B-正确性][core-source/legado/js_runtime]
@@ -187,6 +189,8 @@
 **详细**: 后续 `js_json_to_legado` 在 json == "undefined" 返回 Null（line 483），但 `JSON.stringify(undefined)` 实际返回 `undefined` 字符串 → ok。但 `JSON.stringify(function(){})` 返回 `undefined` 同理 → 函数返回值丢失。Legado 真实规则常 `return [item1, item2]`（数组）—— 这里 OK；但 `result` 是一个有 toString 但非 JSON-safe 的对象时（如 java._wrapElement 返回的 wrapper）会被序列化成空对象 `{}`。
 
 **建议**: 文档化这个限制；或在 PREAMBLE 增加 `result.toString` 兜底；或 wrapper 提供 `toJSON`。
+
+**Resolution**: BATCH-11 (2026-05-21, 缩范围) — 选 wrapper-only 方案：PREAMBLE `java._wrapElement` 加 `toJSON: function() { return this.text(); }`，让 wrapper 在 `JSON.stringify` 时自然返回字符串而非 `{}`。**未做**全局 stringify wrapper 兜底（会改变所有 eval 输出路径行为，风险扩散）。书源作者写 `return undefined / function(){}` 的场景仍属作者错误，不在框架层兜底。新增单测 `test_wrap_element_to_json_returns_text` 覆盖。task: 05-21-batch-11-js-runtime-correctness。
 
 ---
 
@@ -212,6 +216,8 @@
 
 **建议**: 用 BTreeMap 排序后再生成（更稳定 + 单测可重复）；长期用 rquickjs 直接 set object property 而非字符串 eval（更快也更安全）。
 
+**Resolution**: BATCH-11 (2026-05-21) — `legado_value_to_js_expr` Map 分支：把 `&HashMap<String, LegadoValue>` 的 entries 收集到 `BTreeMap<&String, &LegadoValue>` 后再遍历输出，生成的 JS 对象字面量按 key 字典序稳定。**未改** `LegadoValue::Map(HashMap<...>)` 类型定义（属类型层重构，本批不动）。新增单测 `test_legado_value_to_js_expr_map_key_order_stable` 跑 10 次断言输出完全相同 + 显式校验字典序。task: 05-21-batch-11-js-runtime-correctness。
+
 ---
 
 ### F-W1B-015 [P1 主要][B-正确性][core-source/legado/js_runtime]
@@ -224,6 +230,8 @@
 
 **建议**: JS bridge 增加 `__legado_resolve_url` 用 url crate 实现，PREAMBLE 调它；删除 JS 端手写实现。
 
+**Resolution**: BATCH-11 (2026-05-21) — 新增 `__legado_resolve_url(value, base)` bridge 直接调 `crate::utils::build_full_url`（基于 `url::Url::join`）。PREAMBLE `_resolveUrl` 简化为单行委托：`function(value, base) { return __legado_resolve_url(...); }`。原 JS 手写实现（`//host` 兜底 https / `?query`、`#fragment` 拆分等）全部删除。`element.absUrl(...)`（JS 路）与 `crate::utils::build_full_url`（Rust 路）输出 byte-identical，cache key 与 redirect chain 一致。新增单测 `test_resolve_url_consistent_with_rust` 覆盖 7 个 case（绝对/相对/`//host`/`?query`/`#frag`/`../d`/已含 scheme）断言 JS 与 Rust 路径输出完全一致。task: 05-21-batch-11-js-runtime-correctness。
+
 ---
 
 ### F-W1B-016 [P1 主要][B-正确性][core-source/legado/js_runtime]
@@ -235,6 +243,8 @@
 **详细**: 边界 `1_000_000_000`（约 2001-09-09）和 `1_000_000_000_000`（约 2001-09-09 ms）都是合法时间戳。负数（pre-1970）也被这条 abs() 规则错误压缩。
 
 **建议**: 改成显式格式（毫秒 vs 秒）通过额外参数指定，或用 `>= 10^11` 判定毫秒；记录 Legado 原项目的语义（chrono 默认毫秒）。
+
+**Resolution**: BATCH-11 (2026-05-21) — `java_time_format` 启发式改为单边阈值 `if timestamp >= 100_000_000_000 { /= 1000 }`（≈1973-03-03 ms）。删除 `abs()` 压缩 — 负数（pre-1970 秒级）保留正确。秒级 `999_999_999`（2001-09-09）不再被误当毫秒。误判带：1970-01-01 ~ 1973-03-03 之间的合法毫秒戳（≈13 个月窗口）会被当作秒，但中文小说书源里这种值不现实。同时同步更新原有测试 `test_java_time_format_bridge`：`java.timeFormat(60000)` 现在返回 `1970/01/01 16:40`（按秒解释）而非旧版按毫秒压缩后的 `1970/01/01 00:01` —— 这是被刻意修正的旧 bug 行为。新增单测 `test_java_time_format_seconds_boundary` 覆盖 5 个边界 case（999_999_999s / 100_000_000_000ms / 1_700_000_000s / 1_700_000_000_000ms / -1_000_000_000s）。task: 05-21-batch-11-js-runtime-correctness。
 
 ---
 

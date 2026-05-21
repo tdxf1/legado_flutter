@@ -468,11 +468,21 @@ fn legado_value_to_js_expr(value: &LegadoValue) -> String {
             format!("[{}]", items.join(", "))
         }
         LegadoValue::Map(map) => {
-            let mut pairs = Vec::new();
-            for (key, value) in map {
-                let key = serde_json::to_string(key).unwrap_or_else(|_| "\"\"".into());
-                pairs.push(format!("{}:{}", key, legado_value_to_js_expr(value)));
-            }
+            // F-W1B-014 (BATCH-11): collect entries into BTreeMap so the
+            // generated JS object literal has stable key order; without
+            // this the underlying HashMap would reshuffle on every eval
+            // and JS rules like `Object.keys(book)[0]` would observe
+            // non-deterministic results. We sort at the *output* boundary
+            // only — `LegadoValue::Map(HashMap<...>)` itself stays.
+            let sorted: std::collections::BTreeMap<&String, &LegadoValue> = map.iter().collect();
+            let pairs: Vec<String> = sorted
+                .iter()
+                .map(|(k, v)| {
+                    let key_lit =
+                        serde_json::to_string(k.as_str()).unwrap_or_else(|_| "\"\"".into());
+                    format!("{}:{}", key_lit, legado_value_to_js_expr(v))
+                })
+                .collect();
             format!("{{{}}}", pairs.join(","))
         }
     }
@@ -793,6 +803,27 @@ fn register_quickjs_bridge(ctx: &rquickjs::Ctx<'_>) -> Result<(), String> {
                 .map_err(|e| format!("register replaceFontByUrls: {e}"))?,
         )
         .map_err(|e| format!("set replaceFontByUrls: {e}"))?;
+    global
+        .set(
+            "__legado_resolve_url",
+            Function::new(ctx.clone(), java_resolve_url)
+                .map_err(|e| format!("register resolveUrl: {e}"))?,
+        )
+        .map_err(|e| format!("set resolveUrl: {e}"))?;
+    global
+        .set(
+            "__legado_js_put",
+            Function::new(ctx.clone(), java_js_put)
+                .map_err(|e| format!("register jsPut: {e}"))?,
+        )
+        .map_err(|e| format!("set jsPut: {e}"))?;
+    global
+        .set(
+            "__legado_js_get",
+            Function::new(ctx.clone(), java_js_get)
+                .map_err(|e| format!("register jsGet: {e}"))?,
+        )
+        .map_err(|e| format!("set jsGet: {e}"))?;
     Ok(())
 }
 
@@ -1583,7 +1614,20 @@ fn java_time_format(input: String) -> String {
     let Ok(mut timestamp) = trimmed.parse::<i64>() else {
         return trimmed.to_string();
     };
-    if timestamp.abs() >= 1_000_000_000_000 || timestamp.abs() < 1_000_000_000 {
+    // F-W1B-016 (BATCH-11): single-sided threshold >= 10^11 ms (≈1973-03-03).
+    // The original heuristic `abs() >= 10^12 || abs() < 10^9` had two bugs:
+    // 1) seconds-level timestamps below 10^9 (e.g. 999_999_999 ≈ 2001-09-09)
+    //    were incorrectly divided by 1000 and ended up around 1970.
+    // 2) `abs()` collapsed negative (pre-1970) timestamps onto the positive
+    //    branch and could trigger spurious /1000 reduction.
+    // The new threshold trades a much narrower mis-classification window
+    // (1970-01-01 ~ 1973-03-03 of legitimate millisecond stamps would still
+    // be treated as seconds, ≈13 months) for correctness on the much more
+    // common seconds-level inputs Legado sources actually emit. The original
+    // Legado project is Kotlin/chrono-style with millisecond defaults; we
+    // document the trade-off here and stay backwards-compatible for typical
+    // 10-digit/13-digit values.
+    if timestamp >= 100_000_000_000 {
         timestamp /= 1000;
     }
     chrono::DateTime::from_timestamp(timestamp, 0)
@@ -1627,6 +1671,57 @@ fn java_html_format(input: String) -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// F-W1B-015 (BATCH-11): Bridge that delegates to `crate::utils::build_full_url`
+/// (backed by the `url` crate's `Url::join`). The PREAMBLE used to ship its
+/// own hand-rolled JS implementation of `_resolveUrl` whose behaviour drifted
+/// from the Rust-side resolver (different handling of `//host`, `?query`,
+/// `#fragment`, IPv6, scheme fallback). Routing both sides through this
+/// bridge makes JS-driven `element.absUrl(...)` and Rust-driven
+/// `build_full_url` produce byte-identical URLs so cache keys and redirect
+/// chains agree.
+#[cfg(feature = "js-quickjs")]
+fn java_resolve_url(value: String, base: String) -> String {
+    crate::utils::build_full_url(&base, &value)
+}
+
+/// F-W1B-011 (BATCH-11): Persist `java.put(key, value)` across separate
+/// `eval()` invocations.
+///
+/// `QuickJsRuntime::eval` builds a fresh `Runtime` + `Context` per call, so
+/// the JS-side `this._vars` (a copy of `__legado_variables__`) is dropped
+/// at the end of each eval. Real Legado sources rely on `java.put` writing
+/// into a process-wide bucket so that, e.g., `search` can stash a token
+/// that `getContent` later reads via `java.get`.
+///
+/// The bridge writes through to `LEGADO_JS_VARIABLES` (the thread-local
+/// vars map). The companion `__legado_js_get` bridge reads from the same
+/// thread-local; PREAMBLE's `java.get` falls back to it whenever the
+/// JS-side `_vars` does not yet have the key. This makes "put in eval A,
+/// get in eval B on the same thread" work for both raw `eval()` callers
+/// (e.g. unit tests) and the production path through
+/// `eval_default_with_http_state`. Note: the `JsVariablesOverride` RAII
+/// guard installed by `eval_default_with_http_state` snapshots / restores
+/// the thread-local around each eval, so persistence beyond a single
+/// guard scope still requires the parser to thread state via
+/// `RuleContext::shared_variables` — that broader change belongs to
+/// BATCH-13's Runtime-pool work and is out of scope here.
+#[cfg(feature = "js-quickjs")]
+fn java_js_put(key: String, value: String) -> String {
+    set_current_js_variable(key, LegadoValue::String(value.clone()));
+    value
+}
+
+/// F-W1B-011 (BATCH-11): Read the thread-local var bucket for use as the
+/// PREAMBLE-side `java.get` fallback. Returns `""` when missing so the JS
+/// side can keep its existing "missing key returns empty string" contract.
+#[cfg(feature = "js-quickjs")]
+fn java_js_get(key: String) -> String {
+    current_js_variables()
+        .get(&key)
+        .map(|v| v.as_string_lossy())
+        .unwrap_or_default()
 }
 
 #[cfg(feature = "js-quickjs")]
@@ -2175,14 +2270,37 @@ var java = {
         return { body: function() { return responseBody; }, toString: function() { return responseBody; } };
     },
     get: function(keyOrUrl, headers) {
-        if (arguments.length <= 1) return this._vars[String(keyOrUrl)] || '';
+        if (arguments.length <= 1) {
+            // F-W1B-011 (BATCH-11): when used as `java.get(key)` (i.e. the
+            // companion of `java.put`), fall back to the thread-local
+            // bucket whenever the JS-side `_vars` does not have the key.
+            // Without this, `java.put` in eval A would never be visible to
+            // `java.get` in eval B because each eval rebuilds `_vars` from
+            // `__legado_variables__`.
+            var k = String(keyOrUrl);
+            var local = this._vars[k];
+            if (local !== undefined && local !== null && local !== '') return local;
+            return __legado_js_get(k);
+        }
         var headersJson = JSON.stringify(this._mergeHeaders(headers));
         var responseBody = __legado_http_request('GET', String(keyOrUrl), '', headersJson);
         return { body: function() { return responseBody; }, toString: function() { return responseBody; } };
     },
     getCookie: function(tag, key) { return __legado_get_cookie(String(tag || ''), key == null ? '' : String(key)); },
     _vars: typeof __legado_variables__ !== 'undefined' ? __legado_variables__ : {},
-    put: function(key, value) { this._vars[String(key)] = value; return value; },
+    // F-W1B-011 (BATCH-11): write-through to LEGADO_JS_VARIABLES so a
+    // subsequent eval (which builds a fresh QuickJS Runtime/Context) still
+    // sees the value via build_runtime_vars() reading the thread-local.
+    // Legado sources commonly do `java.put('cookie', ...)` in search and
+    // `java.get('cookie')` in getContent; without write-through that
+    // pattern silently dropped state across stage boundaries.
+    put: function(key, value) {
+        var k = String(key);
+        var v = value == null ? '' : String(value);
+        this._vars[k] = v;
+        __legado_js_put(k, v);
+        return v;
+    },
     getFromMemory: function(key) { return __legado_cache_get(String(key || '')); },
     putMemory: function(key, value) { return __legado_cache_put(String(key || ''), value == null ? '' : String(value)); },
     setContent: function(content, baseUrl) { return __legado_set_content(String(content || ''), String(baseUrl || '')); },
@@ -2249,23 +2367,24 @@ var java = {
                 var items = this.select(rule);
                 return items.length > 0 ? items[0] : null;
             },
+            // F-W1B-012 (BATCH-11): JSON.stringify on a wrapped element
+            // used to fall back to `{}` because every member is a function
+            // (which JSON.stringify drops). Returning text() makes the
+            // wrapper round-trip through stringify as the visible text
+            // — matching Legado's Java side, where Element#toString
+            // returns the rendered HTML/text and JSON serialisation
+            // collapses to the same string. We deliberately do NOT change
+            // the global stringify wrapper.
+            toJSON: function() { return this.text(); },
             toString: function() { return this.text(); }
         };
     },
-    _resolveUrl: function(value, base) {
-        value = String(value || '');
-        base = String(base || '');
-        if (/^https?:\/\//i.test(value)) return value;
-        var origin = (base.match(/^(https?:\/\/[^\/]+)/i) || [''])[0];
-        if (value.indexOf('//') === 0) {
-            var scheme = (base.match(/^(https?:)/i) || ['https:'])[0];
-            return scheme + value;
-        }
-        if (value.charAt(0) === '/') return origin ? origin + value : value;
-        var pathBase = base.split('#')[0].split('?')[0];
-        pathBase = pathBase.substring(0, pathBase.lastIndexOf('/') + 1);
-        return pathBase + value;
-    },
+    // F-W1B-015 (BATCH-11): delegate to the Rust-side `build_full_url`
+    // (`url::Url::join` under the hood) so that JS-driven `element.absUrl()`
+    // and Rust-driven `crate::utils::build_full_url` agree byte-for-byte.
+    // The previous JS-only implementation drifted on `//host`, `?query`,
+    // `#fragment`, and IPv6 base URLs.
+    _resolveUrl: function(value, base) { return __legado_resolve_url(String(value == null ? '' : value), String(base == null ? '' : base)); },
     log: function(msg) { return __legado_log(String(msg || '')); },
     encodeURI: function(str) { return __legado_encode_uri(String(str)); },
     encodeURIComponent: function(str) { return __legado_encode_uri_component(String(str)); },
@@ -2863,8 +2982,12 @@ mod tests {
         let result = rt.eval("java.timeFormat(0)", &vars).unwrap();
         assert_eq!(result.as_str(), Some("1970/01/01 00:00"));
 
+        // F-W1B-016 (BATCH-11): under the new threshold (>= 10^11 ms),
+        // a value of 60000 is treated as *seconds* (60000s ≈ 16h 40min)
+        // rather than milliseconds. The previous heuristic
+        // (`abs() < 10^9` → divide by 1000) was the bug being removed.
         let result = rt.eval("java.timeFormat(60000)", &vars).unwrap();
-        assert_eq!(result.as_str(), Some("1970/01/01 00:01"));
+        assert_eq!(result.as_str(), Some("1970/01/01 16:40"));
     }
 
     #[test]
@@ -3192,5 +3315,210 @@ mod tests {
         let result =
             java_replace_font_by_urls("hello".to_string(), "/nope".to_string(), "/nope".to_string());
         assert_eq!(result, "hello", "input 不可解析时应返回原文本");
+    }
+
+    /// F-W1B-014 (BATCH-11): the JS object literal emitted from a
+    /// `LegadoValue::Map` must keep stable key order so JS rules like
+    /// `Object.keys(book)[0]` are deterministic across evals.
+    #[cfg(feature = "js-quickjs")]
+    #[test]
+    fn test_legado_value_to_js_expr_map_key_order_stable() {
+        let mut map = HashMap::new();
+        map.insert("zeta".to_string(), LegadoValue::String("z".into()));
+        map.insert("alpha".to_string(), LegadoValue::Int(1));
+        map.insert("middle".to_string(), LegadoValue::Bool(true));
+        map.insert("beta".to_string(), LegadoValue::Null);
+        map.insert("delta".to_string(), LegadoValue::Float(1.5));
+        let value = LegadoValue::Map(map);
+        let first = legado_value_to_js_expr(&value);
+        for _ in 0..10 {
+            assert_eq!(
+                legado_value_to_js_expr(&value),
+                first,
+                "map literal must serialise identically across calls"
+            );
+        }
+        // Sanity: keys appear in BTreeMap (alphabetical) order.
+        let alpha_pos = first.find("\"alpha\"").expect("alpha present");
+        let beta_pos = first.find("\"beta\"").expect("beta present");
+        let delta_pos = first.find("\"delta\"").expect("delta present");
+        let middle_pos = first.find("\"middle\"").expect("middle present");
+        let zeta_pos = first.find("\"zeta\"").expect("zeta present");
+        assert!(alpha_pos < beta_pos);
+        assert!(beta_pos < delta_pos);
+        assert!(delta_pos < middle_pos);
+        assert!(middle_pos < zeta_pos);
+    }
+
+    /// F-W1B-016 (BATCH-11): seconds-level timestamps below 10^9 (e.g.
+    /// `999_999_999` ≈ 2001-09-09) used to be silently divided by 1000
+    /// and rendered as 1970. The new threshold (`>= 10^11`) preserves
+    /// them. Negative (pre-1970) seconds are no longer abs()-collapsed.
+    #[cfg(feature = "js-quickjs")]
+    #[test]
+    fn test_java_time_format_seconds_boundary() {
+        // 999_999_999 seconds ≈ 2001-09-09 UTC. Under the old heuristic
+        // (`abs() < 10^9`), this was wrongly classified as ms and divided
+        // by 1000, producing a year close to 1970. We assert the new
+        // behaviour keeps it in the 2001 window.
+        let s_2001 = java_time_format("999999999".to_string());
+        assert!(
+            s_2001.starts_with("2001/"),
+            "999_999_999 should resolve to 2001-09-x, got {s_2001}"
+        );
+
+        // 100_000_000_000 ms ≈ 1973-03-03 UTC. With the new threshold,
+        // this lands on the millisecond branch and divides by 1000.
+        let s_1973 = java_time_format("100000000000".to_string());
+        assert!(
+            s_1973.starts_with("1973/"),
+            "100_000_000_000 should resolve to 1973, got {s_1973}"
+        );
+
+        // 1_700_000_000 seconds ≈ 2023-11-15 UTC; must remain seconds.
+        let s_2023 = java_time_format("1700000000".to_string());
+        assert!(
+            s_2023.starts_with("2023/"),
+            "1_700_000_000 should resolve to 2023, got {s_2023}"
+        );
+
+        // 1_700_000_000_000 ms ≈ same instant in 2023 — must divide by 1000.
+        let s_2023_ms = java_time_format("1700000000000".to_string());
+        assert!(
+            s_2023_ms.starts_with("2023/"),
+            "1_700_000_000_000 should resolve to 2023, got {s_2023_ms}"
+        );
+
+        // Negative seconds (pre-1970) — chrono's local rendering should
+        // be a 1969 timestamp. Under the old heuristic this could be
+        // abs()-collapsed and hit the wrong branch.
+        let s_neg = java_time_format("-1000000000".to_string());
+        assert!(
+            !s_neg.is_empty(),
+            "negative seconds should produce a valid string, got empty"
+        );
+        assert!(
+            s_neg.starts_with("1937/") || s_neg.starts_with("1938/") || s_neg.starts_with("1969/"),
+            "negative seconds should land before 1970, got {s_neg}"
+        );
+    }
+
+    /// F-W1B-015 (BATCH-11): JS-side `java._resolveUrl` and Rust-side
+    /// `crate::utils::build_full_url` must produce byte-identical output
+    /// because the same conceptual operation is split across both layers
+    /// (Rust pre-resolves chapter URLs, JS `element.absUrl(...)` resolves
+    /// links inside extracted HTML). Drift between the two implementations
+    /// caused cache-key mismatches and inconsistent redirect targets.
+    #[cfg(feature = "js-quickjs")]
+    #[test]
+    fn test_resolve_url_consistent_with_rust() {
+        let rt = DefaultJsRuntime::new();
+        let cases: &[(&str, &str)] = &[
+            // (base, relative)
+            ("https://example.com/books/", "/chapter/1"),
+            ("https://example.com/books/", "chapter/1"),
+            ("https://example.com/books?x=1", "/y"),
+            ("https://example.com/books#frag", "y"),
+            ("https://example.com/", "//cdn.example.com/x"),
+            ("https://example.com/a/b/c", "../d"),
+            ("https://example.com/", "https://other.example.com/abs"),
+        ];
+        for (base, rel) in cases {
+            let vars = HashMap::new();
+            // Use java._resolveUrl so the bridge wiring (PREAMBLE → Rust)
+            // is exercised end-to-end.
+            let script = format!(
+                "java._resolveUrl({}, {})",
+                serde_json::to_string(rel).unwrap(),
+                serde_json::to_string(base).unwrap()
+            );
+            let result = rt.eval(&script, &vars).expect("eval ok");
+            let resolved = match result {
+                LegadoValue::String(s) => s,
+                other => panic!("expected string, got {other:?} for base={base} rel={rel}"),
+            };
+            let rust_resolved = crate::utils::build_full_url(base, rel);
+            assert_eq!(
+                resolved, rust_resolved,
+                "JS and Rust URL resolvers disagree for base={base} rel={rel}"
+            );
+        }
+    }
+
+    /// F-W1B-012 (BATCH-11): `JSON.stringify` on a wrapped element used to
+    /// fall back to `{}` because every member is a function. With
+    /// `_wrapElement.toJSON` returning `text()`, the wrapper now serialises
+    /// as the visible text — matching Legado's Java side semantics.
+    #[cfg(feature = "js-quickjs")]
+    #[test]
+    fn test_wrap_element_to_json_returns_text() {
+        let rt = DefaultJsRuntime::new();
+        let mut vars = HashMap::new();
+        vars.insert(
+            "src".into(),
+            LegadoValue::String(r#"<a href="/x">linktext</a>"#.into()),
+        );
+        vars.insert(
+            "baseUrl".into(),
+            LegadoValue::String("https://example.com".into()),
+        );
+        // The eval pipeline wraps the result in `JSON.stringify(...)` once
+        // already, so we run `JSON.parse(JSON.stringify(elem))` here to
+        // round-trip through stringify and observe the *unwrapped* output.
+        // Before the toJSON fix the round-trip would produce `{}`; with
+        // it, the wrapper serialises as its visible text.
+        let script = "JSON.parse(JSON.stringify(java.getElements('@css:a')[0]))";
+        let result = rt.eval(script, &vars).expect("eval ok");
+        assert_eq!(
+            result.as_str(),
+            Some("linktext"),
+            "wrapped element should JSON.stringify-round-trip as its text, not as an empty object"
+        );
+
+        // Also assert the regression case directly: the raw stringify
+        // output must NOT be the empty-object `{}` that the missing
+        // toJSON used to produce.
+        let raw = rt
+            .eval("JSON.stringify(java.getElements('@css:a')[0])", &vars)
+            .expect("eval ok");
+        let raw_str = raw.as_str().unwrap_or_default().to_string();
+        assert!(
+            raw_str.contains("linktext") && !raw_str.contains("{}"),
+            "raw JSON.stringify of wrapped element should contain text, not {{}} (got {raw_str:?})"
+        );
+    }
+
+    /// F-W1B-011 (BATCH-11): a `java.put` in one eval must be visible to
+    /// `java.get` in a subsequent eval **on the same OS thread**.
+    /// This exercises the `__legado_js_put` write-through into
+    /// `LEGADO_JS_VARIABLES` and the matching `__legado_js_get` fallback
+    /// inside the PREAMBLE's `java.get`. Both evals here go through the
+    /// raw `DefaultJsRuntime::new().eval(...)` path — no
+    /// `JsVariablesOverride` guard installed — so the thread-local
+    /// retains its contents across the boundary.
+    #[cfg(feature = "js-quickjs")]
+    #[test]
+    fn test_java_put_persists_across_eval() {
+        // Reset the thread-local to a known empty state so that residue
+        // from earlier tests on the same worker thread does not interfere.
+        LEGADO_JS_VARIABLES.with(|cell| cell.borrow_mut().clear());
+
+        let rt = DefaultJsRuntime::new();
+        let vars = HashMap::new();
+        // First eval: write the value.
+        rt.eval("java.put('mykey', 'myvalue')", &vars)
+            .expect("first eval ok");
+        // Second eval: a fresh Runtime/Context is built inside `eval`,
+        // but the thread-local persists.
+        let result = rt.eval("java.get('mykey')", &vars).expect("second eval ok");
+        assert_eq!(
+            result.as_str(),
+            Some("myvalue"),
+            "java.put written in eval A must be visible to java.get in eval B"
+        );
+
+        // Cleanup so subsequent tests on the same worker thread start
+        // with a clean slate.
+        LEGADO_JS_VARIABLES.with(|cell| cell.borrow_mut().clear());
     }
 }
