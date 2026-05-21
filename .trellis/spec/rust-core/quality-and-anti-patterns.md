@@ -96,6 +96,47 @@ Production multi-thread guarantee: FRB 2.12 default handler (`flutter_rust_bridg
 
 Boundary the pattern applies to: any sync evaluation of an external-author-controlled rule (i.e. user-imported book source) that might invoke synchronous HTTP/IO. Pure CPU-bound rules don't need it. New rule-evaluation entry-points should reuse `is_blocking_rule` (or extend it in `js_shim.rs`) — do not duplicate the `@js:` / `<js>` detection inline at the call site.
 
+## QuickJS Runtime + Context Pooling (per-thread, BATCH-13)
+
+`QuickJsRuntime::eval` reuses a single `rquickjs::Runtime` + `Context` per worker thread via the thread-local pool in `core-source/legado/js_runtime.rs::QUICKJS_POOL`. Bridge registration (`register_quickjs_bridge`, ~30 `__legado_*` `Function`s) runs **once per worker thread** instead of per call. The dominant cost on a Legado TOC parse (100 chapters × 2 evals = 200 register calls) collapses to 1.
+
+### What is amortized vs what runs every call
+
+| Per thread (init only) | Per call |
+|---|---|
+| `Runtime::new()` + `set_memory_limit(64 MiB)` + `set_max_stack_size(1 MiB)` | `set_interrupt_handler(Some(...))` (new `Instant::now()`) |
+| `Context::full(&runtime)` | `delete globalThis.__legado_*` (5 PREAMBLE-guarded vars) |
+| `register_quickjs_bridge(&ctx)` | Inject `vars` via `legado_value_to_js_var` + `ctx.eval` |
+| | `ctx.eval(PREAMBLE)` (rebuilds `var java = { ... }`) |
+| | User script |
+
+### Isolation contract
+
+- `java`, `cache`, `cookie`, `source`: fully reset by re-evaluating PREAMBLE — this is the mechanism that prevents user-script writes (`java._vars.X = ...`, `java.headerMap.put(...)`) from leaking into the next eval.
+- PREAMBLE-guarded globals (`__legado_url__`, `__legado_headers__`, `__legado_default_headers__`, `__legado_variables__`, `__source_url__`): explicitly cleared via `delete globalThis.X` before var injection so `typeof X !== 'undefined'` checks behave the same as on a fresh runtime.
+- User-script top-level globals (`var x = 1`): NOT cleared. Real Legado sources never depend on this; cross-eval state goes through `java.put` / `java.get` (the `LEGADO_JS_VARIABLES` thread-local bucket) or `RuleContext::shared_variables`.
+
+### Re-entrancy
+
+Bridge fns like `__legado_get_string` recursively call `execute_legado_rule`, which may eval another JS rule. Re-entering `Context::with` on the same `Context` would deadlock on the runtime mutex. The pool guards against this with `QUICKJS_POOL_BUSY: thread_local Cell<bool>`: nested calls fall back to a one-shot `Runtime + Context` (the pre-BATCH-13 path). The pool covers the common top-level case; nested evals are rare and pay the original cost. Don't paper over the busy flag — it's the deadlock fence.
+
+### Error recovery
+
+- `Runtime::new()` failure: propagate the error, leave the pool entry `None` so the next call retries init.
+- Timeout interrupt: rquickjs leaves the runtime in a usable state (cooperative interrupts at safepoints); `test_runtime_pool_recovers_from_timeout` enforces this contract — if rquickjs ever changes, this test catches it before production.
+- Per-eval failure (set vars / PREAMBLE / user script): entry stays alive. Matches pre-BATCH-13 contract; rebuilding the entry on every script error would defeat the point.
+
+### Test invariants (don't delete)
+
+- `test_runtime_pool_amortizes_bridge_register` — 100 warm evals must take less than 100× a cold eval. If somebody re-introduces `Runtime::new()` per call, this trips.
+- `test_runtime_pool_isolates_user_state_via_preamble_reset` — writes to `java._vars.X` must not survive the next eval. If somebody removes the PREAMBLE re-eval (or skips var-clearing), this trips.
+- `test_runtime_pool_recovers_from_timeout` — eval after a 5 s timeout must succeed. If rquickjs's interrupt contract regresses, or if our pool gets corrupted by Err paths, this trips.
+
+### When NOT to extend the pool
+
+- Cross-thread Runtime sharing: `rquickjs::Context` is `!Send`. `Mutex<Runtime> + Vec<Context>` was considered and rejected (per-thread pool already amortizes the dominant cost; cross-thread complexity buys little).
+- Caching compiled jsLib bytecode: separate concern (per-source cache, keyed by source ID). Not implemented yet; track as a follow-up if profile data justifies it.
+
 ## Code Hygiene Checks
 
 Before committing:
