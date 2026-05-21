@@ -233,6 +233,11 @@ fn build_template_vars(keyword: &str, page: i32) -> HashMap<String, LegadoValue>
 /// 语法 `prefix,{{page}}`:
 /// - 如果 page == 1，去除 `prefix,` 部分，返回空字符串
 /// - 如果 page > 1，保留 `,{{page}}`，去除 `<` 和 `>`
+///
+/// **契约**：仅识别 URL 中第一处 `<...>` 段（用 `find('<')` + `find('>')`
+/// 单次扫描）。多段 `<...>` 同时出现时，第二段及之后保留原样不展开。这
+/// 是对 Legado 原版语法的保守复刻——`sy/*.json` 真实书源未见多段用法，
+/// 不扩展支持以避免引入歧义（master findings F-W1B-036）。
 fn resolve_conditional_page(url: &str, page: i32) -> String {
     if let Some(start) = url.find('<') {
         if let Some(end) = url[start..].find('>') {
@@ -451,6 +456,21 @@ static SINGLE_BRACE_JSONPATH_RE: std::sync::LazyLock<regex::Regex> =
     });
 
 /// Resolve `{$.key}` single-brace JSONPath shorthand against JSON content.
+///
+/// **契约（master findings F-W1B-042）**：
+/// - 仅替换形如 `{$.path}` 或 `{$[0].path}` 的**单**花括号片段。
+/// - 本函数在 `resolve_rule_template` 处理完 `{{...}}` 模板**之后**对
+///   剩余字符串做一次后处理；外层调用 `resolve_rule_template` 在 input
+///   不含 `{{` 时**早返回**（不进入本函数），所以独立的 `{$.x}` 模板
+///   想要被识别，必须存在至少一处 `{{...}}`（哨兵）。
+/// - 双花括号 `{{ ... }}` 模板由 `resolve_rule_template` 分派给
+///   `resolve_single_template_rule` 处理（mustache 优先）；本函数内部用
+///   手写 lookbehind/lookahead 跳过紧邻 `{` / `}` 的匹配，避免对
+///   `{{ {$.x} }}` 这种嵌套二次替换 mustache 块内残余字面量。
+/// - Rust `regex` crate 不支持真正的 lookbehind；当前手动跳过策略已经
+///   被 `test_resolve_jsonpath_inside_double_braces` /
+///   `test_resolve_single_brace_jsonpath_only` 测试固化，引入 lookbehind
+///   regex 库或重写 tokenizer 不在当前批次范围。
 fn resolve_single_brace_jsonpath(input: &str, json_content: &str) -> String {
     if !SINGLE_BRACE_JSONPATH_RE.is_match(input) {
         return input.to_string();
@@ -703,5 +723,56 @@ mod tests {
         let template = "/toc/{{@css:a@href}}?page=1";
         let result = resolve_rule_template(template, html, &ctx);
         assert_eq!(result, "/toc//ch/1?page=1");
+    }
+
+    /// F-W1B-036 契约固化：`resolve_conditional_page` 仅识别 URL 中
+    /// 第一处 `<...>` 段；第二段保留原样（仅末尾 `>` 因
+    /// `resolve_conditional_placeholder` 的 `trim_end_matches('>')` 被剥）。
+    /// 用绝对 URL 绕开 `build_full_url` 的百分号编码，便于断言结构。
+    #[test]
+    fn test_resolve_conditional_page_only_first_segment() {
+        let url = parse_legado_url("http://example.com/list-<,{{page}}>?sort=<,asc>");
+        // page=1：第一段 `<,{{page}}>` 整体被剥；第二段保留 `<,asc`，末尾
+        // `>` 被 `resolve_conditional_placeholder` 的 trim_end_matches 一并剥掉。
+        let first = resolve_url_template(&url, "", 1, "https://unused.example/");
+        assert_eq!(first, "http://example.com/list-?sort=<,asc");
+        // page=2：第一段拆 prefix=""、rest="{{page}}"（逗号本身被
+        // `split_once(',')` 吃掉），rest 展开为 "2"；第二段同上保留
+        // `<,asc`，末尾 `>` 被 trim。第二段未被识别，证明"仅识别第一处"。
+        let second = resolve_url_template(&url, "", 2, "https://unused.example/");
+        assert_eq!(second, "http://example.com/list-2?sort=<,asc");
+    }
+
+    /// F-W1B-042 契约固化：`{{ {$.x} }}` 双花括号包单花括号 JSONPath 时，
+    /// 外层 mustache 由 `resolve_rule_template` 优先吃掉两层花括号，inner
+    /// 内容为 `{$.id}`，落到 `resolve_single_template_rule` 的"Default:
+    /// JavaScript expression"分支被当成 JS 表达式 eval；`{$.id}` 不是合法
+    /// JS 表达式，返回空串。**这固化了 contract：用户应当用 `{{$.id}}`
+    /// （无内层花括号）拿 JSONPath，而非 `{{ {$.id} }}`**。手动 lookbehind
+    /// 在 `resolve_single_brace_jsonpath` 跳过紧邻 `{` / `}` 的匹配确保不
+    /// 再二次替换 mustache 块内残余的单花括号。
+    #[test]
+    fn test_resolve_jsonpath_inside_double_braces() {
+        let json = r#"{"id": "book-123", "name": "Test"}"#;
+        let ctx = crate::legado::context::RuleContext::for_book_info("https://example.com", json);
+        let template = "{{ {$.id} }}";
+        let result = resolve_rule_template(template, json, &ctx);
+        assert_eq!(
+            result, "",
+            "外层 mustache 优先；inner `{{$.id}}` 走 JS eval 失败返回空"
+        );
+    }
+
+    /// F-W1B-042 契约固化：单花括号 `{$.x}` 在 input 含至少一处
+    /// `{{...}}` 时（哨兵）才会被 `resolve_single_brace_jsonpath` 后处理
+    /// 替换。无 `{{` 的纯文本走 `resolve_rule_template` 早返回。
+    #[test]
+    fn test_resolve_single_brace_jsonpath_only() {
+        let json = r#"{"url": "https://api.example/v2", "name": "X"}"#;
+        let ctx = crate::legado::context::RuleContext::for_book_info("https://example.com", json);
+        // 用空 mustache 块 `{{}}` 触发主路径，让单花括号 JSONPath 后处理走起来。
+        let template = "prefix {{}}{$.url} suffix";
+        let result = resolve_rule_template(template, json, &ctx);
+        assert_eq!(result, "prefix https://api.example/v2 suffix");
     }
 }

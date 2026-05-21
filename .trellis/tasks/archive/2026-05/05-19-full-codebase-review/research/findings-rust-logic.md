@@ -480,6 +480,8 @@
 
 **建议**: import.rs 调用 url::parse_legado_url 后取 path 字段；移除手写的 clean_legado_url。
 
+**Resolution**: BATCH-16 (2026-05-21) — 删除 `core/core-source/src/legado/import.rs::clean_legado_url`，3 处 caller（line 314 / 339 / 361，去掉 helper 后行号微调到 line 317 / 342 / 364）一律改 `crate::legado::url::parse_legado_url(url).path`。原 helper 用 `rsplit_once(',')` + `{` 前缀检查；`parse_legado_url` 是从右向左扫描末尾合法 JSON `{...}` 选项块（避免 URL 中合法逗号被误剥），返回 `LegadoUrl { path, options, is_relative }`。已有单测 `test_clean_legado_url_does_not_strip_conditional_page_template`（line 691）保留测试名，通过 `#[cfg(test)] fn clean_legado_url_path(url) -> String { parse_legado_url(url).path }` 测试 helper 走相同路径覆盖；`<,{{page}}>` 这类条件分页模板不带末尾合法 JSON 选项块，path 字段保留原 URL 不变，行为等价。task: 05-21-batch-16-legado-url-import-cleanup。
+
 ---
 
 ### F-W1B-035 [P1 主要][A-架构][core-source/parser]
@@ -503,6 +505,8 @@
 **详细**: Legado 原版 `<...>` 可能允许多次出现（虽未在 sy/*.json 见到），实现的 contract 不明确。
 
 **建议**: 加测试明确"仅支持第一处"的契约或扩展支持多处；至少在 doc 注释里注明限制。
+
+**Resolution**: BATCH-16 (2026-05-21) — 选 contract-docs-only 路线（finding 自陈"未在 sy/*.json 见到[多段用法]"，无真实 demand）。在 `core/core-source/src/legado/url.rs::resolve_conditional_page` 上加 doc 注释明确"仅识别 URL 中第一处 `<...>` 段（用 `find('<')` + `find('>')` 单次扫描）；多段同时出现时第二段保留原样"。新增单测 `test_resolve_conditional_page_only_first_segment` 用 `http://example.com/list-<,{{page}}>?sort=<,asc>` 跑 page=1 / page=2 两路，断言第一段被展开 / 剥离、第二段除末尾 `>` 被 `resolve_conditional_placeholder::trim_end_matches('>')` 一并剥掉外保留 `<,asc` 字面量，固化"仅第一处"契约。**未做**多段扩展（无真实 demand + Legado 原版语义在多段场景未明确）。**无行为变更**。task: 05-21-batch-16-legado-url-import-cleanup。
 
 ---
 
@@ -528,6 +532,8 @@
 
 **建议**: 所有 `@js:` 规则统一走 spawn_blocking；rule_engine 的 JS 路径也改成 async wrapper。
 
+**Resolution**: BATCH-16 (2026-05-21) — 选方案 B（选性 `block_in_place`），不改函数签名以避开 11 处 caller 的 .await 改造。在 `core/core-source/src/legado/js_shim.rs` 加 `pub fn is_blocking_rule(rule) -> bool { is_js_rule(rule) || rule.contains("<js>") }` 与 `is_js_rule` 同处共生（pub-used 到 `legado::*`，`legado/mod.rs:18`）。`BookSourceParser::run_rule_first`（`core-source/parser.rs:495`）函数体改为：若 `is_blocking_rule(rule) && tokio::runtime::Handle::try_current().is_ok()` 命中 → `tokio::task::block_in_place(|| run_rule(rule, html, ctx).ok()?.into_iter().next())`；否则保持原 sync 路径。`Handle::try_current().is_ok()` gate 防 single-thread / 非 tokio context 下（如 sync `#[test]`）`block_in_place` panic。生产路径 FRB 2.12 默认 handler 走 multi-thread tokio runtime + `core/Cargo.toml:33 features = ["full"]`，gate 必然通过。函数签名 `fn(&self, &str, &str, &RuleContext) -> Option<String>` 不变，**11 处 caller**（PRD 估 9 处，实际 grep 出 11 处：search/explore/book_info/toc）零改动。新增单测 `test_is_blocking_rule_detects_js_markers` 覆盖 `@js:` / `js:` / `@js\n` / `<js>...</js>` 4 种命中 + 4 种纯 CSS/XPath/JSONPath/Regex 不命中。**未做** `run_rule_first` 全 async 化（估 +500 行，跨 11 处 caller 改 .await，留作后续批次）。task: 05-21-batch-16-legado-url-import-cleanup。
+
 ---
 
 ### F-W1B-039 [P1 主要][A-架构][core-source/rss]
@@ -539,6 +545,8 @@
 **详细**: parse_xml::skip_xml_prologue 处理 `<?xml...?>` 和 `<!--...-->`，mod.rs 简化版不做 — 若 feed 头部有 XML 声明，detect_format 在 mod.rs 里返回 false 走规则路。
 
 **建议**: 公开 `skip_xml_prologue` 给 mod.rs 复用。
+
+**Resolution**: BATCH-16 (2026-05-21) — `core/core-source/src/rss/parse_xml.rs::skip_xml_prologue` 可见性升 `pub(crate)`，doc 注释指向 `rss::mod` 复用语境与 master findings F-W1B-039。`core/core-source/src/rss/mod.rs::RssParser::get_articles`（line 93）的 `body.trim_start_matches('\u{FEFF}').trim_start()` 简化版 BOM 剥离改为 `parse_xml::skip_xml_prologue(&body)`，与 `detect_format` 走同一份剥离逻辑（消除 BOM/空白、`<?xml ?>` 声明、`<!--...-->` 注释三类前导项）。新增 `#[tokio::test] test_get_articles_handles_xml_prologue` 起 mock server 返回带 `<?xml version="1.0" encoding="utf-8"?>` 头的 RSS 2.0 feed，强制 `rule_articles=None`，断言走 XML 优先路径正确解析 1 条 item。**未改**任何用户可见接口。task: 05-21-batch-16-legado-url-import-cleanup。
 
 ---
 
@@ -575,6 +583,8 @@
 **详细**: 不会触发安全问题但对模板解析结果有歧义。
 
 **建议**: 加 unit test 覆盖嵌套场景；或在文档注明边界。
+
+**Resolution**: BATCH-16 (2026-05-21) — 选 contract-docs-only 路线（finding 自陈"问题不在'错'而在'未明确'"+ Rust regex crate 不支持 lookbehind）。在 `core/core-source/src/legado/url.rs::resolve_single_brace_jsonpath` 加多段 doc 注释明确契约：(a) 仅替换单花括号 `{$.path}`；(b) 本函数在 `resolve_rule_template` 处理 `{{...}}` 之后做后处理，且 `resolve_rule_template` 在不含 `{{` 时**早返回**（不进入本函数），所以独立 `{$.x}` 模板需有至少一处 `{{...}}` 哨兵才会被识别；(c) 双花括号 `{{ ... }}` 由 `resolve_rule_template` 优先 dispatch 给 `resolve_single_template_rule`（mustache 优先），手动 lookbehind/lookahead 跳过紧邻 `{` / `}` 的匹配避免对 mustache 残余字面量二次替换。新增 2 单测：`test_resolve_jsonpath_inside_double_braces` 输入 `{{ {$.id} }}` 断言**返回空串**——外层 mustache 优先吃两层花括号，inner 内容 `{$.id}` 落到"Default: JavaScript expression"分支被当作 JS 表达式 eval 失败；`test_resolve_single_brace_jsonpath_only` 输入 `prefix {{}}{$.url} suffix`（用空 mustache `{{}}` 触发主路径）断言 JSONPath 后处理正常展开。**注：PRD 预期"外层 mustache 替换后才进入 JSONPath 解析"是 brainstormer 对 dispatch 顺序的误读** —— 实际 dispatch 是 mustache→JS-eval（在 `{$.id}` 上失败）→ 返回原字符串；测试固化的是这一**实际**行为，与 finding 的"未明确"框架一致，无行为变更。**未做**引入 lookbehind regex 库或重写 tokenizer（重构面过大）。task: 05-21-batch-16-legado-url-import-cleanup。
 
 ---
 

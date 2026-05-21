@@ -311,7 +311,10 @@ fn legado_to_imported(source: &LegadoBookSource) -> Result<ImportedSource, Strin
         header: source.header.clone(),
         js_lib: source.js_lib.clone(),
         cover_decode_js: source.cover_decode_js.clone(),
-        search_url: source.search_url.as_deref().map(clean_legado_url),
+        search_url: source
+            .search_url
+            .as_deref()
+            .map(|url| crate::legado::url::parse_legado_url(url).path),
         explore_url: source.explore_url.clone(),
         enabled_cookie_jar: source.enabled_cookie_jar,
         enabled_explore: source.enabled_explore,
@@ -336,7 +339,7 @@ fn merge_search_url(rule_search: Option<JsonValue>, search_url: Option<&str>) ->
         if !obj.contains_key("search_url") {
             obj.insert(
                 "search_url".to_string(),
-                JsonValue::String(clean_legado_url(url)),
+                JsonValue::String(crate::legado::url::parse_legado_url(url).path),
             );
         }
     }
@@ -358,7 +361,7 @@ fn normalize_rule_values(mut value: JsonValue) -> JsonValue {
     for (key, val) in obj.iter_mut() {
         if let Some(rule_str) = val.as_str() {
             let normalized = if key == "search_url" {
-                clean_legado_url(rule_str)
+                crate::legado::url::parse_legado_url(rule_str).path
             } else {
                 normalize_legado_rule(rule_str)
             };
@@ -589,20 +592,15 @@ fn normalize_simple_selector(sel: &str) -> String {
 }
 
 /// 清理 Legado URL 中的额外参数。
-/// 例如：`/search.php?q={{key}}, {"webView": true}`
-/// 清理后为 `/search.php?q={{key}}`
-fn clean_legado_url(url: &str) -> String {
-    let trimmed = url.trim();
-
-    // 检查是否有 URL 选项（逗号 + 空格 + { 或纯逗号 + {）
-    if let Some((path, options)) = trimmed.rsplit_once(',') {
-        let options_trimmed = options.trim_start();
-        if options_trimmed.starts_with('{') && !options_trimmed.starts_with("{{") {
-            return path.trim().to_string();
-        }
-    }
-
-    trimmed.to_string()
+///
+/// 已迁移到 `crate::legado::url::parse_legado_url`：后者用从右向左扫描
+/// 找到末尾的有效 JSON `{...}` 选项块（避免 URL 中合法逗号导致的误剥
+/// 离），返回 `LegadoUrl { path, options, is_relative }`，导入路径只
+/// 取 `.path` 字段即可。原 `clean_legado_url` 用 `rsplit_once(',')` +
+/// `{` 前缀检查的简化实现已删除（master findings F-W1B-034）。
+#[cfg(test)]
+fn clean_legado_url_path(url: &str) -> String {
+    crate::legado::url::parse_legado_url(url).path
 }
 
 #[cfg(test)]
@@ -693,8 +691,11 @@ mod tests {
 
     #[test]
     fn test_clean_legado_url_does_not_strip_conditional_page_template() {
+        // F-W1B-034: 导入路径已统一走 `parse_legado_url(url).path`；
+        // `<,{{page}}>` 这类条件分页模板不带末尾合法 JSON 选项块，
+        // 因此 path 字段保留原 URL 不变。
         assert_eq!(
-            clean_legado_url("/list-<,{{page}}>.html"),
+            clean_legado_url_path("/list-<,{{page}}>.html"),
             "/list-<,{{page}}>.html",
         );
     }

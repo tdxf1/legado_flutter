@@ -52,7 +52,12 @@ pub fn detect_format(xml: &str) -> RssFormat {
 }
 
 /// 跳过 BOM / XML 声明 / 空白 / 注释，返回首个真正的 element 起点。
-fn skip_xml_prologue(xml: &str) -> &str {
+///
+/// `pub(crate)` 暴露给 `rss::mod`：`detect_format` 之外的入口（如
+/// `RssParser::get_articles` 的"先 XML 后规则"分支判定）也需要剥掉
+/// `<?xml ?>` 头才能正确判定，避免出现两套 BOM/prologue 剥离逻辑漂移。
+/// 见 master findings F-W1B-039。
+pub(crate) fn skip_xml_prologue(xml: &str) -> &str {
     let mut s = xml.trim_start_matches('\u{FEFF}').trim_start();
     loop {
         if let Some(rest) = s.strip_prefix("<?") {

@@ -478,13 +478,35 @@ impl BookSourceParser {
     }
 
     /// Execute a rule string and return the first result.
+    ///
+    /// **F-W1B-038 调度策略**：JS 规则（`is_blocking_rule` 命中：`@js:` /
+    /// `js:` / `@js\n` 前缀 + 内联 `<js>...</js>`）可能内含同步 HTTP 调用
+    /// （`java.ajax` / `java.post`），在 tokio reactor 工作线程上直接同步
+    /// 阻塞会 starve 同 reactor 上其它 task。当本函数运行在 tokio context
+    /// 内（`Handle::try_current().is_ok()`）且规则命中 blocking 判定时，
+    /// 用 `tokio::task::block_in_place` 通知 runtime 把当前线程交给阻塞
+    /// 任务（multi-thread runtime 会迁移其它 task 到别的 worker；
+    /// single-thread runtime 下会 panic，故必须先 gate）。纯 CSS / XPath
+    /// / JSONPath / Regex 规则是 µs 级，不付 `block_in_place` 调度开销，
+    /// 直接同步执行。
+    ///
+    /// **不改函数签名**：保持 sync `Option<String>` 返回，避免触动 9+ 处
+    /// caller 改 .await。
     fn run_rule_first(
         &self,
         rule: &str,
         html: &str,
         context: &crate::legado::RuleContext,
     ) -> Option<String> {
-        self.run_rule(rule, html, context).ok()?.into_iter().next()
+        if crate::legado::is_blocking_rule(rule)
+            && tokio::runtime::Handle::try_current().is_ok()
+        {
+            tokio::task::block_in_place(|| {
+                self.run_rule(rule, html, context).ok()?.into_iter().next()
+            })
+        } else {
+            self.run_rule(rule, html, context).ok()?.into_iter().next()
+        }
     }
 
     async fn fetch_url(

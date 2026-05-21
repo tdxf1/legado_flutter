@@ -90,7 +90,9 @@ impl RssParser {
             .await
             .map_err(ParserError::Network)?;
 
-        let trimmed = body.trim_start_matches('\u{FEFF}').trim_start();
+        // BOM / `<?xml ?>` / 空白 / 注释剥离统一走 `parse_xml::skip_xml_prologue`，
+        // 避免 mod.rs 简化版与 parse_xml 版漂移（master findings F-W1B-039）。
+        let trimmed = parse_xml::skip_xml_prologue(&body);
         let try_xml_first = trimmed.starts_with("<rss") || trimmed.starts_with("<feed");
 
         if try_xml_first {
@@ -413,5 +415,42 @@ mod tests {
         );
         let result = parser.fetch_article_content_full(&source, &article).await;
         assert!(matches!(result, Err(ParserError::Empty)));
+    }
+
+    /// F-W1B-039 回归：feed 顶部含 `<?xml version="1.0"?>` prologue 时，
+    /// `get_articles` 应当复用 `parse_xml::skip_xml_prologue` 正确判定为
+    /// XML feed 并走 XML 解析路径，而非降级到规则路径。
+    #[tokio::test]
+    async fn test_get_articles_handles_xml_prologue() {
+        let server = MockServer::start();
+        let xml_body = r#"<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+<channel>
+<title>Sample Feed</title>
+<item>
+<title>Hello</title>
+<link>https://example.com/post/1</link>
+<description>desc</description>
+</item>
+</channel>
+</rss>"#;
+        let mock = server.mock(|when, then| {
+            when.method(GET).path("/feed");
+            then.status(200)
+                .header("Content-Type", "application/rss+xml; charset=utf-8")
+                .body(xml_body);
+        });
+
+        let parser = RssParser::new();
+        let mut source = make_source(None, &format!("{}/feed", server.base_url()));
+        // rule_articles 留 None 强制走 XML 优先路径
+        source.rule_articles = None;
+        let articles = parser
+            .get_articles(&source, "", "tech", 1)
+            .await
+            .expect("xml feed parsed");
+        assert_eq!(articles.len(), 1);
+        assert_eq!(articles[0].title, "Hello");
+        mock.assert();
     }
 }
