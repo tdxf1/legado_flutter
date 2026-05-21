@@ -26,6 +26,15 @@ use tracing::{info, warn};
 /// held mutex. `parking_lot::Mutex` would be marginally faster on
 /// contention but pulls in a dependency for no measurable win at the
 /// current concurrency level (single-digit concurrent searches).
+///
+/// (F-W1B-030 mitigated): `should_run_sweep_now` (added later) is the
+/// atomic-based throttling that compresses the O(n) registry sweep cost
+/// to once-per-30s, removing the per-request scan that the original
+/// finding flagged. The intentional `std::sync::Mutex` remains correct
+/// at the current concurrency profile; switching to `dashmap` or sharded
+/// locks would add lock-order complexity around eviction without a
+/// measurable win. See `test_evict_stale_rate_states_caps_max_entries`
+/// and `should_run_sweep_now` for the load-bearing invariants.
 static RATE_LIMITER: std::sync::LazyLock<Mutex<HashMap<String, RateLimitState>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -555,7 +564,13 @@ impl BookSourceParser {
         // 4. 使用规则解析搜索结果
         let rules = source.rule_search.as_ref().unwrap();
 
-        let mut results = Vec::new();
+        // F-W1B-029 mitigation: clear the per-thread parsed-html cache up
+        // front so that the (ptr, len) cache key inside `legado::rule`
+        // cannot collide with stale state left by a previous search() call
+        // whose html buffer happens to be re-allocated at the same address.
+        // Within this function the html String lives until function exit,
+        // so the cache will be hit by every CSS selector evaluated below.
+        crate::legado::clear_html_parse_cache();
 
         let contexts = rules
             .book_list
@@ -567,43 +582,45 @@ impl BookSourceParser {
             .filter(|items| !items.is_empty())
             .unwrap_or_else(|| vec![html.clone()]);
 
-        let names = extract_from_contexts(self, rules.name.as_deref(), &contexts, &request_context);
-        let authors =
-            extract_from_contexts(self, rules.author.as_deref(), &contexts, &request_context);
-        let covers = extract_from_contexts(
-            self,
-            rules.cover_url.as_deref(),
-            &contexts,
-            &request_context,
-        );
-        let book_urls =
-            extract_from_contexts(self, rules.book_url.as_deref(), &contexts, &request_context);
-        let intros =
-            extract_from_contexts(self, rules.intro.as_deref(), &contexts, &request_context);
+        // F-W1B-028 mitigation: per-item nested extraction. Outer loop walks
+        // each book-list context once; inner block evaluates the 5 fields
+        // sharing one base-context clone instead of 5 separate full passes.
+        //
+        // Note: this is also a correctness improvement over the old per-rule
+        // × per-item code path. Previously each field went through
+        // `extract_from_contexts` independently and items with missing fields
+        // were silently dropped per-field; the surviving Vecs were then
+        // zipped by index, which mis-aligned subsequent items (item 2 missing
+        // author would shift item 3's author onto item 2). Per-item alignment
+        // here keeps each item's 5 fields stitched together. See
+        // `test_search_per_item_field_alignment`.
+        let mut results: Vec<SearchResult> = Vec::with_capacity(contexts.len());
+        for item in &contexts {
+            let mut item_context = request_context.clone();
+            item_context.result =
+                vec![crate::legado::LegadoValue::String(item.clone())];
 
-        let max_len = names
-            .len()
-            .max(authors.len())
-            .max(covers.len())
-            .max(book_urls.len())
-            .max(intros.len());
+            let name = extract_field(self, rules.name.as_deref(), item, &item_context)
+                .unwrap_or_default();
+            let author = extract_field(self, rules.author.as_deref(), item, &item_context)
+                .unwrap_or_default();
+            let cover = extract_field(self, rules.cover_url.as_deref(), item, &item_context);
+            let book_url_field =
+                extract_field(self, rules.book_url.as_deref(), item, &item_context);
+            // intro is captured for parity with the previous implementation;
+            // the original code likewise discarded it (see SearchResult.intro
+            // = None below) — left as-is to keep this batch a pure perf change.
+            let _intro = extract_field(self, rules.intro.as_deref(), item, &item_context);
 
-        for i in 0..max_len {
-            let name = names.get(i).cloned().unwrap_or_default();
-            let author = authors.get(i).cloned().unwrap_or_default();
-            let book_url_str = book_urls
-                .get(i)
-                .cloned()
+            let book_url_str = book_url_field
                 .map(|u| crate::utils::build_full_url(&request_url, &u))
                 .unwrap_or_else(|| request_url.clone());
+
             results.push(SearchResult {
                 id: stable_search_result_id(&source.id, &book_url_str, &name, &author),
                 name,
                 author,
-                cover_url: covers
-                    .get(i)
-                    .cloned()
-                    .map(|u| crate::utils::build_full_url(&request_url, &u)),
+                cover_url: cover.map(|u| crate::utils::build_full_url(&request_url, &u)),
                 intro: None,
                 book_url: book_url_str,
                 source_id: source.id.clone(),
@@ -629,6 +646,12 @@ impl BookSourceParser {
         explore_url: &str,
         page: i32,
     ) -> Result<Vec<SearchResult>, ParserError> {
+        // F-W1B-029 mitigation: clear the per-thread parsed-html cache up
+        // front so that the (ptr, len) cache key inside `legado::rule`
+        // cannot collide with stale state left by a previous call whose
+        // html buffer happens to be re-allocated at the same address.
+        crate::legado::clear_html_parse_cache();
+
         info!(
             "探索: {} page={} (书源: {})",
             explore_url, page, source.name
@@ -854,6 +877,10 @@ impl BookSourceParser {
         source: &BookSource,
         book_url: &str,
     ) -> Result<BookDetail, ParserError> {
+        // F-W1B-029 mitigation: clear the per-thread parsed-html cache up
+        // front (see `BookSourceParser::search` for rationale).
+        crate::legado::clear_html_parse_cache();
+
         let book_url = crate::utils::build_full_url(&source.url, book_url);
         info!("获取书籍详情: {} (书源: {})", book_url, source.name);
 
@@ -988,6 +1015,10 @@ impl BookSourceParser {
         source: &BookSource,
         book_url: &str,
     ) -> Result<Vec<ChapterInfo>, ParserError> {
+        // F-W1B-029 mitigation: clear the per-thread parsed-html cache up
+        // front (see `BookSourceParser::search` for rationale).
+        crate::legado::clear_html_parse_cache();
+
         let rules = match &source.rule_toc {
             Some(r) => r,
             None => {
@@ -1390,6 +1421,10 @@ impl BookSourceParser {
         source: &BookSource,
         chapter_url: &str,
     ) -> Result<ChapterContent, ParserError> {
+        // F-W1B-029 mitigation: clear the per-thread parsed-html cache up
+        // front (see `BookSourceParser::search` for rationale).
+        crate::legado::clear_html_parse_cache();
+
         const MAX_CONTENT_PAGES: usize = 50;
         // F-W1B-021 (BATCH-12, 2026-05-21)：与 get_chapters 同样的 queue cap，
         // 防攻击书源 next_url 解析返回大量 unique urls 导致 OOM。
@@ -2116,6 +2151,33 @@ fn extract_from_contexts(
             }
         })
         .collect()
+}
+
+/// Extract a single field for a single item against a pre-built context.
+///
+/// F-W1B-028 mitigation: search() walks contexts once and calls this helper
+/// 5 times per item (one per search-result field) sharing the same context
+/// clone, instead of running 5 full passes through `extract_from_contexts`.
+/// The semantics match the per-item branch of `extract_from_contexts`:
+/// `{{...}}` templates go through `resolve_rule_template`, regular rules
+/// go through `run_rule_first`, and absent / empty results return `None`.
+fn extract_field(
+    parser: &BookSourceParser,
+    rule: Option<&str>,
+    item: &str,
+    item_context: &crate::legado::RuleContext,
+) -> Option<String> {
+    let rule = rule?;
+    if rule.contains("{{") {
+        let resolved = crate::legado::url::resolve_rule_template(rule, item, item_context);
+        if resolved.is_empty() {
+            None
+        } else {
+            Some(resolved)
+        }
+    } else {
+        parser.run_rule_first(rule, item, item_context)
+    }
 }
 
 fn extract_json_field_from_contexts(rule: Option<&str>, contexts: &[JsonValue]) -> Vec<String> {
@@ -3959,5 +4021,118 @@ mod tests {
         // data: src 保持不变
         assert!(resolved.contains("data:image/png;base64,abc"));
         assert!(!resolved.contains("https://example.com/data:"));
+    }
+
+    /// **F-W1B-028 (BATCH-14)**: search 5 字段必须按 item 对齐 — 第 i 个
+    /// SearchResult 的 name/author/book_url/cover 都来自第 i 个 book-list
+    /// 项目，即使中间某 item 缺字段也不能"列错位"。
+    ///
+    /// 这条测试是 per-item 嵌套循环重构的回归保险：旧 per-rule × per-item
+    /// 实现遇到"item 2 缺 author"会让后续 author 列前移、和别的字段错位。
+    /// per-item 重构后每个 item 独立走 5 次 run_rule_first，缺字段就用空
+    /// 串/默认值占位。
+    #[tokio::test]
+    async fn test_search_per_item_field_alignment() {
+        use httpmock::prelude::*;
+
+        let server = MockServer::start();
+        // 3 items: item 1 完整，item 2 缺 author（DOM 没 author 元素），
+        // item 3 完整。如果 5 字段是各自独立提取再 zip，author 列会变成
+        // [a1, a3] 长度 2，错位到 item 2 上。
+        let html = r#"<html><body>
+            <div class="book-item">
+                <span class="book-title">Book 1</span>
+                <span class="book-author">Author 1</span>
+                <a href="/book/1">Read</a>
+                <img class="book-cover" src="/c/1.jpg" />
+            </div>
+            <div class="book-item">
+                <span class="book-title">Book 2</span>
+                <a href="/book/2">Read</a>
+                <img class="book-cover" src="/c/2.jpg" />
+            </div>
+            <div class="book-item">
+                <span class="book-title">Book 3</span>
+                <span class="book-author">Author 3</span>
+                <a href="/book/3">Read</a>
+                <img class="book-cover" src="/c/3.jpg" />
+            </div>
+        </body></html>"#;
+
+        let mock = server.mock(|when, then| {
+            when.method(GET).path("/search");
+            then.status(200)
+                .header("Content-Type", "text/html; charset=utf-8")
+                .body(html);
+        });
+
+        let source = BookSource {
+            id: "test".into(),
+            name: "Test Source".into(),
+            url: server.base_url(),
+            rule_search: Some(SearchRule {
+                search_url: Some("/search?keyword={{keyword}}".into()),
+                book_list: Some(".book-item".into()),
+                name: Some(".book-title".into()),
+                author: Some(".book-author".into()),
+                book_url: Some("a@href".into()),
+                cover_url: Some(".book-cover@src".into()),
+                kind: None,
+                last_chapter: None,
+                ..Default::default()
+            }),
+            source_type: 0,
+            enabled: true,
+            group_name: None,
+            custom_order: 0,
+            weight: 0,
+            rule_book_info: None,
+            rule_toc: None,
+            rule_content: None,
+            rule_review: None,
+            login_url: None,
+            login_ui: None,
+            login_check_js: None,
+            header: None,
+            js_lib: None,
+            cover_decode_js: None,
+            explore_url: None,
+            rule_explore: None,
+            book_url_pattern: None,
+            enabled_explore: false,
+            last_update_time: 0,
+            book_source_comment: None,
+            concurrent_rate: None,
+            variable_comment: None,
+            explore_screen: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        let parser = BookSourceParser::new();
+        let results = parser.search(&source, "x").await.expect("search ok");
+
+        assert_eq!(results.len(), 3, "应返回 3 条结果");
+        assert_eq!(results[0].name, "Book 1");
+        assert_eq!(results[0].author, "Author 1");
+        assert_eq!(results[0].book_url, server.url("/book/1"));
+        assert_eq!(results[0].cover_url, Some(server.url("/c/1.jpg")));
+
+        // item 2 缺 author，author 字段必须为空串而非 "Author 3"
+        assert_eq!(results[1].name, "Book 2");
+        assert_eq!(
+            results[1].author, "",
+            "item 2 缺 author 必须空串占位，不能拿 item 3 的 author"
+        );
+        assert_eq!(results[1].book_url, server.url("/book/2"));
+        assert_eq!(results[1].cover_url, Some(server.url("/c/2.jpg")));
+
+        // item 3 不应被错位 — author 仍是 "Author 3"
+        assert_eq!(results[2].name, "Book 3");
+        assert_eq!(results[2].author, "Author 3");
+        assert_eq!(results[2].book_url, server.url("/book/3"));
+        assert_eq!(results[2].cover_url, Some(server.url("/c/3.jpg")));
+
+        mock.assert();
     }
 }

@@ -17,11 +17,62 @@ use super::js_runtime::{self, JsRuntime};
 use super::regex_rule;
 use super::selector;
 use super::value::LegadoValue;
+use std::cell::RefCell;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::rc::Rc;
 use std::sync::LazyLock;
 
 use regex::Regex;
 use std::sync::Arc;
+
+/// Per-thread single-slot cache for the last parsed `scraper::Html`.
+///
+/// F-W1B-029 mitigation: when search() (or any caller) evaluates several
+/// selectors against the same html string, the document is parsed exactly
+/// once. Cache key is the pointer + length of the input `&str` (stable for
+/// the lifetime of the underlying buffer); on miss we parse and replace.
+///
+/// `scraper::Html` is `!Send`, so a thread_local is the natural fit. The
+/// cache holds at most one entry; we never grow it. When search() finishes
+/// and the html buffer goes out of scope, the next call with a different
+/// pointer/length triggers a re-parse and the old `Rc` is dropped.
+type CachedHtml = (usize, usize, Rc<scraper::Html>);
+
+thread_local! {
+    static LAST_PARSED_HTML: RefCell<Option<CachedHtml>> = const { RefCell::new(None) };
+}
+
+fn parsed_html_for(html: &str) -> Rc<scraper::Html> {
+    let key = (html.as_ptr() as usize, html.len());
+    LAST_PARSED_HTML.with(|cell| {
+        if let Some((p, l, doc)) = cell.borrow().as_ref() {
+            if *p == key.0 && *l == key.1 {
+                return Rc::clone(doc);
+            }
+        }
+        let doc = Rc::new(scraper::Html::parse_document(html));
+        *cell.borrow_mut() = Some((key.0, key.1, Rc::clone(&doc)));
+        doc
+    })
+}
+
+/// Clear the per-thread parsed-html cache.
+///
+/// Callers entering a new "evaluation epoch" with fresh html buffers should
+/// call this to bound the (ptr, len) cache key collision window. The cache
+/// is correct as long as the same (ptr, len) pair never refers to two
+/// different content snapshots within the same epoch. Within a single
+/// `search()` / `get_chapters()` / `get_chapter_content()` /
+/// `get_book_info()` / `explore()` / RSS entry-point call the html buffers
+/// all live in the caller's frame, so addresses are stable and unique.
+/// Between calls, allocator reuse could in theory yield the same (ptr, len)
+/// for new content, so every such entry point clears up front. New
+/// rule-evaluation entry points must do the same.
+pub fn clear_html_parse_cache() {
+    LAST_PARSED_HTML.with(|cell| {
+        cell.borrow_mut().take();
+    });
+}
 
 /// 规则执行结果类型
 #[derive(Debug, Clone)]
@@ -310,6 +361,25 @@ fn execute_css_rule(rule: &str, html: &str) -> Result<Vec<String>, String> {
 }
 
 fn execute_single_css(selector_str: &str, html: &str) -> Result<Vec<String>, String> {
+    // F-W1B-029 mitigation: reuse the per-thread parsed-html cache so that
+    // multiple selectors hitting the same html buffer (e.g. the 5 search
+    // fields plus `||` combiner branches) parse the document exactly once.
+    // The cache is keyed by (ptr, len) of the input `&str`; see
+    // `parsed_html_for` for the contract.
+    let document = parsed_html_for(html);
+    execute_single_css_pre_parsed(&document, selector_str)
+}
+
+/// Run a single CSS selector against an already-parsed `scraper::Html`.
+///
+/// This is the pre-parse-friendly variant of [`execute_single_css`]: callers
+/// holding a `scraper::Html` (typically because they intend to evaluate many
+/// selectors against the same HTML) can avoid re-parsing the document on
+/// every call. Mitigates F-W1B-029 (see `findings-rust-logic.md`).
+pub(crate) fn execute_single_css_pre_parsed(
+    document: &scraper::Html,
+    selector_str: &str,
+) -> Result<Vec<String>, String> {
     let (selector_str, output) = split_css_output(selector_str);
     // Strip any legacy @css: prefix that may remain from || combined rules
     let selector_str = strip_css_prefix_case_insensitive(selector_str).unwrap_or(selector_str);
@@ -320,7 +390,6 @@ fn execute_single_css(selector_str: &str, html: &str) -> Result<Vec<String>, Str
     let (clean_css, jsoup_filters) = extract_jsoup_pseudos(selector_str);
 
     let selector = parse_css_selector_safely(&clean_css)?;
-    let document = scraper::Html::parse_document(html);
     let mut results: Vec<String> = document
         .select(&selector)
         .map(|el| match output {

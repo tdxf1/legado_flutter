@@ -786,6 +786,13 @@ fn register_quickjs_bridge(ctx: &rquickjs::Ctx<'_>) -> Result<(), String> {
                 .map_err(|e| format!("register replaceFont: {e}"))?,
         )
         .map_err(|e| format!("set replaceFont: {e}"))?;
+    global
+        .set(
+            "__legado_replace_font_by_urls",
+            Function::new(ctx.clone(), java_replace_font_by_urls)
+                .map_err(|e| format!("register replaceFontByUrls: {e}"))?,
+        )
+        .map_err(|e| format!("set replaceFontByUrls: {e}"))?;
     Ok(())
 }
 
@@ -1929,15 +1936,9 @@ fn java_get_txt_in_folder(dir_path: String) -> String {
 }
 
 #[cfg(feature = "js-quickjs")]
-fn font_mappings_json(bytes: &[u8]) -> String {
-    let face = match ttf_parser::Face::parse(bytes, 0) {
-        Ok(f) => f,
-        Err(_) => return "null".to_string(),
-    };
-    let cmap = match face.tables().cmap {
-        Some(c) => c,
-        None => return "null".to_string(),
-    };
+fn parse_ttf_to_mapping(bytes: &[u8]) -> Option<std::collections::HashMap<u32, u16>> {
+    let face = ttf_parser::Face::parse(bytes, 0).ok()?;
+    let cmap = face.tables().cmap?;
     let mut mappings: std::collections::HashMap<u32, u16> = std::collections::HashMap::new();
     for subtable in cmap.subtables {
         if !subtable.is_unicode() {
@@ -1949,7 +1950,53 @@ fn font_mappings_json(bytes: &[u8]) -> String {
             }
         });
     }
-    serde_json::to_string(&mappings).unwrap_or_else(|_| "null".to_string())
+    Some(mappings)
+}
+
+#[cfg(feature = "js-quickjs")]
+fn font_mappings_json(bytes: &[u8]) -> String {
+    parse_ttf_to_mapping(bytes)
+        .and_then(|m| serde_json::to_string(&m).ok())
+        .unwrap_or_else(|| "null".to_string())
+}
+
+/// Resolve the polymorphic `input` parameter accepted by `java.queryTtf`
+/// (and now `java.replaceFontByUrls`) into raw font bytes.
+///
+/// Three branches, mirroring the legacy `java_query_ttf` logic:
+/// - `http(s)://...` → blocking GET, capped at 10 MiB.
+/// - long opaque string with no path separator → base64-decode.
+/// - otherwise → treat as a path under `LEGADO_FILE_ROOT` and read the file.
+///
+/// Returning `None` on any failure path matches `java_query_ttf` behaviour
+/// (it likewise just produces `"null"` JSON when input is unfetchable).
+#[cfg(feature = "js-quickjs")]
+fn resolve_ttf_input(input: &str) -> Option<Vec<u8>> {
+    if input.starts_with("http://") || input.starts_with("https://") {
+        let max_bytes: usize = 10 * 1024 * 1024;
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .ok()?;
+        let response = client.get(input).send().ok()?;
+        let mut buf = Vec::new();
+        use std::io::Read;
+        response
+            .take((max_bytes + 1) as u64)
+            .read_to_end(&mut buf)
+            .ok()?;
+        if buf.len() > max_bytes {
+            return None;
+        }
+        Some(buf)
+    } else if input.len() > 100 && !input.contains('/') && !input.contains('\\') {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(input.as_bytes())
+            .ok()
+    } else {
+        read_allowed_file(input)
+    }
 }
 
 #[cfg(feature = "js-quickjs")]
@@ -1964,49 +2011,26 @@ fn java_query_base64_ttf(base64: String) -> String {
 
 #[cfg(feature = "js-quickjs")]
 fn java_query_ttf(input: String) -> String {
-    let bytes = if input.starts_with("http://") || input.starts_with("https://") {
-        match reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .build()
-            .ok()
-            .and_then(|c| c.get(&input).send().ok())
-            .and_then(|r| {
-                let max_bytes: usize = 10 * 1024 * 1024;
-                let mut buf = Vec::new();
-                use std::io::Read;
-                r.take((max_bytes + 1) as u64)
-                    .read_to_end(&mut buf)
-                    .ok()
-                    .filter(|_| buf.len() <= max_bytes)
-                    .map(|_| buf)
-            }) {
-            Some(b) => b,
-            None => return "null".to_string(),
-        }
-    } else if input.len() > 100 && !input.contains('/') && !input.contains('\\') {
-        use base64::Engine;
-        match base64::engine::general_purpose::STANDARD.decode(&input) {
-            Ok(b) => b,
-            Err(_) => return "null".to_string(),
-        }
-    } else {
-        match read_allowed_file(&input) {
-            Some(b) => b,
-            None => return "null".to_string(),
-        }
+    let bytes = match resolve_ttf_input(&input) {
+        Some(b) => b,
+        None => return "null".to_string(),
     };
     font_mappings_json(&bytes)
 }
 
+/// Apply the `mapping1 → glyph → mapping2` font-substitution algorithm to
+/// `text`. Extracted from `java_replace_font` so the new
+/// `java_replace_font_by_urls` entry point can share the same algorithm
+/// without round-tripping through JSON.
 #[cfg(feature = "js-quickjs")]
-fn java_replace_font(text: String, font1_json: String, font2_json: String) -> String {
-    let mapping1: std::collections::HashMap<u32, u16> =
-        serde_json::from_str(&font1_json).unwrap_or_default();
-    let mapping2: std::collections::HashMap<u32, u16> =
-        serde_json::from_str(&font2_json).unwrap_or_default();
+fn replace_font_text(
+    text: &str,
+    mapping1: &std::collections::HashMap<u32, u16>,
+    mapping2: &std::collections::HashMap<u32, u16>,
+) -> String {
     let mut glyph_to_codepoint: std::collections::HashMap<u16, u32> =
-        std::collections::HashMap::new();
-    for (&codepoint, &glyph) in &mapping2 {
+        std::collections::HashMap::with_capacity(mapping2.len());
+    for (&codepoint, &glyph) in mapping2 {
         glyph_to_codepoint.insert(glyph, codepoint);
     }
     let mut result = String::with_capacity(text.len());
@@ -2023,6 +2047,46 @@ fn java_replace_font(text: String, font1_json: String, font2_json: String) -> St
         result.push(ch);
     }
     result
+}
+
+#[cfg(feature = "js-quickjs")]
+fn java_replace_font(text: String, font1_json: String, font2_json: String) -> String {
+    let mapping1: std::collections::HashMap<u32, u16> =
+        serde_json::from_str(&font1_json).unwrap_or_default();
+    let mapping2: std::collections::HashMap<u32, u16> =
+        serde_json::from_str(&font2_json).unwrap_or_default();
+    replace_font_text(&text, &mapping1, &mapping2)
+}
+
+/// One-shot font replacement: takes two font URLs / inputs (same shape as
+/// `java.queryTtf`), parses each TTF once, and applies the substitution
+/// in Rust without bridging the codepoint→glyph map through JSON. This
+/// is the F-W1B-031 fast path for new sources; the legacy two-step
+/// `queryTtf` + `replaceFont` API is preserved for compatibility.
+///
+/// On any failure (download, base64-decode, ttf parse) the original
+/// `text` is returned unchanged — same shape as the legacy path which
+/// would receive `"null"` and `serde_json::from_str` would fall back to
+/// `HashMap::default()` (empty map → no substitution).
+#[cfg(feature = "js-quickjs")]
+fn java_replace_font_by_urls(text: String, input1: String, input2: String) -> String {
+    let bytes1 = match resolve_ttf_input(&input1) {
+        Some(b) => b,
+        None => return text,
+    };
+    let bytes2 = match resolve_ttf_input(&input2) {
+        Some(b) => b,
+        None => return text,
+    };
+    let mapping1 = match parse_ttf_to_mapping(&bytes1) {
+        Some(m) => m,
+        None => return text,
+    };
+    let mapping2 = match parse_ttf_to_mapping(&bytes2) {
+        Some(m) => m,
+        None => return text,
+    };
+    replace_font_text(&text, &mapping1, &mapping2)
 }
 
 #[cfg(feature = "js-quickjs")]
@@ -2233,7 +2297,8 @@ var java = {
     utf8ToGbk: function(str) { return __legado_utf8_to_gbk(String(str)); },
     queryBase64Ttf: function(base64) { return __legado_query_base64_ttf(String(base64)); },
     queryTtf: function(input) { return __legado_query_ttf(String(input)); },
-    replaceFont: function(text, font1Json, font2Json) { return __legado_replace_font(String(text), String(font1Json || ''), String(font2Json || '')); }
+    replaceFont: function(text, font1Json, font2Json) { return __legado_replace_font(String(text), String(font1Json || ''), String(font2Json || '')); },
+    replaceFontByUrls: function(text, url1, url2) { return __legado_replace_font_by_urls(String(text), String(url1 || ''), String(url2 || '')); }
 };
 
 var cache = {
@@ -3068,5 +3133,64 @@ mod tests {
         assert!(files.contains(&"a.txt"));
         assert!(files.contains(&"b.txt"));
         assert!(!files.contains(&"c.dat"));
+    }
+
+    /// **F-W1B-031 (BATCH-14)**: 新接口 `java.replaceFontByUrls` 的单次到位
+    /// 算法必须与"老路径走两步" (queryTtf → replaceFont via JSON) 等价。
+    ///
+    /// 真实 ttf bytes 构造成本高，本测试直接验证两条路径共享的核心算法
+    /// `replace_font_text`：给定相同的 mapping1 / mapping2，输出 text 与
+    /// "老路径走 java_replace_font(JSON)" 完全一致。两条路径都委托到
+    /// `replace_font_text`，所以一致性由结构保证；本测覆盖映射存在/缺失
+    /// /链断开三种情况的字符替换正确性。
+    #[cfg(feature = "js-quickjs")]
+    #[test]
+    fn test_replace_font_by_urls_equivalent_to_two_step() {
+        // mapping1: 文本里的字符 → 字形 id
+        // 'A' (0x41) → glyph 100, 'B' (0x42) → glyph 101, 'X' (0x58) → glyph 999
+        let mut mapping1: std::collections::HashMap<u32, u16> =
+            std::collections::HashMap::new();
+        mapping1.insert(0x41, 100);
+        mapping1.insert(0x42, 101);
+        mapping1.insert(0x58, 999);
+
+        // mapping2: 字形 id → 真实 codepoint（反向用 glyph→codepoint 查）
+        // glyph 100 → 'a' (0x61), glyph 101 → 'b' (0x62)
+        // 注意：glyph 999 不在 mapping2 — 'X' 应保持原样不替换
+        let mut mapping2: std::collections::HashMap<u32, u16> =
+            std::collections::HashMap::new();
+        mapping2.insert(0x61, 100);
+        mapping2.insert(0x62, 101);
+
+        let text = "A B X C"; // 'C' 不在 mapping1 也保持原样
+
+        // 新路径：直接调 replace_font_text（与 java_replace_font_by_urls
+        // 共享同一算法 helper）。
+        let direct = replace_font_text(text, &mapping1, &mapping2);
+
+        // 老路径：模拟 queryTtf 输出的 JSON → java_replace_font 走 JSON
+        // 解析 → 内部同一 helper。两条路径必须输出相同字符串。
+        let json1 = serde_json::to_string(&mapping1).unwrap();
+        let json2 = serde_json::to_string(&mapping2).unwrap();
+        let two_step = java_replace_font(text.to_string(), json1, json2);
+
+        assert_eq!(direct, two_step, "新旧路径替换结果必须一致");
+        // 显式检查替换语义：A→a, B→b, X 链断开保持原样，C 无 mapping1 保持原样，空格保持原样。
+        assert_eq!(direct, "a b X C");
+    }
+
+    /// **F-W1B-031 (BATCH-14)**: 失败路径行为对齐 — `replaceFontByUrls`
+    /// 在任何一步失败（input 解析、ttf parse、文件读取）时返回原 text，
+    /// 与老路径"映射缺失则不替换"的语义对齐。
+    #[cfg(feature = "js-quickjs")]
+    #[test]
+    fn test_replace_font_by_urls_returns_text_on_failure() {
+        // 显式给两个非法 input（不是 http、不是 base64、文件读不到 —
+        // LEGADO_FILE_ROOT 未设置或路径不在 root 下）。
+        let _guard = file_env_lock().lock().unwrap();
+        std::env::remove_var("LEGADO_FILE_ROOT");
+        let result =
+            java_replace_font_by_urls("hello".to_string(), "/nope".to_string(), "/nope".to_string());
+        assert_eq!(result, "hello", "input 不可解析时应返回原文本");
     }
 }

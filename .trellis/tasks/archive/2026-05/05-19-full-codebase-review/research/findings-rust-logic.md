@@ -390,6 +390,8 @@
 
 **建议**: 重构为 per-item 一次性提取所有字段（嵌套循环外层 items 内层 fields）。
 
+**Resolution**: BATCH-14 (2026-05-21) — `core/core-source/src/parser.rs::search` 改为 per-item 嵌套循环：外层一次性遍历 contexts，内层每个 item 调用新 helper `extract_field` 5 次（name/author/cover/book_url/intro）共享同一 base-context clone，少 4 次 `RuleContext::clone()`/item。`extract_from_contexts` 保留作为非 search 路径的 fallback。新增单测 `test_search_per_item_field_alignment`（N=3 items，中间 item 缺 author）防"字段错位"回归。task: 05-21-batch-14-parser-rule-perf-misc。
+
 ---
 
 ### F-W1B-029 [P1 主要][C-性能][core-source/legado/rule]
@@ -401,6 +403,8 @@
 **详细**: scraper Html::parse_document 占大头时间；对小 HTML 可能不显著但 1MB+ 页 5 次解析很可观。
 
 **建议**: 对同一 html 只 parse 一次，按 RuleEngine 调用周期缓存（per-context cache_key）。
+
+**Resolution**: BATCH-14 (2026-05-21) — 选了 thread_local 单槽缓存方案（vs prd.md "search 本地 parse" 方案）：`core/core-source/src/legado/rule.rs` 加 `LAST_PARSED_HTML: thread_local RefCell<Option<(ptr, len, Rc<scraper::Html>)>>` + 公开 `clear_html_parse_cache`。`execute_single_css` 委托给新内部接口 `execute_single_css_pre_parsed(&document, selector_str)`；缓存键是 `&str` 的 (ptr, len) — 在同一 search() 帧内 html 地址不变，5 字段 + `||` 组合所有 selector 命中同一份 `Rc<Html>`。**所有 6 个 rule-evaluation 入口**（`parser::search` / `parser::explore` / `parser::get_book_info` / `parser::get_chapters` / `parser::get_chapter_content` / `rss::get_articles` / `rss::fetch_article_content_full`）入口处调 `clear_html_parse_cache()` 防止跨调用的 (ptr, len) 复用碰撞 — 不同调用 String 在 caller 帧 drop 后，allocator 复用同址同长度可能命中 stale Rc，clear 是必要的纵深防御。**选择理由**：search 本地传引用方案需要把 `&Html` 一路穿过 `RuleEngine::execute_rule` trait（>50 行接口改动，跨越 rule 派发器、组合器、jsoup 伪选择器路径）；thread_local 单槽是局部、零接口扩散的等价收益方案。task: 05-21-batch-14-parser-rule-perf-misc。
 
 ---
 
@@ -414,6 +418,8 @@
 
 **建议**: 改用 `dashmap` 或者 sharded mutex；单个 source 的连续请求才需要严格同步，跨 source 完全可并行。
 
+**Resolution**: BATCH-14 (2026-05-21) — 验证现行设计已经被 atomic-based sweep throttling (`should_run_sweep_now` + `RATE_LIMITER_LAST_SWEEP_MS`，BATCH 早期添加) 充分缓解：O(n) eviction 由"每次 lock"压到"30s 一次"，hot-path lock 临界区只剩 HashMap lookup + 小写字段读写。在当前并发量级（个位数同时 search）切 dashmap 反而带来 batch eviction 的锁顺序复杂度。**不动代码**，仅在 `RATE_LIMITER` 注释末尾追加一段说明指向 `should_run_sweep_now` 与负载测试 `test_evict_stale_rate_states_caps_max_entries`。task: 05-21-batch-14-parser-rule-perf-misc。
+
 ---
 
 ### F-W1B-031 [P1 主要][C-性能][core-source/legado/js_runtime]
@@ -425,6 +431,8 @@
 **详细**: 调用栈：`java.queryTtf` → 下载/读取 ttf → 全 mapping 转 JSON → JS 端 parse → JS 端遍历调 `replaceFont`。最优实现应直接在 Rust 内一次性 `replaceFont(text, fontUrl1, fontUrl2)` 接口。
 
 **建议**: 增加一个 `__legado_replace_font_with_urls` 接口，全过程在 Rust 内完成，PREAMBLE 包装；保留旧接口兼容旧书源。
+
+**Resolution**: BATCH-14 (2026-05-21) — 新增 Rust 一次到位接口 + JS PREAMBLE 包装，**完整保留旧 API 兼容**：`core/core-source/src/legado/js_runtime.rs` 抽 3 个 helper：`parse_ttf_to_mapping(bytes) -> Option<HashMap<u32, u16>>`、`resolve_ttf_input(input) -> Option<Vec<u8>>`（http/base64/file 三路）、`replace_font_text(text, &m1, &m2)`（替换算法）。新增 `java_replace_font_by_urls(text, input1, input2)` 直接走 resolve→parse→replace 三步在 Rust 内完成，无 JSON 桥接。`__legado_replace_font_by_urls` 注册到 quickjs Function 表；PREAMBLE `java.replaceFontByUrls(text, url1, url2)` 暴露给书源。**旧 API 全部不动**：`__legado_query_ttf` / `__legado_query_base64_ttf` / `__legado_replace_font` / `java.queryTtf` / `java.queryBase64Ttf` / `java.replaceFont` 行为零变化（旧 `font_mappings_json` 现在内部委托 `parse_ttf_to_mapping`，旧 `java_replace_font` 走相同 `replace_font_text` 算法）。新增 2 单测 `test_replace_font_by_urls_equivalent_to_two_step` 验证新旧路径输出一致 + `test_replace_font_by_urls_returns_text_on_failure` 验证 input 不可解析时返回原 text。收益：新书源迁移后 1 次 ttf parse + 1 次替换即可，免 JSON 桥接（典型 CJK 章节预期减少 70%+ 字体处理时间）；老书源完全兼容。task: 05-21-batch-14-parser-rule-perf-misc。
 
 ---
 

@@ -69,6 +69,12 @@ impl RssParser {
         sort_url: &str,
         page: i32,
     ) -> Result<Vec<RssArticle>, ParserError> {
+        // F-W1B-029 mitigation: clear the per-thread parsed-html cache up
+        // front so that the (ptr, len) cache key inside `legado::rule`
+        // cannot collide with stale state left by a previous call whose
+        // html buffer happens to be re-allocated at the same address.
+        crate::legado::clear_html_parse_cache();
+
         let target_url = if source.single_url || sort_url.trim().is_empty() {
             source.source_url.as_str()
         } else {
@@ -152,6 +158,10 @@ impl RssParser {
         source: &RssSource,
         article: &RssArticle,
     ) -> Result<FetchedContent, ParserError> {
+        // F-W1B-029 mitigation: clear the per-thread parsed-html cache up
+        // front (see `RssParser::get_articles` for rationale).
+        crate::legado::clear_html_parse_cache();
+
         info!(
             "拉取 RSS 文章详情: source={} link={}",
             source.source_name, article.link
