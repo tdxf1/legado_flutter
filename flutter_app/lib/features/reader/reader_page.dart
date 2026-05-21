@@ -1316,8 +1316,14 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
   }
 
   /// Bug 6: 在 _onScroll 的 debounce 回调里调用，估算当前可见 paragraph index。
-  /// 算法：找当前可见 chapter 的标题 RenderBox 在视口的 dy，从那里计算视口顶部
-  /// 偏移了多少段（按平均段高估算）。
+  ///
+  /// BATCH-19b (F-W2A-014): 保存路径用 GlobalKey 反查（与 P2-13 已有的
+  /// 恢复路径对称）：遍历当前章 cap 内的 _paragraphKeys，找第一个
+  /// `localToGlobal(0, ancestor: listBox).dy >= 0` 的最小 idx。超过 cap
+  /// 的章 fallback 到原 标题 dy + 平均段高估算 公式。
+  ///
+  /// 之前保存用估算 (`dyFromParagraphStart / approxParagraphHeight`)，
+  /// 恢复用 GlobalKey 反查 → 不对称导致 paragraph index ±1-2 段漂移。
   void _updateVisibleParagraph() {
     if (!_scrollController.hasClients) return;
     if (_loadedChapters.isEmpty) return;
@@ -1330,17 +1336,38 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       _visibleParagraphIndex = 0;
       return;
     }
+    final listBox =
+        _listViewKey.currentContext?.findRenderObject() as RenderBox?;
+    if (listBox == null || !listBox.hasSize) return;
+
+    // 1. cap 内 GlobalKey 反查：找视口顶部之下（dy >= 0）的最小 paragraph idx。
+    final paraCount = ch.paragraphs.length;
+    final lookupCount =
+        paraCount < _kParagraphKeyCap ? paraCount : _kParagraphKeyCap;
+    int? foundIdx;
+    for (int idx = 0; idx < lookupCount; idx++) {
+      final keyId = _paragraphKeyId(ch.index, idx);
+      final key = _paragraphKeys[keyId];
+      final ctx = key?.currentContext;
+      final box = ctx?.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize) continue;
+      final dy = box.localToGlobal(Offset.zero, ancestor: listBox).dy;
+      if (dy >= 0) {
+        foundIdx = idx;
+        break;
+      }
+    }
+    if (foundIdx != null) {
+      _visibleParagraphIndex = foundIdx;
+      return;
+    }
+
+    // 2. Fallback：超过 cap 的章（或所有 cap 内 key 都没 layout / 都在视口
+    // 之上）走原估算公式。
     final titleKey = _chapterTitleKeys[ch.index];
     final titleCtx = titleKey?.currentContext;
     final titleBox = titleCtx?.findRenderObject() as RenderBox?;
-    final listBox =
-        _listViewKey.currentContext?.findRenderObject() as RenderBox?;
-    if (titleBox == null ||
-        !titleBox.hasSize ||
-        listBox == null ||
-        !listBox.hasSize) {
-      return;
-    }
+    if (titleBox == null || !titleBox.hasSize) return;
     final titleDy =
         titleBox.localToGlobal(Offset.zero, ancestor: listBox).dy;
     final approxLineHeight = _settings.fontSize * _settings.lineHeight;
@@ -1741,21 +1768,23 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
 
   @override
   Widget build(BuildContext context) {
-    final providerSettings = ref.watch(readerSettingsProvider);
-    // BATCH-19a (F-W2A-005): `ReaderSettings` 已实现 ==/hashCode，稳态下
-    // `providerSettings != _settings` 会按字段相等性返回 false → postFrame
-    // 不再每帧 schedule。仅在 settings 真实变更（设置页 slider 调整、字号
-    // 长按调节等）时进入分支，回写 _settings + 触发一次 setState。
-    //
-    // 保留 build 内 watch 而非改 ref.listen 是为了 `_readerSettingsLoaded`
-    // 路径正确——首帧 disk load 完成时这里会拾起新值。
-    if (_readerSettingsLoaded && providerSettings != _settings) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && ref.read(readerSettingsProvider) != _settings) {
-          _setReaderSettings(ref.read(readerSettingsProvider));
-        }
-      });
-    }
+    // BATCH-19b (F-W2A-011): build 顶层不再 watch readerSettingsProvider，
+    // 改为 ref.listen + State.setState 单路径。理由：
+    // - 之前 `ref.watch(readerSettingsProvider)` 让 settings 任一字段变化
+    //   都全树 rebuild ReaderPage，包括 PageViewWidget / 连续滚动 ListView。
+    // - reader_page 的 settings 真正 source of truth 是 plain field
+    //   `_settings`，子树都从 `_settings` 读；provider 只是跨页面同步通道。
+    // - listen 在 build 内调用是合法的（Riverpod 文档明确支持）；回调
+    //   post-build 触发，无需 addPostFrameCallback 包裹。
+    // - 首帧值由 initState 的 loadReaderSettingsFromDisk → _setReaderSettings
+    //   兜底，listen 接管后续 provider 端变更（设置页 slider、bookshelf
+    //   排序写回等）。
+    ref.listen<ReaderSettings>(readerSettingsProvider, (prev, next) {
+      if (!mounted) return;
+      if (_readerSettingsLoaded && next != _settings) {
+        _setReaderSettings(next);
+      }
+    });
 
     if (widget.bookId.isEmpty) {
       return Scaffold(
