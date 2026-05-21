@@ -122,4 +122,63 @@ void main() {
 
     expect(find.text('test keyword'), findsOneWidget);
   });
+
+  testWidgets(
+      'BATCH-21 (F-W2B-019): 连续两次 _doSearch 后 _searchSeq 自增；'
+      '旧 future 不覆盖新结果', (WidgetTester tester) async {
+    // 让 dbInitializedProvider 永远不完成 → _doSearch 在 await 处悬停
+    // 但 ++_searchSeq 已经在 await 前同步执行过。
+    final hangingCompleter = Completer<bool>();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          dbDirProvider.overrideWith((ref) => Future.value('.')),
+          dbPathProvider.overrideWith((ref) => Future.value('test_legado.db')),
+          dbInitializedProvider.overrideWith((ref) => hangingCompleter.future),
+        ],
+        child: const MaterialApp(home: SearchPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 第一次搜索：tap send 按钮触发 _doSearch
+    await tester.enterText(find.byType(TextField), 'A');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pump();
+
+    final state = tester.state<State<SearchPage>>(find.byType(SearchPage));
+    // ignore: avoid_dynamic_calls
+    expect((state as dynamic).debugSearchSeq, 1);
+    // ignore: avoid_dynamic_calls
+    expect((state as dynamic).debugLastSearchKeyword, 'A');
+
+    // 第二次搜索：此时 _loading=true，send 按钮被 progress 替换；用
+    // onSubmitted 路径触发（直接对 TextField 输入新值再走 _doSearch）。
+    // 简化：通过 state.dynamic 调用 onSubmitted 回调；或更直接：模拟用户
+    // 在不等第一次完成的情况下用 onSubmitted。
+    await tester.enterText(find.byType(TextField), 'B');
+    await tester.pump();
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+
+    // ignore: avoid_dynamic_calls
+    expect((state as dynamic).debugSearchSeq, 2,
+        reason: '第二次 _doSearch 应自增 seq 到 2');
+    // ignore: avoid_dynamic_calls
+    expect((state as dynamic).debugLastSearchKeyword, 'B',
+        reason: '_lastSearchKeyword 应被新关键词覆盖');
+
+    // 解开 hanging future —— 第一次和第二次的 await 都会拿到 true。
+    // 第一次的 await 后会执行 `if (!mounted || seq != _searchSeq) return;`
+    // 因为 seq=1 ≠ _searchSeq=2，被拦截，不会改 _loading / 不会回滚
+    // _lastSearchKeyword。
+    hangingCompleter.complete(true);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    // ignore: avoid_dynamic_calls
+    expect((state as dynamic).debugLastSearchKeyword, 'B',
+        reason: 'seq 校验保证旧 future 不覆盖新关键词记忆');
+  });
 }

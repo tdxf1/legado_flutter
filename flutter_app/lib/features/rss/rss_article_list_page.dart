@@ -264,6 +264,16 @@ class _RssArticleListPageState extends ConsumerState<RssArticleListPage>
     if (link.isEmpty) return;
     // 批次 18 (05-19): optimistic 已读 dot — 点击立刻消失；mark_read
     // 真正写入由 detail 页 init 完成（避免列表 + 详情双写）。
+    //
+    // 软一致语义（BATCH-21 / F-W2B-012）：
+    // - 用户体验上 read_time 在列表 + detail 两处独立维护
+    // - 若 detail 写库成功（绝大多数情况）：返回 list 时已读状态正确
+    // - 若 detail 写库失败（FRB 异常 / 网络 / db lock）：本次返回 list 仍
+    //   显示已读 dot 消失（optimistic），但下次 _loadArticles 拉取时会
+    //   恢复 stale 状态（read_time = 0）；用户再次点击会重试
+    // - 这是 trade-off：避免双写 + 立即视觉反馈，代价是失败时下次自然修正
+    //   而不是立即 rollback（rollback 需要 detail→list 通信机制，留 future
+    //   work）
     final ts = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     setState(() {
       article['read_time'] = ts;
@@ -330,22 +340,75 @@ class _RssArticleListPageState extends ConsumerState<RssArticleListPage>
       return Center(child: Text('加载失败: $_error'));
     }
     if (_tabs.isEmpty) {
-      return _buildArticleList(context, '');
+      return _ArticleTabView(
+        sortName: '',
+        articles: _articlesBySort[''],
+        onRefresh: () => _loadArticles('', refresh: true),
+        onTap: _onArticleTap,
+      );
     }
     return TabBarView(
       controller: _tabController,
-      children: [for (final t in _tabs) _buildArticleList(context, t.name)],
+      children: [
+        for (final t in _tabs)
+          _ArticleTabView(
+            // BATCH-21 (F-W2B-013): KeepAlive 让切走的 tab 保留 scroll
+            // position + ListView state；key 绑 sort name 让 tab 列表
+            // 重排时正确复用。
+            key: ValueKey('rss_tab_${t.name}'),
+            sortName: t.name,
+            articles: _articlesBySort[t.name],
+            onRefresh: () => _loadArticles(t.name, refresh: true),
+            onTap: _onArticleTap,
+          ),
+      ],
     );
   }
+}
 
-  Widget _buildArticleList(BuildContext context, String sortName) {
-    final articles = _articlesBySort[sortName];
+/// BATCH-21 (F-W2B-013): TabBarView 子项 —— 每个 tab 一个独立的
+/// `StatefulWidget` 配合 [AutomaticKeepAliveClientMixin]，让用户切走
+/// 再切回时保留 scroll position + ListView state，不再每次 rebuild
+/// 整个 list。原本 `_buildArticleList` 是 method 返回 widget，父组件
+/// setState 会让所有 tab 同时 rebuild；提到 widget 后只有当前 tab 受
+/// setState 影响。
+///
+/// 不需要 [ConsumerStatefulWidget] —— 该 widget 内不直接 watch / read
+/// Riverpod provider；下层数据全部由父组件 (`_RssArticleListPageState`)
+/// 通过构造参数 + callback 传入。
+class _ArticleTabView extends StatefulWidget {
+  final String sortName;
+  final List<Map<String, dynamic>>? articles;
+  final Future<void> Function() onRefresh;
+  final void Function(Map<String, dynamic>) onTap;
+
+  const _ArticleTabView({
+    super.key,
+    required this.sortName,
+    required this.articles,
+    required this.onRefresh,
+    required this.onTap,
+  });
+
+  @override
+  State<_ArticleTabView> createState() => _ArticleTabViewState();
+}
+
+class _ArticleTabViewState extends State<_ArticleTabView>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context); // KeepAlive 必须，否则 mixin 不生效。
+    final articles = widget.articles;
     if (articles == null) {
       return const Center(child: CircularProgressIndicator());
     }
     if (articles.isEmpty) {
       return RefreshIndicator(
-        onRefresh: () => _loadArticles(sortName, refresh: true),
+        onRefresh: widget.onRefresh,
         child: ListView(
           children: const [
             SizedBox(height: 200),
@@ -355,90 +418,94 @@ class _RssArticleListPageState extends ConsumerState<RssArticleListPage>
       );
     }
     return RefreshIndicator(
-      onRefresh: () => _loadArticles(sortName, refresh: true),
+      onRefresh: widget.onRefresh,
       child: ListView.builder(
         itemCount: articles.length,
         itemBuilder: (context, index) =>
-            _buildArticleTile(context, articles[index]),
+            _buildArticleTile(context, articles[index], widget.onTap),
       ),
     );
   }
+}
 
-  Widget _buildArticleTile(BuildContext context, Map<String, dynamic> article) {
-    final title = article['title'] as String? ?? '(无标题)';
-    final pubDate = article['pub_date'] as String? ?? '';
-    final description = (article['description'] as String? ?? '').trim();
-    final image = article['image'] as String?;
-    final readTime = (article['read_time'] as num?)?.toInt() ?? 0;
-    final isRead = readTime > 0;
-    final shortDesc = description.length > 50
-        ? '${description.substring(0, 50)}…'
-        : description;
-    final subtitle = [
-      if (pubDate.isNotEmpty) pubDate,
-      if (shortDesc.isNotEmpty) shortDesc,
-    ].join(' · ');
-    return ListTile(
-      onTap: () => _onArticleTap(article),
-      leading: _buildThumbnail(image),
-      title: Row(
-        children: [
-          if (!isRead)
-            Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primary,
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ),
-          Expanded(
-            child: Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: isRead
-                    ? Theme.of(context)
-                        .colorScheme
-                        .onSurface
-                        .withValues(alpha: 0.6)
-                    : null,
+Widget _buildArticleTile(
+  BuildContext context,
+  Map<String, dynamic> article,
+  void Function(Map<String, dynamic>) onTap,
+) {
+  final title = article['title'] as String? ?? '(无标题)';
+  final pubDate = article['pub_date'] as String? ?? '';
+  final description = (article['description'] as String? ?? '').trim();
+  final image = article['image'] as String?;
+  final readTime = (article['read_time'] as num?)?.toInt() ?? 0;
+  final isRead = readTime > 0;
+  final shortDesc = description.length > 50
+      ? '${description.substring(0, 50)}…'
+      : description;
+  final subtitle = [
+    if (pubDate.isNotEmpty) pubDate,
+    if (shortDesc.isNotEmpty) shortDesc,
+  ].join(' · ');
+  return ListTile(
+    onTap: () => onTap(article),
+    leading: _buildThumbnail(image),
+    title: Row(
+      children: [
+        if (!isRead)
+          Padding(
+            padding: const EdgeInsets.only(right: 6),
+            child: Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primary,
+                shape: BoxShape.circle,
               ),
             ),
           ),
-        ],
-      ),
-      subtitle: subtitle.isEmpty
-          ? null
-          : Text(
-              subtitle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+        Expanded(
+          child: Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: isRead
+                  ? Theme.of(context)
+                      .colorScheme
+                      .onSurface
+                      .withValues(alpha: 0.6)
+                  : null,
             ),
-    );
-  }
+          ),
+        ),
+      ],
+    ),
+    subtitle: subtitle.isEmpty
+        ? null
+        : Text(
+            subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+  );
+}
 
-  Widget _buildThumbnail(String? image) {
-    final box = SizedBox(
-      width: 64,
-      height: 64,
-      child: image == null || image.isEmpty
-          ? const Icon(Icons.article, size: 40)
-          : CachedNetworkImage(
-              imageUrl: image,
-              fit: BoxFit.cover,
-              placeholder: (_, __) => const Icon(Icons.article, size: 40),
-              errorWidget: (_, __, ___) =>
-                  const Icon(Icons.article, size: 40),
-            ),
-    );
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(6),
-      child: box,
-    );
-  }
+Widget _buildThumbnail(String? image) {
+  final box = SizedBox(
+    width: 64,
+    height: 64,
+    child: image == null || image.isEmpty
+        ? const Icon(Icons.article, size: 40)
+        : CachedNetworkImage(
+            imageUrl: image,
+            fit: BoxFit.cover,
+            placeholder: (_, __) => const Icon(Icons.article, size: 40),
+            errorWidget: (_, __, ___) =>
+                const Icon(Icons.article, size: 40),
+          ),
+  );
+  return ClipRRect(
+    borderRadius: BorderRadius.circular(6),
+    child: box,
+  );
 }

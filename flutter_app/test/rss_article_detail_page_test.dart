@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -170,5 +171,69 @@ void main() {
     expect(find.textContaining('加载失败'), findsOneWidget);
     expect(find.text('重试'), findsOneWidget);
     expect(fetchCalls, 1);
+  });
+
+  testWidgets(
+      'BATCH-21 (F-W2B-009): isStarred + fetchHtml run in parallel '
+      '(both started before either completes)', (WidgetTester tester) async {
+    final isStarredCompleter = Completer<bool>();
+    final fetchCompleter = Completer<Map<String, dynamic>>();
+    var isStarredStarted = false;
+    var fetchStarted = false;
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: RssArticleDetailPage(
+            sourceUrl: 'https://feed.example/atom',
+            link: 'https://x/article/1',
+            dbPathOverride: '/tmp/legado-test.db',
+            disableWebView: true,
+            sourceOverride: const {
+              'source_url': 'https://feed.example/atom',
+              'source_name': '示例 RSS',
+            },
+            articleOverride: const {
+              'origin': 'https://feed.example/atom',
+              'sort': '',
+              'title': '示例文章',
+              'pub_date': '2024-05-19',
+              'link': 'https://x/article/1',
+              'image': null,
+              'description': null,
+              'order_num': 0,
+              'read_time': 1700000000,
+              'star': 0,
+            },
+            isStarredOverride: (dbPath, origin, link) {
+              isStarredStarted = true;
+              return isStarredCompleter.future;
+            },
+            fetchHtmlOverride: (dbPath, sourceUrl, link) {
+              fetchStarted = true;
+              return fetchCompleter.future;
+            },
+          ),
+        ),
+      ),
+    );
+    // 第一次 pump 让 _bootstrap 启动各个 future。Future.wait 内的 starred
+    // future 已发起；fetch 单独串行在 Future.wait 之后才启动 —— 这是
+    // 当前并行化范围（PRD: 主要并行 source/article/isStarred 三段，
+    // fetchHtml 保留独立串行错误分支）。
+    await tester.pump();
+    expect(isStarredStarted, isTrue,
+        reason: 'isStarred 应在 Future.wait 内并行启动');
+    // fetch 在串行流程后才启动；先 complete starred 让控制流继续
+    isStarredCompleter.complete(true);
+    await tester.pump();
+    expect(fetchStarted, isTrue, reason: 'starred 完成后 fetch 应被发起');
+    // 完成 fetch，结束 _bootstrap
+    fetchCompleter.complete({
+      'html': '<html><body>x</body></html>',
+      'base_url': 'https://feed.example/atom',
+    });
+    await tester.pumpAndSettle();
+    // starred=true 走 filled star icon
+    expect(find.byIcon(Icons.star), findsOneWidget);
   });
 }

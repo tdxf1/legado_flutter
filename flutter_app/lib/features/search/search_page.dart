@@ -66,9 +66,22 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   /// 只在 [_doSearch] 入口（trim 后、空校验通过后）写入此字段。
   String _lastSearchKeyword = '';
 
+  /// BATCH-21 (F-W2B-019): 自增 seq token，用于丢弃旧 future 的回写。
+  ///
+  /// 用户连续输入两次关键词（如 "剑来" → "凡人"）时，旧的 future 仍在
+  /// FRB 后台执行，没有 cancel API。`_doSearch` 入口记录 `seq = ++_searchSeq`，
+  /// 每个 await 后判 `seq == _searchSeq` 才继续；不等于说明有更新的
+  /// `_doSearch` 调用启动了，本次结果直接丢弃。
+  int _searchSeq = 0;
+
   /// 测试用：让 widget test 能验证 toggle 后 keyword 已记忆。
   @visibleForTesting
   String get debugLastSearchKeyword => _lastSearchKeyword;
+
+  /// BATCH-21 (F-W2B-019) 测试用：让 widget test 能验证连续两次 _doSearch
+  /// 调用后 seq 已自增，旧 future 在 await 后会被 seq 校验过滤掉。
+  @visibleForTesting
+  int get debugSearchSeq => _searchSeq;
 
   @override
   void initState() {
@@ -324,15 +337,21 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   Future<void> _doSearch() async {
     final keyword = _searchCtrl.text.trim();
     if (keyword.isEmpty) return;
+    // BATCH-21 (F-W2B-019): 自增 seq；每个 await 后判 seq == _searchSeq，
+    // 不等于则丢弃本次结果（说明 user 已发起新搜索，旧 future 不能覆盖
+    // 新结果 / 改 _loading）。
+    final seq = ++_searchSeq;
     _lastSearchKeyword = keyword;
     setState(() => _loading = true);
     try {
       if (_onlineMode) {
         final dbPath = await ref.read(dbPathProvider.future);
+        if (!mounted || seq != _searchSeq) return;
         final sourcesJson = await rust_api.getEnabledSources(dbPath: dbPath);
+        if (!mounted || seq != _searchSeq) return;
         final List<dynamic> sources = jsonDecode(sourcesJson);
         if (sources.isEmpty) {
-          if (!mounted) return;
+          if (!mounted || seq != _searchSeq) return;
           _results.value = [];
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('没有启用的书源，请先在书源管理中启用书源')),
@@ -351,7 +370,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           );
         }
         final allResults = await Future.wait(futures);
-        if (!mounted) return;
+        if (!mounted || seq != _searchSeq) return;
         final flatResults = allResults.expand((r) => r).toList();
         final seen = <String>{};
         final deduped = <Map<String, dynamic>>[];
@@ -370,13 +389,13 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         }
       } else {
         await ref.read(dbInitializedProvider.future);
-        if (!mounted) return;
+        if (!mounted || seq != _searchSeq) return;
         final dbPath = await ref.read(dbPathProvider.future);
-        if (!mounted) return;
+        if (!mounted || seq != _searchSeq) return;
         final offlineJson =
             await rust_api.searchBooksOffline(dbPath: dbPath, keyword: keyword);
+        if (!mounted || seq != _searchSeq) return;
         final List<dynamic> offlineList = jsonDecode(offlineJson);
-        if (!mounted) return;
         final offlineResults = offlineList.cast<Map<String, dynamic>>();
         final finalOffline = _precisionMode
             ? SearchPage.applyPrecisionFilter(offlineResults, keyword)
@@ -390,14 +409,15 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       }
       _addToHistory(keyword);
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || seq != _searchSeq) return;
       _results.value = [];
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('搜索失败: $e')),
       );
     } finally {
-      if (!mounted) return;
-      setState(() => _loading = false);
+      if (mounted && seq == _searchSeq) {
+        setState(() => _loading = false);
+      }
     }
   }
 

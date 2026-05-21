@@ -188,4 +188,92 @@ void main() {
     // 列表已被替换
     expect(find.text('标题 A (refreshed)'), findsOneWidget);
   });
+
+  testWidgets(
+      'BATCH-21 (F-W2B-013): KeepAlive — 切换 tab 后 ListView state '
+      '通过 AutomaticKeepAlive 保留', (WidgetTester tester) async {
+    // 构造一个多 tab 的源 — 走 sortUrl + 提供 tabsOverride 显式构造 2 个
+    // tab；articlesOverride 走第一个 tab key。
+    final manyArticles = List.generate(
+      30,
+      (i) => {
+        'origin': 'https://feed.example/atom',
+        'sort': '',
+        'title': '标题 $i',
+        'pub_date': '2024-01-${(i + 1).toString().padLeft(2, '0')}',
+        'link': 'https://x/$i',
+        'image': null,
+        'description': 'Desc $i',
+        'order_num': i,
+        'read_time': 0,
+        'star': 0,
+      },
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: RssArticleListPage(
+            sourceUrl: 'https://feed.example/atom',
+            dbPathOverride: '/tmp/legado-test.db',
+            sourceOverride: const {
+              'source_url': 'https://feed.example/atom',
+              'source_name': '示例 RSS',
+              'single_url': false,
+              'sort_url': '热门::https://x/hot\n最新::https://x/new',
+            },
+            tabsOverride: const [
+              {'name': '热门', 'url': 'https://x/hot'},
+              {'name': '最新', 'url': 'https://x/new'},
+            ],
+            articlesOverride: manyArticles,
+            // 切到 "最新" tab 时会触发 getArticlesOverride（首次进 tab 自动拉取）
+            getArticlesOverride: (
+              dbPath,
+              sourceUrl,
+              sortName,
+              sortUrl,
+              page,
+            ) async {
+              return jsonEncode([
+                {
+                  'origin': 'https://feed.example/atom',
+                  'sort': sortName,
+                  'title': '$sortName 文章',
+                  'pub_date': '2024-02-01',
+                  'link': 'https://x/${sortName}_only',
+                  'image': null,
+                  'description': '...',
+                  'order_num': 0,
+                  'read_time': 0,
+                  'star': 0,
+                },
+              ]);
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // 默认在 "热门" tab —— 30 篇文章
+    expect(find.text('标题 0'), findsOneWidget);
+    // 滚到中间
+    final firstListView = find.byType(ListView).first;
+    await tester.drag(firstListView, const Offset(0, -400));
+    await tester.pumpAndSettle();
+    // 滚动后 "标题 0" 不再可见，"标题 10+" 可见
+    expect(find.text('标题 0'), findsNothing);
+
+    // 切到 "最新" tab
+    await tester.tap(find.text('最新'));
+    await tester.pumpAndSettle();
+    // 应有 "最新 文章"
+    expect(find.text('最新 文章'), findsOneWidget);
+
+    // 切回 "热门" tab —— KeepAlive 应保留 scroll position
+    await tester.tap(find.text('热门'));
+    await tester.pumpAndSettle();
+    // 验证仍滚在中段（"标题 0" 不可见）—— 这是 KeepAlive 生效的核心证据
+    expect(find.text('标题 0'), findsNothing,
+        reason: 'KeepAlive 应保留 scroll offset；如失效则 List 重建会回到顶');
+  });
 }

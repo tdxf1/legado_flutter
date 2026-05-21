@@ -188,10 +188,16 @@ class _RssSourceManagePageState extends ConsumerState<RssSourceManagePage> {
       final String dbPath =
           widget.dbPathOverride ?? await ref.read(dbPathProvider.future);
       await fn(dbPath, url, newValue);
-      // 局部更新 record，避免重拉整个列表（也方便测试断言）。
+      // BATCH-21 (F-W2B-014): immutable update —— `List.of(_records)` 复制
+      // 顶层 list，`{...record, 'enabled': newValue}` 复制目标 record map，
+      // 旧 _records / 旧 record 引用不变。这避免原地 `record['enabled'] =
+      // newValue` 在多处 caller 持引用时的 mutation aliasing。
       if (!mounted) return;
+      final idx = _records.indexOf(record);
+      if (idx < 0) return; // record 已不在列表（被 import/delete 替换）
       setState(() {
-        record['enabled'] = newValue;
+        _records = List.of(_records)
+          ..[idx] = {...record, 'enabled': newValue};
       });
     } catch (e) {
       if (!mounted) return;

@@ -114,4 +114,41 @@ void main() {
     expect(lastUrl, 'https://feed.example/atom');
     expect(lastEnabled, false, reason: '从 true 切到 false');
   });
+
+  testWidgets(
+      'BATCH-21 (F-W2B-014): toggle Switch 后原 record map 不被原地修改 '
+      '(immutable update)', (WidgetTester tester) async {
+    // 持有原 record 引用，验证 toggle 后该引用的 'enabled' 仍是旧值
+    final originalRecord = <String, dynamic>{
+      'source_url': 'https://feed.example/atom',
+      'source_name': '示例 RSS',
+      'source_group': '科技',
+      'enabled': true,
+    };
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: RssSourceManagePage(
+            dbPathOverride: '/tmp/legado-test.db',
+            recordsOverride: [originalRecord],
+            setEnabledOverride: (db, url, enabled) async => 1,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(originalRecord['enabled'], isTrue);
+
+    await tester.tap(find.byType(Switch));
+    await tester.pumpAndSettle();
+
+    // F-W2B-014 核心断言：原 record 引用 'enabled' 不被原地改写为 false
+    expect(originalRecord['enabled'], isTrue,
+        reason: 'immutable update：旧 record map 不应被原地修改');
+    // UI 上 Switch 已展示新值 —— 走的是 _records[idx] = {...record,
+    // 'enabled': false} 路径
+    final switchWidget = tester.widget<Switch>(find.byType(Switch));
+    expect(switchWidget.value, isFalse,
+        reason: 'UI 应显示新值 (false)');
+  });
 }

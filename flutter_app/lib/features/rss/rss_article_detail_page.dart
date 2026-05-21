@@ -137,34 +137,59 @@ class _RssArticleDetailPageState extends ConsumerState<RssArticleDetailPage> {
 
   Future<void> _bootstrap() async {
     try {
-      // 1. 取 source / article（测试覆盖优先；否则走 FRB）
-      Map<String, dynamic>? source = widget.sourceOverride;
-      Map<String, dynamic>? article = widget.articleOverride;
       final dbPath = await _dbPath();
 
-      if (source == null) {
-        final raw = await rust_api.rssSourceGet(
-            dbPath: dbPath, url: widget.sourceUrl);
-        if (raw.isNotEmpty && raw != 'null') {
-          source = jsonDecode(raw) as Map<String, dynamic>?;
-        }
-      }
-      if (article == null) {
-        // 通过 list 找 — RssArticleDao 没有暴露 get_by_origin_link 桥，
-        // 但 list_by_origin_sort 已能拿全量。MVP 用全量过滤；列表通常不大。
-        final json = await rust_api.rssListArticles(
-            dbPath: dbPath, sourceUrl: widget.sourceUrl);
-        final List<dynamic> arr = jsonDecode(json);
-        for (final e in arr) {
-          final m = e as Map<String, dynamic>;
-          if (m['link'] == widget.link) {
-            article = m;
-            break;
-          }
-        }
-      }
+      // BATCH-21 (F-W2B-009): 并行化 source / article / is_starred 三个独立
+      // FRB 调用，消除原本顺序 await 累积的网络/IO latency。fetchHtml 单独
+      // 走串行（保留原有错误分支语义：fetch 失败时仍能展示 source/article
+      // 元数据 + 错误占位）。article 仍用 list 全量遍历找（FRB 桥
+      // `rss_article_get_by_origin_link` 留 BATCH-21b 加）。
+      final sourceFuture = widget.sourceOverride != null
+          ? Future<Map<String, dynamic>?>.value(widget.sourceOverride)
+          : (() async {
+              final raw = await rust_api.rssSourceGet(
+                  dbPath: dbPath, url: widget.sourceUrl);
+              if (raw.isNotEmpty && raw != 'null') {
+                return jsonDecode(raw) as Map<String, dynamic>?;
+              }
+              return null;
+            })();
 
-      // 2. mark read（如未读）
+      final articleFuture = widget.articleOverride != null
+          ? Future<Map<String, dynamic>?>.value(widget.articleOverride)
+          : (() async {
+              final json = await rust_api.rssListArticles(
+                  dbPath: dbPath, sourceUrl: widget.sourceUrl);
+              final List<dynamic> arr = jsonDecode(json);
+              for (final e in arr) {
+                final m = e as Map<String, dynamic>;
+                if (m['link'] == widget.link) {
+                  return m;
+                }
+              }
+              return null;
+            })();
+
+      final starredFuture = (widget.isStarredOverride != null
+              ? widget.isStarredOverride!(
+                  dbPath, widget.sourceUrl, widget.link)
+              : rust_api.rssStarIsStarred(
+                  dbPath: dbPath,
+                  origin: widget.sourceUrl,
+                  link: widget.link))
+          .catchError((_) => false);
+
+      final results = await Future.wait<Object?>([
+        sourceFuture,
+        articleFuture,
+        starredFuture,
+      ]);
+      Map<String, dynamic>? source = results[0] as Map<String, dynamic>?;
+      Map<String, dynamic>? article = results[1] as Map<String, dynamic>?;
+      bool starred = (results[2] as bool?) ?? false;
+
+      // 2. mark read（如未读）— 必须在 article 之后串行，因为依赖
+      // article.read_time。
       final readTime = (article?['read_time'] as num?)?.toInt() ?? 0;
       if (readTime == 0 && widget.link.isNotEmpty) {
         final ts = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -181,21 +206,8 @@ class _RssArticleDetailPageState extends ConsumerState<RssArticleDetailPage> {
         }
       }
 
-      // 3. is_starred
-      bool starred = false;
-      try {
-        if (widget.isStarredOverride != null) {
-          starred = await widget.isStarredOverride!(
-              dbPath, widget.sourceUrl, widget.link);
-        } else {
-          starred = await rust_api.rssStarIsStarred(
-              dbPath: dbPath, origin: widget.sourceUrl, link: widget.link);
-        }
-      } catch (_) {
-        starred = false;
-      }
-
-      // 4. fetch html
+      // 3. fetch html — 单独串行保留独立错误分支（fetch 失败仍能展示
+      // source/article 元数据 + 错误占位）。
       Map<String, dynamic>? fetched;
       try {
         if (widget.fetchHtmlOverride != null) {
