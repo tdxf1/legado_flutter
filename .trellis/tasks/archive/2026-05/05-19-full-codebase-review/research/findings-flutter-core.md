@@ -201,6 +201,12 @@
 
 **建议**: (1) 加一个 `Listenable.merge` 的"内层 controller-only" + "外层 anim-only" 拆分，让纯 controller 变更不重绘 painter；(2) `_calcPoints` 缓存上一帧的 `_touchX/_touchY` 与 cornerXY，相等时早 return；(3) 给 `LinearGradient` shader 缓存（segments 在 L0=6 时每帧创建 6 个 shader，明显可省）。
 
+**Resolution**: BATCH-19c (2026-05-22) — **partial resolved**：
+- 子项 1（Listenable 拆层）：评估后**保留合并**。`PageViewController` 7 处 `notifyListeners` 调用点（`setNeighborChapter` / `commitToNextChapter` / `commitToPrevChapter` / `jumpToPage` / `goToNextPage` / `goToPrevPage` / `_measureChapter` postFrame）全部是离散低频用户/系统事件，并发上限 ≈ 用户 tap 频率 ≤ 3-5 次/秒；合并 listenable 引入的"无效 painter rebuild"成本可忽略。嵌套 `AnimatedBuilder` 方案在 anim 帧仍重建内层 builder + painter，只在 anim 未跑时收益，但那种情况频率已极低，嵌套引入的可读性成本不划算。`page_view.dart::build` 在 `AnimatedBuilder` 上方加 28 行 doc 注释列出 7 个调用点 + 复评触发条件（controller 高频源新增 / `shouldRepaint` 字段大幅扩张时回头拆嵌套）。决策同步入 spec `quality-and-anti-patterns.md`「Reader 渲染边界 (BATCH-19c)」段。
+- 子项 2（仿真 `_calcPoints` 早退缓存）：**split-out**，独立 follow-up（行为重写 + 浮点 epsilon + fps 测试，ROI 需评估）。
+- 子项 3（仿真 `LinearGradient` shader 缓存）：**split-out**，独立 follow-up（同 file 注释承认"开销可控"，需先量化再决定）。
+task: 05-22-batch-19c-reader-paint-measure。
+
 ---
 
 ### F-W2A-013 [P1][C-性能][reader/page]
@@ -212,6 +218,8 @@
 **详细**: 首章打开时 `_chapterRequestId++` → setState(loading=true) → loadChapter → measure(同步完成) → schedule postFrame notify → 下一帧才有 pages。用户看到的是"加载圆圈 → 短暂空白章节 → 真正内容"。
 
 **建议**: measure 同步 + 同步 notifyListeners 的设计本身没问题（pages 是 immutable，没有重入风险）；R38 注释也承认 isMeasuring guard 是假象。把 R39 的 postFrame 改回同步 notifyListeners，配合外层 R66 的 `setState` wrap（已经在），就不会有 setState-during-build assert。如果担心 widget tree 还在 build 中，用 `SchedulerBinding.instance.schedulerPhase != idle` 判断后再选 sync vs postFrame。
+
+**Resolution**: BATCH-19c (2026-05-22) — `page_view_controller.dart::_measureChapter` 末尾 postFrame 块改成 phase-aware 分流：`SchedulerBinding.instance.schedulerPhase` 在 `idle` / `postFrameCallbacks` 阶段 → 同步 `notifyListeners()`（消除"加载圆圈 → 空白章节 → 真正内容"三段闪烁），其他 phase（build / layout / paint / persistentCallbacks）→ 保留原 postFrame 兜底（避免极少数路径如 Riverpod selector 在 build 内 read provider 间接触发 loadChapter 时的 setState during build assert）。两路径都保留 `!_disposed && _currentChapter?.chapterIndex == chapterIndex` 身份校验。`flutter test` baseline 523 全 PASS 验证 sync 路径在 widget test 跑 reader UI 不触发 assert。决策同步入 spec `quality-and-anti-patterns.md`「Reader 渲染边界 (BATCH-19c)」段。task: 05-22-batch-19c-reader-paint-measure。
 
 ---
 

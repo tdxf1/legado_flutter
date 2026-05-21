@@ -76,6 +76,68 @@ reader_page 的 settings 真正 source of truth 是 `_State._settings` plain fie
 - cap = 200 paragraphs 是长篇小说内存预算（每章只为前 200 段建 GlobalKey）。每次滚动 debounce 300ms 跑一次 200 key 遍历是 µs 级，可忽略。
 
 
+## Reader 渲染边界 (BATCH-19c)
+
+reader 模块踩过 2 个 C-性能 finding（F-W2A-012 子项 1 / F-W2A-013），沉淀出两条契约。BATCH-19a/b 是前置条件——`ReaderSettings.==/hashCode` + `ref.listen` 让稳态 setting 变更不进入 painter；本批进一步处理 painter 触发与 ChangeNotifier 时机问题。
+
+### `_measureChapter` 末 phase-aware notifyListeners
+
+`_measureChapter` 完成同步分页后必须把 `notifyListeners()` 路径根据当前 `SchedulerBinding.instance.schedulerPhase` 分流，而非一律 postFrame：
+
+```dart
+final phase = SchedulerBinding.instance.schedulerPhase;
+final canNotifySync =
+    phase == SchedulerPhase.idle || phase == SchedulerPhase.postFrameCallbacks;
+if (canNotifySync) {
+  if (!_disposed && _currentChapter?.chapterIndex == chapterIndex) {
+    notifyListeners();
+  }
+} else {
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (!_disposed && _currentChapter?.chapterIndex == chapterIndex) {
+      notifyListeners();
+    }
+  });
+}
+```
+
+契约：
+
+- **能同步则同步**：`SchedulerPhase.idle` / `postFrameCallbacks` 阶段同步 `notifyListeners` 不会 reentr build/layout/paint，直接消除"加载圆圈 → 空白章节 → 真正内容"三段闪烁——`build` 帧拿到的就是已 measure 完的 `pages` 而不是 `const []`。
+- **build / layout / paint / persistentCallbacks 阶段保留 postFrame 兜底**：极少数路径会从 build 内（典型：Riverpod selector 在 build 内 read provider）触发 `loadChapter` → `_measureChapter`，此时同步 notify 会"setState during build"。postFrame 是兜底保险，不能省。
+- 章节身份校验（`_currentChapter?.chapterIndex == chapterIndex` + `!_disposed`）两路径都保留：sync 路径理论上不会脏，但写法对称避免日后 refactor 漏漏；postFrame 路径用户可能在帧间已切走章节。
+- 已通过 `flutter test`（baseline 523）回归验证：sync 路径在 widget test 跑 reader UI 不触发 setState during build assert。
+
+### AnimatedBuilder Listenable 拆层评估结论（保留合并）
+
+`page_view.dart` 的 `AnimatedBuilder(animation: Listenable.merge([controller, animController]))` 经评估**不拆**，原因：
+
+`PageViewController.notifyListeners` 7 个调用点全部是离散低频用户/系统事件：
+
+| 调用点 | 触发场景 | 频率 |
+|---|---|---|
+| `setNeighborChapter` | 外层灌入邻章后 | 跨章 1 次 |
+| `commitToNextChapter` / `commitToPrevChapter` | 跨章动画完成 | 跨章 1 次 |
+| `jumpToPage` | TOC / 跳页 | 用户操作 1 次 |
+| `goToNextPage` / `goToPrevPage` | 章内 tap / 翻页完成 | 用户操作 1 次 |
+| `_measureChapter` | 章节加载 / 设置变化 | 加载 1 次 |
+
+并发上限 ≈ 用户连续 tap 频率（≤ 3-5 次/秒）。合并 listenable 引入的"无效 painter rebuild"——controller notify 触发 `_PageViewPainter` rebuild 但 `shouldRepaint` 多数字段相等——成本可忽略。
+
+嵌套方案（外 anim-only `AnimatedBuilder` / 内 controller-only `AnimatedBuilder`）每帧 anim 推进时**仍**重建内层 builder + painter，只在 anim **未跑**期间收益（controller 单独 notify 不触发 painter）；考虑到非 anim 期 notify 频率本来就低，嵌套引入的可读性成本不划算。
+
+复评触发条件：
+
+- 若未来引入 controller 高频更新（滚动进度条同步 / 实时书签 hover 高亮 / 朗读高亮等），单 `notifyListeners` 频率超过 10 次/秒，重新拆嵌套 `AnimatedBuilder`，此时外层只听 `_animController` 驱动 anim 帧、内层只听 `controller` 处理新增高频源。
+- 若 `_PageViewPainter.shouldRepaint` 比对字段大幅扩张（>20 字段）、单次比较成本上升到不可忽略，也是触发条件之一。
+- 若新增 listenable（DragDelegate 单独的 ValueNotifier 等），优先用 `Listenable.merge` 加进去而不是嵌套 builder。
+
+### 未拆事项（独立 follow-up）
+
+- **F-W2A-012 子项 2**：仿真翻页 `_calcPoints` 早退缓存（保存上一帧 `(touchX, touchY, cornerXY)`，相等时早 return 跳过 atan2 / sqrt）。涉及浮点 epsilon + fps 测试覆盖，行为重写复杂，**不在 BATCH-19c 范围**。
+- **F-W2A-012 子项 3**：仿真翻页 `LinearGradient` shader 缓存（segments=6 时每帧创建 6 个 shader）。同 file 注释已承认"开销可控"，独立 evaluate，**不在 BATCH-19c 范围**。
+
+
 ## Lint Bar
 
 `flutter_app/analysis_options.yaml` enables the default flutter_lints set with project-specific tightenings. `flutter analyze` must report **0 issues** before any commit.
