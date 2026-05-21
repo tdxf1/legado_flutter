@@ -187,6 +187,8 @@
 
 **建议**: 把对 settings 的 watch 拆为 `select`：`ref.watch(readerSettingsProvider.select((s) => s.fontSize))` 等粒度，仅订阅会改变本子树的字段；或拆出 `_ReaderBodyConsumer` ConsumerWidget 来局部监听。
 
+**Resolution**: BATCH-19b (2026-05-22) — 选「`ref.listen` + `_settings` plain field」方案而非 select 拆订阅（reader 子树 ≥30 字段散布，select 拆细粒度成本/收益不划算）。`reader_page.dart::build` 顶部把 `final providerSettings = ref.watch(readerSettingsProvider)` + 嵌套 `addPostFrameCallback` 块（共 15 行）替换为 `ref.listen<ReaderSettings>(readerSettingsProvider, (prev, next) { if (mounted && _readerSettingsLoaded && next != _settings) _setReaderSettings(next); })`。`ref.listen` 回调天然 post-build 触发，无需 postFrame 嵌套；BATCH-19a 加的 `==/hashCode` 保证 next != _settings 在稳态短路。`_setReaderSettings` 内部已包 setState 推动子树读 `_settings`。首帧兜底走 initState 内 `loadReaderSettingsFromDisk().then((s) => _setReaderSettings(s, markLoaded: true))` + `main.dart` 启动期 `readerSettingsProvider.overrideWith`，listen 仅接管 post-startup 的 provider 端变更（设置页 slider / bookshelfSort 写回等）。task: 05-22-batch-19b-reader-perf-selector。
+
 ---
 
 ### F-W2A-012 [P1][C-性能][reader/page]
@@ -222,6 +224,8 @@
 **详细**: P2-13（reader_page.dart:1257-1278）已经用 GlobalKey + `Scrollable.ensureVisible` 做了精确恢复路径，但保存时仍用估算（L1335 `(dyFromParagraphStart / approxParagraphHeight).floor()`）。导致"恢复用 GlobalKey、保存用估算" 的不对称——保存的 paragraph index 可能与实际可见 paragraph 偏差 1-2 段，下次恢复 ensureVisible 落到错误位置。
 
 **建议**: 保存路径也用 GlobalKey 反查：遍历前 _kParagraphKeyCap 个 key 找到 RenderBox.localToGlobal().dy >= 0 的最小者；超出 cap 的章再 fallback 估算。读写对称后恢复精度大幅提升。
+
+**Resolution**: BATCH-19b (2026-05-22) — `reader_page.dart::_updateVisibleParagraph` 改两段：(1) cap 内 GlobalKey 反查：遍历当前章前 `_kParagraphKeyCap = 200` 个 `_paragraphKeys[_paragraphKeyId(ch.index, idx)]`，过滤未 layout 节点（`box?.hasSize == true`），找第一个 `localToGlobal(Offset.zero, ancestor: listBox).dy >= 0` 的 idx；(2) 未命中（cap 外 / 全在视口之上 / 全未 layout）→ fallback 现有标题 dy + 段高估算。复用 `_paragraphKeyId(int, int)` helper（line 815）保证 keyId 格式（`'$chapterIndex|$paragraphIndex'`）与构造路径一致。与 P2-13 已有的 GlobalKey 恢复路径对称，paragraph index 误差从 ±1-2 段降到 0（cap 内场景）。task: 05-22-batch-19b-reader-perf-selector。
 
 ---
 
