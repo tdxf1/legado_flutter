@@ -228,3 +228,68 @@ The repo does not run `cargo clippy` on every push because the workspace pre-dat
 3. Update **this file** with the rule and the reference.
 
 The list above started empty in BATCH-22 and grew through audits. Adding an entry is part of the fix.
+
+## JS 沙箱安全边界 (BATCH-04)
+
+**所有从 JS 桥接发出的 outbound HTTP 请求必须经过 `ssrf_guard::is_url_safe_for_fetch`**。canonical 入口：`java.ajax` / `java.downloadFile` / `java.queryTtf` / `LegadoHttpClient::request`。
+
+### SSRF 防护 (`core-source/legado/ssrf_guard.rs`)
+
+```rust
+use super::ssrf_guard;
+
+// 在 HTTP 请求入口处：
+if let Err(e) = ssrf_guard::is_url_safe_for_fetch(&url) {
+    tracing::warn!("SSRF blocked: {e}");
+    return String::new(); // 或 Err(...)
+}
+```
+
+拒绝规则：
+- scheme 非 http/https → `SsrfError::ForbiddenScheme`
+- host 是 loopback / RFC1918 / link-local / CGNAT / multicast / cloud metadata → `SsrfError::PrivateHost`
+- URL 解析失败 → `SsrfError::InvalidUrl`
+
+**不做 DNS rebinding 防护**（需要 async resolve，留 BATCH-10）。入口 URL 检查 + redirect 限制（`Policy::limited(5)`）是当前防线。
+
+### 新增 outbound HTTP caller 的 checklist
+
+1. 调 `ssrf_guard::is_url_safe_for_fetch(&url)` 在 `send()` 之前
+2. 设 `redirect(Policy::limited(5))`（或更少）
+3. 设 response body 上限（流式累计 or `take(max+1)`）
+4. 如果 URL 来自 untrusted JS 输入，加 `tracing::warn!` 记录拒绝
+
+### QuickJS 嵌套 Runtime 必须设 memory/stack limit
+
+```rust
+// 嵌套路径（QUICKJS_POOL_BUSY == true）
+let runtime = Runtime::new()?;
+runtime.set_memory_limit(QUICKJS_MEMORY_LIMIT);   // 64 MiB
+runtime.set_max_stack_size(QUICKJS_STACK_LIMIT);   // 1 MiB
+```
+
+BATCH-13 池化时主路径已设；BATCH-04 补嵌套路径。任何新建 `Runtime::new()` 的代码路径都必须设这两个 limit。
+
+### Font parsing 必须 catch_unwind
+
+`ttf-parser` crate 不保证 panic-free。所有调 `font_mappings_json` / `Face::parse` 的路径用 `catch_unwind(AssertUnwindSafe(|| ...))` 包裹，panic 时返回 `"null"`。
+
+### 文件桥 (`java.downloadFile` / `getFile` / `deleteFile` / `unzipFile`)
+
+- `LEGADO_FILE_ROOT` env var 未设 = 文件桥禁用（`resolve_file_path` / `resolve_write_path` 返回 None）
+- `MAX_ZIP_DOWNLOAD` = 10 MiB（BATCH-04 从 50 MiB 缩小）
+- `java_unzip_file` 拒绝符号链接条目（`unix_mode & 0o170000 == 0o120000`）
+- `java_download_file` 入口走 SSRF guard
+
+### Android WebView bridge capability gate
+
+`evaluateAndFinish` 在 `finish(payload)` 前调 `webView.removeJavascriptInterface("legadoNative")`。JS bridge 仅在 webJs 执行期间暴露；eval 完成后立即 detach，防止恶意页面在 result 回传后利用 bridge。
+
+### Forbidden 反向
+
+| Pattern | Why | Reference |
+|---|---|---|
+| `reqwest::blocking::Client::builder().build()` 不经 SSRF guard 发 outbound 请求 | 任何 untrusted URL 可访问内网 / 元数据服务 | BATCH-04 (F-W1B-001) |
+| 新建 `Runtime::new()` 不设 `set_memory_limit` / `set_max_stack_size` | 恶意 JS 可 OOM 整个进程 | BATCH-04 (F-W1B-003) |
+| `font_mappings_json` / `Face::parse` 不包 `catch_unwind` | 畸形 TTF 可 panic 整个线程 | BATCH-04 (F-W1B-004) |
+| `addJavascriptInterface` 后不在 eval 完成时 `removeJavascriptInterface` | 恶意页面 JS 可调用 50+ bridge 方法 | BATCH-04 (F-W3-015) |
