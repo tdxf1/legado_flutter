@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/flutter-app/index.md", "reason": "Flutter 项目概览 + spec 索引"}
+{"file": ".trellis/spec/flutter-app/directory-structure.md", "reason": "core/ 目录约定（新加 core/security/ 是否合规）"}
+{"file": ".trellis/spec/flutter-app/persistence.md", "reason": "json_store 分层 + 文件 IO 模式（secure_storage 是新一类敏感数据持久化）"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "测试钩子模式 (BATCH-20 ProviderScope.overrides 替代构造函数)"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "widget test 注入 fake 模式 (FlutterSecureStorage platform channel mock 必要性)"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "本批要新加'凭据保险柜'段；既有 forbidden patterns 列表"}
+{"file": ".trellis/spec/flutter-app/async-and-mounted.md", "reason": "_loadConfig async/mounted 检查（迁移逻辑是否引发 mounted race）"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-features.md", "reason": "F-W2B-001 / F-W2B-006 finding 原文"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-03-secure-credentials-via-keystore.md", "reason": "批次自身验收 + 测试策略"}

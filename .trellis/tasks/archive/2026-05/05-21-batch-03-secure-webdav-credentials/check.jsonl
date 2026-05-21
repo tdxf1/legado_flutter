@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/flutter-app/index.md", "reason": "spec 入口"}
+{"file": ".trellis/spec/flutter-app/persistence.md", "reason": "json_store + secure_storage 分层验证"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "凭据保险柜段是否落地"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "widget test 钩子模式核查（top-level override vs ProviderScope.overrides 哪种合适）"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings.md", "reason": "master report Resolution 落点"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-features.md", "reason": "Wave 2B F-W2B-001 / F-W2B-006 详细 Resolution"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-03-secure-credentials-via-keystore.md", "reason": "批次自身验收清单"}
+{"file": ".trellis/tasks/05-21-batch-03-secure-webdav-credentials/prd.md", "reason": "本批 PRD（验收准则核查）"}
