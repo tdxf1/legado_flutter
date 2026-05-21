@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/flutter-app/index.md", "reason": "Flutter 工程概览 + verification 命令"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "反模式清单（测试钩子污染 / module-level mutable / sum 全量遍历）"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "Riverpod provider override 测试规范"}
+{"file": ".trellis/spec/flutter-app/async-and-mounted.md", "reason": "mounted early-return 风格规范"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "widget test 覆盖度 + ProviderScope.overrides 模式"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings.md", "reason": "master report 总索引（5 条 finding 状态需更新 Resolution）"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-features.md", "reason": "Wave 2B finding 原文（确认 5 条 Resolution 写哪）"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-20-settings-testability-cleanup.md", "reason": "批次验收 vs 实际实现差异审查"}
+{"file": ".trellis/tasks/05-21-batch-20-settings-testability-cleanup/prd.md", "reason": "本批 PRD 验收 + DoD + ADR"}

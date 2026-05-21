@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/flutter-app/index.md", "reason": "Flutter 工程概览 + spec 索引"}
+{"file": ".trellis/spec/flutter-app/directory-structure.md", "reason": "core/ vs features/ 目录归属；新建 core/services/ 目录边界确认"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "Riverpod provider 模式 + ProviderScope.overrides 测试规范"}
+{"file": ".trellis/spec/flutter-app/async-and-mounted.md", "reason": "mounted check 风格统一规范（BATCH-25 已落 spec）"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "测试钩子污染生产 API 反模式 + module-level mutable global 反模式"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "widget test 用 ProviderScope.overrides 注入 fake 的标准做法"}
+{"file": ".trellis/spec/flutter-app/persistence.md", "reason": "core/persistence/ json_store 模式参考（service 层抽象类比）"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-features.md", "reason": "F-W2B-003/004/008/020/065 finding 原文"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-20-settings-testability-cleanup.md", "reason": "批次自身验收 + 测试策略"}
