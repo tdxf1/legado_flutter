@@ -2,6 +2,8 @@
 
 All app-side persistence (settings, WebDAV config, search history, pending route, ...) goes through one helper module: `flutter_app/lib/core/persistence/json_store.dart`.
 
+> **敏感字段（密码 / token / 凭据）走 `core/security/secure_storage.dart`，不走 json_store。** 详见 [quality-and-anti-patterns.md::凭据保险柜 (BATCH-03)](./quality-and-anti-patterns.md#凭据保险柜-credential-vault-batch-03)。两条 IO 路径并行：非敏感字段（URL / user / deviceName / preferences / cache keys）走 json_store；敏感字段（password / token / refresh_token）走 secure_storage（Android Keystore-backed `EncryptedSharedPreferences` / iOS Keychain）。webdav password 是 canonical 例子。
+
 ## Two Public APIs
 
 `json_store.dart` exposes two parallel sets of functions for two persistence shapes:
