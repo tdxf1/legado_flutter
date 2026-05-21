@@ -1,0 +1,6 @@
+{"role": "system", "content": "BATCH-19c implement context"}
+{"file": ".trellis/tasks/05-22-batch-19c-reader-paint-measure/prd.md", "reason": "本批 PRD（2 P1 渲染：Listenable 拆层评估 + measure phase-aware notify）"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-core.md", "reason": "Wave 2A 详细 finding（F-W2A-012 line 192 / F-W2A-013 line 204）"}
+{"file": "flutter_app/lib/features/reader/page/page_view.dart", "reason": "AnimatedBuilder + Listenable.merge 拆层评估"}
+{"file": "flutter_app/lib/features/reader/page/page_view_controller.dart", "reason": "_measureChapter postFrame → phase-aware notify"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "Reader 渲染边界 + phase-aware notify 模式"}

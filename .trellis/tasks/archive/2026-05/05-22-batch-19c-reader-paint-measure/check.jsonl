@@ -1,0 +1,5 @@
+{"role": "system", "content": "BATCH-19c check context"}
+{"file": ".trellis/tasks/05-22-batch-19c-reader-paint-measure/prd.md", "reason": "validation against acceptance criteria"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings.md", "reason": "master report 2 个 P1 标 Resolved（F-W2A-012 partial / F-W2A-013 full）"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-core.md", "reason": "Wave 2A 详细 finding 标 Resolution"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "spec 是否落地"}
