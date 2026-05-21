@@ -40,6 +40,16 @@ Each sub-crate inherits via `[lints] workspace = true`. Do not add `#[allow(...)
 - **Re-compiling regex on each chapter**: `bridge::api::ReplaceRulesCache` is the canonical example of a scoped cache keyed by `cache_generation`. New regex caches should follow the same generation pattern.
 - **`rules.iter().filter(...).filter(...).filter_map(...)` inside the cache lock**: keep the cache critical section to lookups + clones only. Regex evaluation runs lock-free after the closure releases the lock. See `apply_replace_rules_impl`.
 - **Cloning `Arc<Vec<T>>`**: cheap, do not shy away. The cache returns `Arc<Vec<ReplaceRule>>` precisely so callers can clone-and-detach for iteration without keeping the lock.
+- **`thread_local` micro-cache keyed by `&str` `(ptr, len)` MUST be cleared at every entry point**: `core-source/legado/rule.rs::LAST_PARSED_HTML` is the canonical example (BATCH-14, F-W1B-029). The pattern caches `Rc<scraper::Html>` so the 5 search fields + every `||` combinator branch share one parsed DOM. The `(ptr_addr, len)` key is collision-free **within a single parser entry-point call** (the html `String` keeps a stable address for the call's lifetime), but the allocator may reuse the same address across calls — so any new rule-evaluation entry-point function in `core-source` MUST call `clear_html_parse_cache()` (or its equivalent) up front. Today the 7 entry points are `parser::search` / `explore` / `get_book_info` / `get_chapters` / `get_chapter_content` and `rss::get_articles` / `rss::fetch_article_content_full`; if you add an 8th, add the clear there too.
+
+## Resolved-by-Design Findings
+
+When a `findings-*.md` entry has been substantively addressed by an earlier change but the original code still matches the literal "problem" description, document the mitigation in **two** places rather than touching code:
+
+1. **Source code**: append a comment near the cited code pointing at the mitigation (e.g. `core-source/parser.rs::RATE_LIMITER` doc-comment references `should_run_sweep_now` for F-W1B-030).
+2. **Master report**: append a `**Resolution**: BATCH-NN — verified mitigated by ...; intentional design.` line on the finding.
+
+This prevents future audits from re-flagging the issue and reading the comment makes the intent clear without code archaeology. References: F-W3-030 (BATCH-23), F-W1B-030 (BATCH-14).
 
 ## Code Hygiene Checks
 
