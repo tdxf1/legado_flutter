@@ -106,14 +106,18 @@ impl ContentCleaner {
 
         // 5. 移除空行
         if self.config.remove_empty_lines {
-            let re = Regex::new(r"\n\s*\n\s*\n").unwrap();
-            text = re.replace_all(&text, "\n\n").to_string();
+            // F-W1B-071 (BATCH-12, 2026-05-21)：LazyLock 避免每次清洗重编译。
+            static EMPTY_LINES_RE: std::sync::LazyLock<Regex> =
+                std::sync::LazyLock::new(|| Regex::new(r"\n\s*\n\s*\n").unwrap());
+            text = EMPTY_LINES_RE.replace_all(&text, "\n\n").to_string();
         }
 
         // 6. 合并多余空格
         if self.config.collapse_whitespace {
-            let re = Regex::new(r"[ \t]+").unwrap();
-            text = re.replace_all(&text, " ").to_string();
+            // F-W1B-071 (BATCH-12, 2026-05-21)：LazyLock 避免每次清洗重编译。
+            static WHITESPACE_RE: std::sync::LazyLock<Regex> =
+                std::sync::LazyLock::new(|| Regex::new(r"[ \t]+").unwrap());
+            text = WHITESPACE_RE.replace_all(&text, " ").to_string();
         }
 
         text.trim().to_string()

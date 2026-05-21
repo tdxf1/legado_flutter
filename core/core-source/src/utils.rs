@@ -93,10 +93,14 @@ pub fn merge_search_results(results: Vec<SearchResult>) -> Vec<SearchResult> {
 }
 
 /// 清理 HTML 片段（移除多余空白）
+///
+/// **F-W1B-065 (BATCH-12, 2026-05-21)**：regex 改 LazyLock，避免每次调用都
+/// 重新编译。本函数被 search 结果展示等多处调用，章节级热路径上重复编译
+/// 累积延迟。
 pub fn clean_html_fragment(html: &str) -> String {
-    // 移除多余的空白和换行
-    let re = regex::Regex::new(r"\s+").unwrap();
-    re.replace_all(html, " ").trim().to_string()
+    static WHITESPACE_RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\s+").unwrap());
+    WHITESPACE_RE.replace_all(html, " ").trim().to_string()
 }
 
 #[cfg(test)]

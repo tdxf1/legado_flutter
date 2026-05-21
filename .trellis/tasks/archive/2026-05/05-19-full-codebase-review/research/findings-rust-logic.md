@@ -248,6 +248,8 @@
 
 **建议**: 把 gInt 提取改用闭包封装：`(function(){var gInt=...; var title=(${format_js})(); return [title, gInt];})()` 一次返回两值，避免双跑。
 
+**Resolution**: BATCH-12 (2026-05-21) — `core/core-source/src/parser.rs::apply_format_js` 改用 IIFE `(function(){ var gInt=...; var __r=eval(format_js); return [__r, gInt]; })()` 一次 eval 返回 `[title, gInt]` 数组（依赖 LegadoValue::Array 变体）。每章 QuickJS Runtime 创建从 2× 降为 1×，副作用（gInt++）不再 double-applied。task: 05-21-batch-12-parser-correctness。
+
 ---
 
 ### F-W1B-018 [P1 主要][B-正确性][core-source/parser]
@@ -260,6 +262,8 @@
 
 **建议**: 改用 scraper 解析 + 重写 src；或扩展 regex 支持单引号；regex 用 `LazyLock` 缓存。
 
+**Resolution**: BATCH-12 (2026-05-21) — `core/core-source/src/parser.rs` 中 `IMG_RE` 改 `LazyLock<Regex>` + 扩展为 `(['"])([^'"]*)\1` 支持单引号 src（与 F-W1B-022 合并）；`data:` URI 不被改写。新增 4 个单测覆盖双引号/单引号/属性顺序/data URI。task: 05-21-batch-12-parser-correctness。
+
 ---
 
 ### F-W1B-019 [P1 主要][B-正确性][core-source/parser]
@@ -271,6 +275,8 @@
 **详细**: 不影响数据正确性（Empty 是错误分支），但对 UI 来说"读到一半空章节但下一章 URL 已知"的场景可以"跳过本章继续读下一章"，目前直接挂掉。
 
 **建议**: 若 content empty 但 next_chapter_url 非空，返回 Ok(ChapterContent { content: "[本章无正文]", next_chapter_url, ... }) 让 UI 决定。
+
+**Resolution**: BATCH-12 (2026-05-21, 部分) — 保守方案：保留 `Err(ParserError::Empty)` 不动结构（避免 UI 跨层 break），但在 return 前 warn 输出 `next_chapter_url` 信息（已知 vs 未知双分支），运维可见。完整跨层改造（结构化 Empty + UI 跳读）见后续批次。task: 05-21-batch-12-parser-correctness。
 
 ---
 
@@ -296,6 +302,8 @@
 
 **建议**: 用 `HashSet` 也对 url_queue 内容去重；或在 push 前比对长度限制。
 
+**Resolution**: BATCH-12 (2026-05-21) — `core/core-source/src/parser.rs` get_chapters + content 两个 url_queue 都加 (a) push 前 `url_queue.contains(&full_url)` dedup，(b) `MAX_QUEUE_SIZE = MAX_*_PAGES * 4` 长度上限纵深防御 + warn。攻击书源即使 unique urls 通过 dedup，列表总长仍受 cap 约束。task: 05-21-batch-12-parser-correctness。
+
 ---
 
 ### F-W1B-022 [P1 主要][C-性能][core-source/parser]
@@ -307,6 +315,8 @@
 **详细**: regex compile 是有显著开销的（毫秒级）；100 章书 = 100 次重复编译。应改 LazyLock。
 
 **建议**: `static IMG_RE: LazyLock<Regex> = LazyLock::new(...);` 改造。
+
+**Resolution**: BATCH-12 (2026-05-21) — 与 F-W1B-018 合并修复。`IMG_RE` 改 `LazyLock<Regex>` 一次编译，热路径每章节 resolve 不再付 regex 编译开销。task: 05-21-batch-12-parser-correctness。
 
 ---
 
@@ -828,6 +838,8 @@
 
 **建议**: 改 LazyLock 静态。
 
+**Resolution**: BATCH-12 (2026-05-21) — `core/core-source/src/utils.rs::clean_html_fragment` 内联 regex 改 `LazyLock<Regex>` 静态。task: 05-21-batch-12-parser-correctness。
+
 ---
 
 ### F-W1B-066 [P3 nice-to-have][E-代码异味][core-source/lib]
@@ -899,6 +911,8 @@
 **详细**: 类似 F-W1B-022。
 
 **建议**: 改 LazyLock。
+
+**Resolution**: BATCH-12 (2026-05-21) — `core/core-parser/src/cleaner.rs::clean` 两条内联 regex（`EMPTY_LINES_RE` + `WHITESPACE_RE`）改 `LazyLock<Regex>` 静态。每次 cleanContent 调用不再付编译代价。task: 05-21-batch-12-parser-correctness。
 
 ---
 

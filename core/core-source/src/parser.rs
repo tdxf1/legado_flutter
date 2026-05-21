@@ -1044,6 +1044,11 @@ impl BookSourceParser {
         let mut seen_urls: HashSet<String> = HashSet::new();
         let mut chapter_offset: i32 = 0;
         const MAX_TOC_PAGES: usize = 50;
+        // F-W1B-021 (BATCH-12, 2026-05-21)：toc url_queue 也要 cap，防攻击书源
+        // next_toc_url 解析返回大量 unique urls 导致 OOM。MAX_TOC_PAGES 已限制
+        // 实际访问页数（seen_urls 上限），url_queue cap 是 push 时的纵深防御 —
+        // 即便 unique urls 都通过 dedup，列表总长仍受 MAX_QUEUE_SIZE 约束。
+        const MAX_QUEUE_SIZE: usize = MAX_TOC_PAGES * 4;
 
         info!("开始获取章节列表: {} (书源: {})", current_url, source.name);
 
@@ -1143,12 +1148,25 @@ impl BookSourceParser {
                 _ => Vec::new(),
             };
             for next in next_urls {
-                if !next.trim().is_empty() {
-                    let full_url = crate::utils::build_full_url(&url, &next);
-                    if !full_url.is_empty() && !seen_urls.contains(&full_url) {
-                        url_queue.push_back(full_url);
-                    }
+                if next.trim().is_empty() {
+                    continue;
                 }
+                let full_url = crate::utils::build_full_url(&url, &next);
+                if full_url.is_empty() || seen_urls.contains(&full_url) {
+                    continue;
+                }
+                // F-W1B-021：本批次 push 内也去重，并对 queue 长度兜底。
+                if url_queue.contains(&full_url) {
+                    continue;
+                }
+                if url_queue.len() >= MAX_QUEUE_SIZE {
+                    warn!(
+                        "toc url_queue 达到上限 {}，拒绝继续 push: {}",
+                        MAX_QUEUE_SIZE, full_url
+                    );
+                    break;
+                }
+                url_queue.push_back(full_url);
             }
         }
 
@@ -1373,6 +1391,9 @@ impl BookSourceParser {
         chapter_url: &str,
     ) -> Result<ChapterContent, ParserError> {
         const MAX_CONTENT_PAGES: usize = 50;
+        // F-W1B-021 (BATCH-12, 2026-05-21)：与 get_chapters 同样的 queue cap，
+        // 防攻击书源 next_url 解析返回大量 unique urls 导致 OOM。
+        const MAX_QUEUE_SIZE: usize = MAX_CONTENT_PAGES * 4;
 
         let initial_url = crate::utils::build_full_url(&source.url, chapter_url);
         info!("获取章节内容: {} (书源: {})", initial_url, source.name);
@@ -1526,18 +1547,43 @@ impl BookSourceParser {
                 final_next_chapter_url = None;
             }
             for next in next_urls {
-                if !next.is_empty() {
-                    let full_url = crate::utils::build_full_url(&url, &next);
-                    if !full_url.is_empty() && !seen_urls.contains(&full_url) {
-                        url_queue.push_back(full_url);
-                    }
+                if next.is_empty() {
+                    continue;
                 }
+                let full_url = crate::utils::build_full_url(&url, &next);
+                if full_url.is_empty() || seen_urls.contains(&full_url) {
+                    continue;
+                }
+                // F-W1B-021：本批次 push 内也去重，并对 queue 长度兜底。
+                if url_queue.contains(&full_url) {
+                    continue;
+                }
+                if url_queue.len() >= MAX_QUEUE_SIZE {
+                    warn!(
+                        "content url_queue 达到上限 {}，拒绝继续 push: {}",
+                        MAX_QUEUE_SIZE, full_url
+                    );
+                    break;
+                }
+                url_queue.push_back(full_url);
             }
         }
 
         if all_content.is_empty() {
             // R82: 拉到了 HTTP 200 但规则没解析出任何正文 — 算 Empty 而非
             // Network。caller 通常想 retry / fallback 而非显示"网络失败"。
+            //
+            // F-W1B-019 (BATCH-12, 2026-05-21)：保留 next_chapter_url 信息到
+            // warn 让运维可见 — UI 端目前仍走 Empty 错误分支显示"无内容"，
+            // 完整跨层改造（结构化 Empty + UI 跳读）见 finding 备注。
+            if let Some(next) = final_next_chapter_url.as_ref() {
+                warn!(
+                    "章节内容为空但下一章 URL 已知: initial={} next={}",
+                    initial_url, next
+                );
+            } else {
+                warn!("章节内容为空且无下一章 URL: initial={}", initial_url);
+            }
             return Err(ParserError::Empty);
         }
 
@@ -1857,38 +1903,43 @@ fn apply_format_js(
         vars.insert("src".into(), LegadoValue::String(String::new()));
         vars.insert("result".into(), LegadoValue::String(chapter.title.clone()));
 
-        // Wrap the script to return the result and allow gInt mutation
-        let wrapped_script = format!(
-            "var gInt = {};\n{}\n",
-            g_int, format_js
+        // F-W1B-017 (BATCH-12, 2026-05-21)：原代码对每章 eval 两次 — 第二次
+        // 仅为提取更新后的 gInt，但 format_js 整段会被重跑，副作用（如
+        // gInt++）会被 double-applied，导致 gInt 实际 +2 而非 +1。改用 IIFE
+        // 一次返回 [title, gInt] 数组：
+        // - 用 `eval(format_js)` 让最后一条 expression 的求值结果作为 result；
+        // - format_js 是多 statement 时 eval 返回 undefined，caller 已通过
+        //   `if !new_title.is_empty()` 兼容（undefined.as_string_lossy() = ""）；
+        // - QuickJS Runtime 创建从 2× 降为 1× 每章，1000 章 = 节省 1000 次
+        //   Runtime 构造（rquickjs 文档承认 Runtime per-call 是显著开销）。
+        let format_js_literal = serde_json::to_string(format_js)
+            .unwrap_or_else(|_| "\"\"".to_string());
+        let combined_script = format!(
+            "(function(){{ var gInt={}; var __r=eval({}); return [__r, gInt]; }})()",
+            g_int, format_js_literal
         );
 
-        match runtime.eval(&wrapped_script, &vars) {
-            Ok(result) => {
-                let new_title = result.as_string_lossy();
-                if !new_title.is_empty() {
+        match runtime.eval(&combined_script, &vars) {
+            Ok(LegadoValue::Array(arr)) if arr.len() >= 2 => {
+                let new_title = arr[0].as_string_lossy();
+                if !new_title.is_empty() && new_title != "undefined" {
                     chapter.title = new_title;
                 }
+                if let LegadoValue::Int(v) = &arr[1] {
+                    g_int = *v;
+                } else if let Ok(v) = arr[1].as_string_lossy().parse::<i64>() {
+                    g_int = v;
+                }
+            }
+            Ok(other) => {
+                warn!(
+                    "formatJs 返回不是 [title, gInt] 数组 (chapter {}): {:?}",
+                    idx + 1,
+                    other
+                );
             }
             Err(e) => {
                 warn!("formatJs 执行失败 (chapter {}): {}", idx + 1, e);
-            }
-        }
-
-        // Try to extract updated gInt from the script result
-        // In Legado, gInt is a mutable binding. We approximate by checking if the script
-        // explicitly sets gInt. Since QuickJS doesn't easily expose mutated vars back,
-        // we use a convention: if the script contains "gInt" assignments, we run a
-        // secondary eval to get the updated value.
-        let g_int_script = format!(
-            "var gInt = {};\n{};\ngInt",
-            g_int, format_js
-        );
-        if let Ok(val) = runtime.eval(&g_int_script, &vars) {
-            if let LegadoValue::Int(v) = val {
-                g_int = v;
-            } else if let Ok(v) = val.as_string_lossy().parse::<i64>() {
-                g_int = v;
             }
         }
     }
@@ -1977,11 +2028,25 @@ fn chapter_context_map(
 }
 
 fn resolve_image_src_headers(content: &str, base_url: &str) -> String {
-    let img_re = regex::Regex::new(r#"<img\s+[^>]*src="([^"]*)"[^>]*>"#).unwrap();
-    img_re
+    // F-W1B-018/022 (BATCH-12, 2026-05-21)：
+    // - 改 LazyLock 避免每次调用重新编译（章节级热路径）；
+    // - 模式扩展为 `(?:"([^"]*)"|'([^']*)')` 双 capture group，支持单引号
+    //   src（HTML5 允许 `<img src='...'/>`）。caps.get(1).or(caps.get(2))
+    //   取实际匹配的那一个。属性顺序无关：`<img alt="x" src="..">` 与
+    //   `<img src=".." alt="x">` 都能命中（`[^>]*?` 非贪婪 + `[^>]*` 兜底）。
+    static IMG_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"<img\b[^>]*?\bsrc=(?:"([^"]*)"|'([^']*)')[^>]*>"#).unwrap()
+    });
+
+    IMG_RE
         .replace_all(content, |caps: &regex::Captures| -> String {
             let full_match = caps.get(0).map(|m| m.as_str()).unwrap_or("");
-            let src = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            // 双引号或单引号 capture 二选一
+            let src = caps
+                .get(1)
+                .or_else(|| caps.get(2))
+                .map(|m| m.as_str())
+                .unwrap_or("");
             if let Some(comma_idx) = src.find(",{") {
                 let url = &src[..comma_idx];
                 let resolved = if !url.starts_with("http://")
@@ -3850,5 +3915,49 @@ mod tests {
         assert_eq!(results[1].name, "Rule Book 2");
         assert_eq!(results[1].book_url, server.url("/book/r2"));
         mock.assert();
+    }
+
+    /// **F-W1B-018 (BATCH-12)**：双引号 src 仍能被 resolve（基线行为不破坏）。
+    #[test]
+    fn test_resolve_image_src_double_quote_still_works() {
+        let html = r#"<img src="/p/img.jpg" alt="x">"#;
+        let resolved = resolve_image_src_headers(html, "https://example.com/book");
+        assert!(
+            resolved.contains("https://example.com/p/img.jpg"),
+            "双引号 src 应被 resolve 为绝对 url，实际：{}",
+            resolved
+        );
+    }
+
+    /// **F-W1B-018 (BATCH-12)**：单引号 src 也应被 resolve（HTML5 合法语法）。
+    /// 原 regex 仅 `src="..."` 匹配，单引号会漏修正。
+    #[test]
+    fn test_resolve_image_src_handles_single_quote() {
+        let html = r#"<img alt='x' src='/p/img.jpg'>"#;
+        let resolved = resolve_image_src_headers(html, "https://example.com/book");
+        assert!(
+            resolved.contains("https://example.com/p/img.jpg"),
+            "单引号 src 应被 resolve，实际：{}",
+            resolved
+        );
+    }
+
+    /// **F-W1B-018 (BATCH-12)**：属性顺序无关（`<img alt="x" src="...">`）。
+    #[test]
+    fn test_resolve_image_src_handles_attr_before_src() {
+        let html = r#"<img alt="cover" src="/p/img.jpg">"#;
+        let resolved = resolve_image_src_headers(html, "https://example.com/book");
+        assert!(resolved.contains("https://example.com/p/img.jpg"));
+    }
+
+    /// **F-W1B-018 (BATCH-12)**：含 `data:` URI 的 src 不应被改写（avoid
+    /// double-encoding base64 inline images）。
+    #[test]
+    fn test_resolve_image_src_skips_data_uri() {
+        let html = r#"<img src="data:image/png;base64,abc">"#;
+        let resolved = resolve_image_src_headers(html, "https://example.com/book");
+        // data: src 保持不变
+        assert!(resolved.contains("data:image/png;base64,abc"));
+        assert!(!resolved.contains("https://example.com/data:"));
     }
 }
