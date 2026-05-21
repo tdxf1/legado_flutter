@@ -154,6 +154,16 @@ impl HttpClient {
         }
     }
 
+    /// **F-W1B-044 (BATCH-17)** —— 仅在自上次保存后有变更时写盘。caller
+    /// 可定时调用（如每 30s 一次）替代 `save_cookies` 高频版本，跳过空保存
+    /// 的 IO + pretty JSON 序列化。返回 `Ok(true)` 写盘了 / `Ok(false)` 跳过。
+    pub fn save_cookies_if_dirty(&self) -> Result<bool, Box<dyn std::error::Error>> {
+        match &self.config.cookie_persistence_path {
+            Some(path) => self.cookie_manager.save_persistent_cookies_if_dirty(path),
+            None => Err("未配置 Cookie 持久化路径".into()),
+        }
+    }
+
     /// 获取 Cookie 管理器引用（用于外部操作如 clear_domain）
     pub fn cookie_manager(&self) -> &CookieManager {
         &self.cookie_manager

@@ -21,16 +21,38 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, info};
 
 /// Cookie 条目（用于跟踪原始 cookie 数据，包括会话级 Cookie）
+///
+/// **F-W1B-043 加固（2026-05-21, BATCH-17）**：把 dedup key（name /
+/// domain_flag / path）缓存到 entry，避免 `add_cookie` 在 retain 时对每条
+/// existing cookie 重复 `Url::parse + StoreCookie::parse`。所有 dedup_*
+/// 字段标 `#[serde(default)]`，加载旧格式 JSON（无该 3 字段）时拿到空字符串
+/// 走 fallback 路径 — 旧 entry 在第一次 `add_cookie` 触发到匹配时仍能正确
+/// 比较，写盘后下次加载就是新格式，自动迁移。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CookieEntry {
     raw_cookie: String,
     url: String,
+    /// Cookie 的 `name`，dedup 比较的第一项。
+    #[serde(default)]
+    dedup_name: String,
+    /// 域标记：`"domain:<domain>"`（有 Domain 属性）或 `"host:<host>"`（host-only）。
+    /// 与 CookieStore::insert 的内部分桶语义对齐。
+    #[serde(default)]
+    dedup_domain_flag: String,
+    /// Cookie 的 `path`（显式 Path 属性优先，否则 url 默认 path）。
+    #[serde(default)]
+    dedup_path: String,
 }
 
 /// Cookie 管理器内部状态
 struct CookieManagerInner {
     store: CookieStore,
     raw_cookies: Vec<CookieEntry>,
+    /// **F-W1B-044 加固（2026-05-21, BATCH-17）**：自上次 `save_persistent_cookies`
+    /// 以来是否有变更。`add_cookie` / `clear_all` / `clear_domain` 在锁内置
+    /// `true`；保存成功后置 `false`。`save_persistent_cookies_if_dirty` 用此
+    /// 标记跳过空保存，避免 search 高频后每次都全量 pretty JSON 写盘。
+    dirty: bool,
 }
 
 /// Cookie 管理器
@@ -47,6 +69,7 @@ impl CookieManager {
             inner: Arc::new(Mutex::new(CookieManagerInner {
                 store: CookieStore::default(),
                 raw_cookies: Vec::new(),
+                dirty: false,
             })),
         })
     }
@@ -79,7 +102,11 @@ impl CookieManager {
         };
 
         Ok(Self {
-            inner: Arc::new(Mutex::new(CookieManagerInner { store, raw_cookies })),
+            inner: Arc::new(Mutex::new(CookieManagerInner {
+                store,
+                raw_cookies,
+                dirty: false,
+            })),
         })
     }
 
@@ -92,7 +119,7 @@ impl CookieManager {
         let path = path.as_ref();
         debug!("保存 Cookie 到文件: {:?}", path);
 
-        let inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap();
         // 只保存持久化 raw_cookies
         let persistent_raw: Vec<&CookieEntry> = inner
             .raw_cookies
@@ -113,7 +140,30 @@ impl CookieManager {
         }
         std::fs::rename(&tmp_path, path)?;
 
+        // F-W1B-044：成功落盘后清 dirty 标记，下次 save_if_dirty 可跳过。
+        inner.dirty = false;
+
         Ok(())
+    }
+
+    /// **F-W1B-044 (2026-05-21, BATCH-17)** —— 仅在自上次保存后有变更时
+    /// 写盘。caller 可定时（如每 30s）或退出前调用本方法，避免 search 高
+    /// 频后每次都全量 pretty JSON 写盘。
+    ///
+    /// 返回：`Ok(true)` 表示已写盘，`Ok(false)` 表示无变更跳过。`Err` 透传
+    /// 底层 IO / serde 错误。
+    pub fn save_persistent_cookies_if_dirty<P: AsRef<Path>>(
+        &self,
+        path: P,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        // 短暂锁住读 dirty，避免长时间持锁影响并发 add_cookie
+        let dirty = self.inner.lock().unwrap().dirty;
+        if !dirty {
+            debug!("Cookie 未变更，跳过持久化");
+            return Ok(false);
+        }
+        self.save_persistent_cookies(path)?;
+        Ok(true)
     }
 
     /// 添加 Cookie（对应原 Legado 的 addCookie 方法）
@@ -129,8 +179,11 @@ impl CookieManager {
         // 从已解析 cookie 提取去重键（与 CookieStore 的 insert 内部键一致）
         let dedup_name = parsed.name().to_string();
         let dedup_domain_flag = match parsed.domain() {
-            Some(d) => Some(format!("domain:{}", d)),
-            None => url.host_str().map(|h| format!("host:{}", h)),
+            Some(d) => format!("domain:{}", d),
+            None => url
+                .host_str()
+                .map(|h| format!("host:{}", h))
+                .unwrap_or_default(),
         };
         let dedup_path = parsed
             .path()
@@ -142,14 +195,29 @@ impl CookieManager {
         let mut inner = self.inner.lock().unwrap();
         inner.store.insert(cookie, &url)?;
 
+        // F-W1B-043：retain 时优先用缓存的 dedup key 比较；只有旧格式（升级
+        // 路径）entry 缓存为空字符串才回退到完整解析。
         inner.raw_cookies.retain(|existing| {
+            // 快路径：缓存命中，O(string compare)
+            if !existing.dedup_name.is_empty() {
+                return !(existing.dedup_name == dedup_name
+                    && existing.dedup_domain_flag == dedup_domain_flag
+                    && existing.dedup_path == dedup_path);
+            }
+            // 慢路径 fallback：旧格式 entry 没缓存，临时解析一次。本批之后写盘
+            // 的 entry 都带缓存，旧路径仅在加载老 cookies.json 后第一轮
+            // add_cookie 触发，一次性收敛。
             if let Ok(existing_url) = Url::parse(&existing.url) {
-                if let Ok(existing_parsed) = StoreCookie::parse(&existing.raw_cookie, &existing_url)
+                if let Ok(existing_parsed) =
+                    StoreCookie::parse(&existing.raw_cookie, &existing_url)
                 {
                     let en = existing_parsed.name().to_string();
                     let ed = match existing_parsed.domain() {
-                        Some(d) => Some(format!("domain:{}", d)),
-                        None => existing_url.host_str().map(|h| format!("host:{}", h)),
+                        Some(d) => format!("domain:{}", d),
+                        None => existing_url
+                            .host_str()
+                            .map(|h| format!("host:{}", h))
+                            .unwrap_or_default(),
                     };
                     let ep = existing_parsed
                         .path()
@@ -164,7 +232,13 @@ impl CookieManager {
         inner.raw_cookies.push(CookieEntry {
             raw_cookie: cookie_str.to_string(),
             url: url.to_string(),
+            dedup_name,
+            dedup_domain_flag,
+            dedup_path,
         });
+        // F-W1B-044：标记 dirty 让 save_if_dirty 能跳过空保存。
+        inner.dirty = true;
+
         debug!(
             "添加 Cookie: {}",
             cookie_str
@@ -198,6 +272,7 @@ impl CookieManager {
         let mut inner = self.inner.lock().unwrap();
         inner.store = CookieStore::default();
         inner.raw_cookies.clear();
+        inner.dirty = true; // F-W1B-044
     }
 
     /// 清除指定域名的 Cookie
@@ -206,6 +281,7 @@ impl CookieManager {
     pub fn clear_domain(&self, domain: &str) {
         debug!("清除域名 Cookie: {}", domain);
         let mut inner = self.inner.lock().unwrap();
+        inner.dirty = true; // F-W1B-044：进入清理路径即视为变更，无论是否有命中
 
         if inner.raw_cookies.is_empty() {
             // 旧格式加载回退：对持久化 Cookie 做 JSON 过滤
@@ -693,6 +769,86 @@ mod tests {
         assert!(
             !cookies.contains("session_only=val"),
             "session cookie must not persist"
+        );
+
+        fs::remove_file(&path).ok();
+    }
+
+    /// **F-W1B-043 (BATCH-17)**：验证 add_cookie 后 entry 已经填好缓存 dedup
+    /// key，且重复 add 同 (name, domain, path) 时正确替换（走快路径比较）。
+    #[test]
+    fn test_add_cookie_dedup_uses_cached_keys() {
+        let manager = CookieManager::default();
+        manager.add_cookie("a=1", "https://example.com/").unwrap();
+        manager.add_cookie("a=2", "https://example.com/").unwrap();
+        let inner = manager.inner.lock().unwrap();
+        let a_entries: Vec<_> = inner
+            .raw_cookies
+            .iter()
+            .filter(|e| e.dedup_name == "a")
+            .collect();
+        assert_eq!(a_entries.len(), 1, "second add 应替换第一条同 key cookie");
+        let only = a_entries[0];
+        assert!(only.raw_cookie.contains("a=2"));
+        // 验证缓存字段已填
+        assert_eq!(only.dedup_name, "a");
+        assert!(
+            only.dedup_domain_flag.starts_with("host:")
+                || only.dedup_domain_flag.starts_with("domain:"),
+            "dedup_domain_flag 必须含前缀，实际：{}",
+            only.dedup_domain_flag
+        );
+        assert!(!only.dedup_path.is_empty(), "dedup_path 不应为空");
+    }
+
+    /// **F-W1B-044 (BATCH-17)**：dirty=false 时 save_if_dirty 应跳过 IO，
+    /// 文件 mtime 不变。
+    #[test]
+    fn test_save_if_dirty_skips_when_unchanged() {
+        let manager = CookieManager::default();
+        manager
+            .add_cookie("x=1; Max-Age=3600", "https://example.com")
+            .unwrap();
+        let path = temp_dir().join("test_dirty_skip.json");
+        let written = manager.save_persistent_cookies_if_dirty(&path).unwrap();
+        assert!(written, "first save 必须写入");
+        let mtime1 = fs::metadata(&path).unwrap().modified().unwrap();
+
+        // 等一小段，让后续 mtime 比对在不同 OS 下可观测
+        std::thread::sleep(std::time::Duration::from_millis(15));
+
+        let written2 = manager.save_persistent_cookies_if_dirty(&path).unwrap();
+        assert!(!written2, "无变更应跳过 IO");
+        let mtime2 = fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(mtime1, mtime2, "文件 mtime 不应变化");
+
+        fs::remove_file(&path).ok();
+    }
+
+    /// **F-W1B-044 (BATCH-17)**：写盘后再 add_cookie，dirty 应被重置；
+    /// 下一次 save_if_dirty 必须真写。
+    #[test]
+    fn test_save_if_dirty_writes_after_modify() {
+        let manager = CookieManager::default();
+        let path = temp_dir().join("test_dirty_write.json");
+        manager
+            .add_cookie("a=1; Max-Age=3600", "https://example.com")
+            .unwrap();
+        manager.save_persistent_cookies_if_dirty(&path).unwrap();
+
+        // 第二次：dirty 已清，应跳过
+        assert!(
+            !manager.save_persistent_cookies_if_dirty(&path).unwrap(),
+            "save 后第二次应跳过"
+        );
+
+        // 再 add 一条，dirty 应自动 true
+        manager
+            .add_cookie("b=2; Max-Age=3600", "https://example.com")
+            .unwrap();
+        assert!(
+            manager.save_persistent_cookies_if_dirty(&path).unwrap(),
+            "add 后应触发写盘"
         );
 
         fs::remove_file(&path).ok();

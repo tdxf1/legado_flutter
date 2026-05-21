@@ -56,6 +56,13 @@ pub struct WebDavClient {
 impl WebDavClient {
     /// 构造一个 WebDavClient。`base_url` 应以 `/` 结尾；不以 `/` 结尾时
     /// 自动补一个，便于调用方少踩坑。
+    ///
+    /// **F-W1B-045 加固（2026-05-21, BATCH-17）**：build 失败用 `expect`
+    /// 触发 panic，不再静默 fallback 到 `Client::new()` —— 后者会丢失
+    /// 30s/10s 超时配置，让 WebDAV 操作可能挂住进程。`reqwest::Client::
+    /// builder().build()` 在 native 仅 TLS 配置异常时返回 Err；走默认
+    /// rustls/native-tls 的本项目里 build 失败属于环境异常，应立即暴露
+    /// 而不是带"半坏" client 继续跑。
     pub fn new(base_url: String, user: String, password: String) -> Self {
         let base_url = if base_url.ends_with('/') {
             base_url
@@ -67,7 +74,7 @@ impl WebDavClient {
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(10))
             .build()
-            .unwrap_or_else(|_| Client::new());
+            .expect("WebDavClient: reqwest client must build with default TLS config");
         Self {
             base_url,
             auth_header,

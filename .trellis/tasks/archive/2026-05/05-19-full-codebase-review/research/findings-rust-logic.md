@@ -560,6 +560,8 @@
 
 **建议**: 用 `(name, domain, path)` 索引 + dedup；clear_domain 改原地 retain 不 rebuild。
 
+**Resolution (BATCH-17, 2026-05-21，缩范围)**: 在 `CookieEntry` 上加 3 个 `#[serde(default)]` dedup key 字段 (`dedup_name` / `dedup_domain_flag` / `dedup_path`)，`add_cookie` push 时一次性算好；retain 闭包**优先**用缓存键 string compare（O(1) per entry），仅旧格式 entry（缓存为空字符串）走完整 `Url::parse + StoreCookie::parse` fallback。**未做** `clear_domain` 完整 HashMap 索引 / 原地 retain 重写（用户决策方案 A 保守补丁）— 当前 cookie 量级 <100 条下 partition + rebuild 仍可接受，留 BATCH-17b 必要时升级。+ 1 单测 `test_add_cookie_dedup_uses_cached_keys`。
+
 ---
 
 ### F-W1B-044 [P1 主要][C-性能][core-net]
@@ -572,6 +574,8 @@
 
 **建议**: 用单独的 dirty flag，仅在新 cookie 添加时标记；定时 flush 或退出时统一保存。
 
+**Resolution (BATCH-17, 2026-05-21)**: `CookieManagerInner` 加 `dirty: bool`；`add_cookie` / `clear_all` / `clear_domain` 锁内置 true，`save_persistent_cookies` 成功后置 false；新方法 `save_persistent_cookies_if_dirty(path) -> Result<bool>`：dirty=false 时跳过 IO + pretty JSON 序列化返回 `Ok(false)`，dirty=true 时正常写盘返回 `Ok(true)`。`HttpClient::save_cookies_if_dirty` 转发供 caller 端定时调度（如每 30s 一次）替代高频 `save_cookies`，无强制迁移压力 — 原 `save_cookies` 接口保持不变。+ 2 单测：`test_save_if_dirty_skips_when_unchanged`（mtime 验证不写）+ `test_save_if_dirty_writes_after_modify`（add 后 dirty 自动恢复）。
+
 ---
 
 ### F-W1B-045 [P1 主要][D-安全][core-net]
@@ -583,6 +587,8 @@
 **详细**: 通常构造不会失败，但若失败用户用默认 client（无超时）的 WebDAV 操作可能挂住进程；同时 `auth_header` 仍传入但 client 行为变化用户无感。
 
 **建议**: 改 unwrap_or_else 为 expect("WebDAV client must build")；或返回 Result。
+
+**Resolution (BATCH-17, 2026-05-21)**: `unwrap_or_else(|_| Client::new())` 改成 `.expect("WebDavClient: reqwest client must build with default TLS config")`。失败立即 panic 暴露环境异常，不再吞 30s timeout / 10s connect_timeout 配置丢失静默 fallback 到默认 client（无超时配置）。reqwest::Client::builder().build() 在 native 仅 TLS 配置异常时返回 Err；本项目走默认 rustls/native-tls，build 失败属环境异常。未改返回 `Result<Self>`（候选选项之一，选 expect 保持 caller 接口不变）。
 
 ---
 
