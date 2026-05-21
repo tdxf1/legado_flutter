@@ -1,0 +1,6 @@
+{"role": "system", "content": "BATCH-10 check context"}
+{"file": ".trellis/tasks/05-22-batch-10-js-sandbox-extra-security/prd.md", "reason": "validation against acceptance criteria"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings.md", "reason": "master report 5 条 P1 标 Resolved + F-W1B-006 标 Resolved-by-Design"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-rust-logic.md", "reason": "Wave 1B 详细 finding 标 Resolution"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-10-js-sandbox-extra-security.md", "reason": "本批 roadmap 自身验收"}
+{"file": ".trellis/spec/rust-core/quality-and-anti-patterns.md", "reason": "spec 是否落地"}

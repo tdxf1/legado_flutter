@@ -1,0 +1,8 @@
+{"role": "system", "content": "BATCH-10 implement context"}
+{"file": ".trellis/tasks/05-22-batch-10-js-sandbox-extra-security/prd.md", "reason": "本批 PRD 决策（实施 5 条 + F-W1B-006 标 Resolved-by-Design）"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-rust-logic.md", "reason": "Wave 1B finding 详细文本（F-W1B-005/006/007/008/009/013）"}
+{"file": "core/core-source/src/legado/js_runtime.rs", "reason": "F-W1B-005 zip-slip + F-W1B-013 IIFE 统一 + F-W1B-005 read_allowed_file"}
+{"file": "core/core-source/src/legado/http.rs", "reason": "F-W1B-007 ureq max_redirects(5) 两处"}
+{"file": "core/core-source/src/legado/url.rs", "reason": "F-W1B-008 模板表达式白名单 fast-path 显式化（建议 const + 注释）"}
+{"file": "core/core-source/src/legado/import.rs", "reason": "F-W1B-009 import 大小 + entries + 单字段长度上限"}
+{"file": ".trellis/spec/rust-core/quality-and-anti-patterns.md", "reason": "spec 新增 BATCH-10 段 + F-W1B-006 Resolved-by-Design 边界"}

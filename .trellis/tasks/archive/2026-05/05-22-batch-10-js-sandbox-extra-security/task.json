@@ -1,0 +1,16 @@
+{
+  "id": "05-22-batch-10-js-sandbox-extra-security",
+  "title": "BATCH-10 JS 沙箱补充安全（zip-slip + redirect SSRF + 模板表达式 + import 大小 + js_script_to_expression + shared vars）",
+  "createdAt": "2026-05-22",
+  "completedAt": "2026-05-22",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "depends_on": ["05-22-batch-04-harden-js-sandbox-core"],
+  "context": {
+    "findings": ["F-W1B-005", "F-W1B-006", "F-W1B-007", "F-W1B-008", "F-W1B-009", "F-W1B-013"],
+    "roadmap": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-10-js-sandbox-extra-security.md"
+  }
+}
