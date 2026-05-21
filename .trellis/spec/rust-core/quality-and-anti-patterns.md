@@ -293,3 +293,68 @@ BATCH-13 池化时主路径已设；BATCH-04 补嵌套路径。任何新建 `Run
 | 新建 `Runtime::new()` 不设 `set_memory_limit` / `set_max_stack_size` | 恶意 JS 可 OOM 整个进程 | BATCH-04 (F-W1B-003) |
 | `font_mappings_json` / `Face::parse` 不包 `catch_unwind` | 畸形 TTF 可 panic 整个线程 | BATCH-04 (F-W1B-004) |
 | `addJavascriptInterface` 后不在 eval 完成时 `removeJavascriptInterface` | 恶意页面 JS 可调用 50+ bridge 方法 | BATCH-04 (F-W3-015) |
+| `archive.by_name(path)` 不预先校验 `path` 含 `..` / 绝对路径 | zip-slip 可读到 archive 外文件 | BATCH-10 (F-W1B-005) |
+| `LEGADO_FILE_ROOT.join(path).canonicalize()` 不预先 reject `..` 段 | symlink 解析窗口可绕 root 边界 | BATCH-10 (F-W1B-005) |
+| 新建 `ureq::Agent` 不设 `max_redirects` | 恶意 redirect 链可暴露内部跳转 | BATCH-10 (F-W1B-007) |
+| `serde_json::from_str` 解析 untrusted JSON 不设输入大小 / 条目数 / 单字段长度上限 | OOM / parser DoS | BATCH-10 (F-W1B-009) |
+
+### F-W1B-006 业务边界（BATCH-10）
+
+`java._vars` 与 PREAMBLE 写入的全局对象会跨同一线程的多次 eval **共享**，但跨 source / cross-thread 不会泄漏，亦非引入 key 白名单可解决的问题。结论 **Resolved-by-Design**，理由：
+
+1. **Per-Context 隔离已就位**：`RuleContext::new` 为每个书源单独构造，`shared_variables`（`Arc<Mutex<HashMap<...>>>`）也是每书源独立。`_vars` 的"跨脚本可见"窗口仅限于同一 source、同一 OS 线程内连续 eval，正是 Legado 业务模型 `java.put('cookie', ...)` 在 `search → bookInfo → toc → content` 之间传递所必需。
+2. **Thread-local RAII 已就位**：`JsVariablesOverride`（BATCH-11，`js_runtime.rs`）在 `eval_default_with_http_state` 入帧时快照、出帧时恢复 `LEGADO_JS_VARIABLES`，框定了"持久化窗口"。BATCH-13 的 QuickJS 池化进一步把 `Runtime + Context` 的复用与 PREAMBLE 重新执行解耦：每次 eval 都重建 `var java = { ... }`，user-script 写入 `java._vars` 的内容由 PREAMBLE 重置（参见 [`test_runtime_pool_isolates_user_state_via_preamble_reset`]）。
+3. **写穿透是业务必需**：BATCH-11 配对的 `__legado_js_put` / `__legado_js_get` 桥（write-through + read-fallback）刚好让"`put` 在 eval A，`get` 在 eval B"在同 OS 线程内成立。这是 Legado 真实书源（如登录态、CSRF token）依赖的契约。
+4. **Key 白名单不能加**：`java._vars` 的 key 来自书源作者；引入"`__` 开头拒收"之类规则无业务收益（外部 JS 写不到 `__legado_xxx_*`，那是 Rust 端注入的 free-standing function 名，不是 `_vars` 桶里的 key），反而会破坏现有书源对 `java.put('__cache_xxx', ...)` 这类命名的使用。
+5. **跨线程持久化路径单独**：业务侧若需 cross-thread 状态，走 `RuleContext::shared_variables`（`Arc<Mutex>`），不要试图扩 `_vars`/`LEGADO_JS_VARIABLES`（thread_local，按设计跨线程不见）。
+
+新代码不要为 `_vars` 加 key 白名单或 deny-list；如果发现真实泄漏，先核实是不是 RAII guard 范围错位（看 `JsVariablesOverride` 是否 wrap 了 entry function），再考虑重构。
+
+## JS 模板表达式与 import 上限 (BATCH-10)
+
+BATCH-04 把 SSRF / TTF / WebView 边界关上后，本批补三个未直接走 JS 沙箱、但同样是 untrusted-input 入口的边界。
+
+### 模板变量白名单（F-W1B-008）
+
+`core-source/legado/url.rs::resolve_template_expressions` 用 `TEMPLATE_VAR_WHITELIST: &[&str] = &["key", "keyword", "page", "encodeKey", "encode_keyword"]` 做 fast-path：
+
+```rust
+if TEMPLATE_VAR_WHITELIST.contains(&expr) {
+    vars.get(expr).map(|v| v.as_string_lossy()).unwrap_or_default()
+} else {
+    // JS eval fallback for legitimate computations like (page-1)*20
+    vars.get(expr).map(...).or_else(|| runtime.eval(expr, &vars).ok().map(...))
+}
+```
+
+白名单命中的 `{{key}}` / `{{keyword}}` 类零 JS 注入风险（直接读 `HashMap`）；不在白名单的表达式（`{{(page-1)*20}}`、`{{java.base64Encode(key)}}`）继续走 `DefaultJsRuntime::eval`，由书源审核流程外的 trust 模型兜底。新加变量名时 **必须同步更新 `TEMPLATE_VAR_WHITELIST`**，否则就只能走 JS eval 慢路径（且失去白名单声明的安全性）。
+
+### Import 大小 / 条目 / 单源字段上限（F-W1B-009）
+
+`core-source/legado/import.rs` 顶部三常量：
+
+```rust
+const MAX_IMPORT_BYTES: usize = 5 * 1024 * 1024;     // 整个 JSON blob ≤ 5 MiB
+const MAX_IMPORT_ENTRIES: usize = 5000;              // 单次 import ≤ 5000 个 source
+const MAX_FIELD_BYTES: usize = 256 * 1024;           // 单字段基准
+```
+
+`import_legado_source` 入口先做 `json.len()` 检查，再 `serde_json::from_str`，再检查 `legado_sources.len()`；`legado_to_imported` 内部把 source 的"长字段"（`rule_search/explore/book_info/toc/content` JSON + `js_lib/header/login_url/login_check_js/search_url/explore_url/book_url_pattern/concurrent_rate/variable_comment/cover_decode_js/login_ui`）累加，超过 `MAX_FIELD_BYTES * 5 = 1.25 MiB` 就拒。规则字段是 `Option<JsonValue>`，长度走 `to_string()` 而非 `serialize`，避免给 `LegadoBookSource` 加 `Serialize`。
+
+新增字段时记得：(a) 算长度时把它加到 `total` 里，(b) 加测覆盖（`test_import_rejects_oversized_per_source_fields` 是 canonical 模板）。
+
+### Redirect 上限（F-W1B-007）
+
+`core-source/legado/http.rs::LegadoHttpClient::new` 与 `proxy_agent` 的 `ureq::Agent::config_builder()` 链路加 `.max_redirects(5)`（ureq 3.x default 是 10，缩到 5）。配合 `ssrf_guard` 在入口做 SSRF 拒绝、`max_redirects` 限制跳转链长度，是当前对未知中间跳转的"两层防线"。**不要**在 `https_only(true)` 上做切换——中文小说源 http 仍是常态，BATCH-05 ADR 已记录该业务豁免。redirect 每跳的 SSRF 检查需要 ureq 暴露 redirect callback（3.x 没暴露），后续若升级再做。
+
+### F-W1B-013 业务边界（决策路径）
+
+`js_script_to_expression` 的 `needs_direct_eval` 分支保留 `eval(JSON_STRING)` 形式（**不**改为统一 IIFE 包装）。理由：
+
+1. **本身不是安全洞**：`serde_json::to_string(script)` 产物是合法 JS 字符串字面量，正确转义 `'`/`"`/`\\`/`\n`/`</script>` 等 metacharacter；eval 内的内容是 user script byte-for-byte，不是 string concat 注入。`test_js_script_to_expression_eval_branch_escapes_meta_chars` 固化了这一契约。
+2. **改 IIFE 会破坏 ~30 测试**：包装层 caller 是 `JSON.stringify(({}))`（参见 `js_runtime.rs::QuickJsRuntime::eval` line ~519、`BoaJsRuntime::eval` line ~582）；多语句脚本（`var x = 1; x`）的尾部 `x` 是 ExpressionStatement，QuickJS top-level eval 会把它当结果返回，但 IIFE 包装后函数 default return undefined。我们无法静态识别"最后一条表达式"自动注入 `return`，所以一刀切改 IIFE 后大量 bridge 测试会拿到 `null`。BATCH-10 实测 100+ 个测试中有 30+ 失败，回退此分支。
+3. **`contains_return` 分支保留 IIFE**：脚本带显式 `return ` 时（`return foo` / `\nreturn foo`），裸顶层 return 在 QuickJS eval 模式触发 SyntaxError；对这一类必须 IIFE 包装让 return 合法。
+
+新加的 PREAMBLE-internal eval 分支（如未来要做"检测尾部 ExpressionStatement 自动 return"）应当独立测试，不要破坏 `eval(JSON_STRING)` 这条已固化的兼容路径。
+
+

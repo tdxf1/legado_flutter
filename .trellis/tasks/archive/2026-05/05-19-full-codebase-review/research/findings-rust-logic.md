@@ -104,6 +104,8 @@
 
 **建议**: `getZipStringContent` 在解压前校验 `path.split('/').all(|p| p != ".." && !p.is_empty())`；read_allowed_file 在 join 前显式拒绝绝对路径与 `..`。
 
+**Resolution**: BATCH-10 (2026-05-22) — 新增 `is_safe_zip_entry_path(&str) -> bool` helper：reject 空 / `/`-`\`-开头 / 含 `\` / `..` segment / 空 segment / Windows drive prefix。`java_get_zip_string_content` / `java_get_zip_byte_array_content` 入口前置检查 + `tracing::warn!` 拒绝时返回空。`read_allowed_file` 在 `root.join(...)` 前显式 reject 含 `..` segment 或绝对路径，关 symlink 解析窗口。新增 4 单测覆盖 traversal / absolute / windows drive。task: 05-22-batch-10-js-sandbox-extra-security。
+
 ---
 
 ### F-W1B-006 [P1 主要][D-安全][core-source/legado/js_runtime]
@@ -115,6 +117,8 @@
 **详细**: `book.variable` / `chapter.variable` / shared_variables 在 RuleContext 是 `Arc<Mutex<HashMap>>`（context.rs:39）— 全部 fields 共享，跨字段评估时一个字段写入 `__legado_variables__` 后续字段可见。如果用户同时启用多个书源做并行搜索，Context 不共享但 `LEGADO_JS_VARIABLES` thread_local 在同一线程上的多次 eval 之间也可能泄漏（虽然有 JsVariablesOverride RAII guard，但只覆盖一次 `eval_default_with_http_state`）。
 
 **建议**: 把 `java._vars` 限制成只读（不把 cookie 字段塞进去）；显式列白允许 JS 写入的变量名；shared_variables 改成 per-rule scope。
+
+**Resolution**: BATCH-10 (2026-05-22, Resolved-by-Design) — `RuleContext` per-source 构造（`context.rs::new`），`shared_variables: Arc<Mutex<HashMap>>` 不跨 Context；BATCH-11 加的 `JsVariablesOverride` RAII guard 按帧快照/恢复 `LEGADO_JS_VARIABLES` thread_local；BATCH-11 又加 `__legado_js_put` / `__legado_js_get` write-through bridge 让 Legado 真实书源 `java.put('cookie', ...)` 在 search→content 阶段传递（业务必需）。引入 `_vars` key 白名单会废这个核心模式，且攻击者写 `__legado_xxx_*` 名也无效（这些是 Rust 端 free-standing function，JS 端无法 alias 覆盖）。spec `.trellis/spec/rust-core/quality-and-anti-patterns.md` 新增「F-W1B-006 业务边界（BATCH-10）」段记录决策。task: 05-22-batch-10-js-sandbox-extra-security。
 
 ---
 
@@ -128,6 +132,8 @@
 
 **建议**: 限制最大重定向跳数（如 5）；对每一跳的 host 都做 SSRF 校验；增加配置位允许用户对受信任书源开启 plain HTTP。
 
+**Resolution**: BATCH-10 (2026-05-22) — `LegadoHttpClient::new` + `proxy_agent` 两处 ureq `Agent::config_builder` 加 `.max_redirects(5)`（ureq 3.x default 10）。`https_only(false)` 业务豁免（中文小说源大量 plain HTTP），由 BATCH-05 cross-language ADR 文档化。每跳 host SSRF 校验 ureq 3.x 未暴露 redirect callback，留入口 SSRF（BATCH-04 `ssrf_guard::is_url_safe_for_fetch`）+ `max_redirects(5)` 双层防线，spec 已写明。新增单测 `test_legado_http_client_redirect_limited`。task: 05-22-batch-10-js-sandbox-extra-security。
+
 ---
 
 ### F-W1B-008 [P1 主要][D-安全][core-source/legado/url]
@@ -140,6 +146,8 @@
 
 **建议**: 模板表达式只允许预定义白名单（key/keyword/page/encodeKey 等）；扩展表达式（`(page-1)*20`）走简单 expression evaluator 而非完整 JS；如必须保留 JS，则 keyword 注入前做 sanitize（拒绝包含 `;`/`'`/换行的关键词或更安全地改为 base64 → JS 端 decode）。
 
+**Resolution**: BATCH-10 (2026-05-22) — 新增 `const TEMPLATE_VAR_WHITELIST: &[&str] = &["key","keyword","page","encodeKey","encode_keyword"]` 显式化白名单。`resolve_template_expressions` 改为：白名单命中 → 直接 `vars.get` 字符串替换零 JS 风险；非白名单表达式（如 `(page-1)*20`）仍走 `runtime.eval`（兼容性需要，书源作者 trusted via 书源审核流程）。doc-comment 写明信任边界。task: 05-22-batch-10-js-sandbox-extra-security。
+
 ---
 
 ### F-W1B-009 [P1 主要][D-安全][core-source/legado/import]
@@ -151,6 +159,8 @@
 **详细**: 没有 max_entries / max_field_len。`1778070297.json` 已经包含 100 个书源，是合法用例；但批量导入时一个恶意 JSON 可塞 1M sources 把 SQLite 写挂。
 
 **建议**: 在 import 入口设 max_size（如 5MB）+ max_entries（如 5000）；jsLib 字段单独限长（如 256KB）。
+
+**Resolution**: BATCH-10 (2026-05-22) — `import.rs` 新增 `MAX_IMPORT_BYTES = 5 * 1024 * 1024` (5 MiB) / `MAX_IMPORT_ENTRIES = 5000` / `MAX_FIELD_BYTES = 256 * 1024`。`import_legado_source` 入口前置 byte-count gate；`serde_json::from_str` 后 entry-count gate。`legado_to_imported` 内用轻量 `json_value_len` / `opt_str_len` helper 跨 rule_search/rule_book_info/rule_toc/rule_content/rule_explore/js_lib/login_url/header/book_url_pattern/concurrent_rate 聚合长度，超 `MAX_FIELD_BYTES * 5 = 1.25 MiB` reject（避免对 `LegadoBookSource` 加 `Serialize` derive）。新增 3 单测：oversized_json / too_many_entries / oversized_per_source_fields。task: 05-22-batch-10-js-sandbox-extra-security。
 
 ---
 
@@ -203,6 +213,8 @@
 **详细**: 检测 `contains_return_statement` 走 `(function(){...})()` 包装路径 OK，但 `needs_direct_eval` 路径只识别 `; \n var let const if for while try` — 漏了 `function` 关键字声明（顶层 function 可以 eval，但 `(function ...)()` IIFE 已经被 detect_iife 提前判 OK）。组合路径混合时 `var x = ...; return x;` 会先满足 `contains_return_statement` 走 IIFE 路径正确。
 
 **建议**: 整理 wrapper 决策表写到注释里，加单测覆盖各 corner case；或者干脆所有非 IIFE 脚本都包到 IIFE 里，避免分支。
+
+**Resolution**: BATCH-10 (2026-05-22, 缩范围) — 尝试 PRD 首选方案「非 IIFE 全包 `(function(){...})()`」失败：30+ bridge 测试挂掉，因为生产调用形态 `JSON.stringify((js_script_to_expression(...)))` 期望表达式值，IIFE 包装让 tail-expression 返回 undefined（无法静态识别 last-expr 自动注入 return）。回退保守方案：保留 3 分支结构（is_iife / contains_return_statement / needs_direct_eval），针对 finding 关切的「字符串拼接生成 JS」加注释说明 `serde_json::to_string` 是 well-formed JS string literal（已 escape `'`/`"`/`\\`/`\n` 等），无注入风险；新增 `test_js_script_to_expression_eval_branch_escapes_meta_chars` 钉死 escape 契约 + `test_js_script_to_expression_iife_wraps_return_in_var_decl` 覆盖 IIFE 分支。spec 「F-W1B-013 业务边界（决策路径）」段记录回退理由。task: 05-22-batch-10-js-sandbox-extra-security。
 
 ---
 
