@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/flutter-app/index.md", "reason": "Flutter app 包总览"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "Forbidden patterns 表 + 验证节奏；本批要加「列表 reactivity 模式（KeepAlive + immutable update + future seq token）」段"}
+{"file": ".trellis/spec/flutter-app/async-and-mounted.md", "reason": "mounted check + safeSetState 规约；本批 _searchSeq token + Future.wait 涉及"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "Riverpod 模式 + ValueNotifier；本批 _searchSeq + ValueListenableBuilder 涉及"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "测试钩子模式；本批 KeepAlive scroll position 测试 + future seq race 测试"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-features.md", "reason": "F-W2B-009/012/013/014/019/032 详细 finding"}
+{"file": ".trellis/tasks/archive/2026-05/05-21-batch-05-webview-qr-boundaries/prd.md", "reason": "BATCH-05 PRD 范式参考（同样 Flutter 层 6 finding 缩范围 + 方案 A vs B + 文档化决策模式）"}

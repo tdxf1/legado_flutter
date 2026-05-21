@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "本批新增「列表 reactivity」段后此文件验证（含 BATCH-03 + BATCH-05 + BATCH-25 既有 spec 规约）"}
+{"file": ".trellis/spec/flutter-app/async-and-mounted.md", "reason": "mounted check 风格规约 + safeSetState；本批 _searchSeq + Future.wait 涉及"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "Riverpod / ValueNotifier 规约"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "测试钩子 + KeepAlive 测试模式"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings.md", "reason": "master report 主索引 6 条 finding 标 Resolved + F-W2B-018 标 Resolved-by-BATCH-18b"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-features.md", "reason": "Wave 2B 详细 finding Resolution"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-21-rss-search-reactivity-perf.md", "reason": "本批自身验收清单"}
+{"file": ".trellis/tasks/archive/2026-05/05-21-batch-05-webview-qr-boundaries/prd.md", "reason": "上一批 PRD 范式参考（同样 Flutter 层 + 测试钩子复用 + 3-commit 模式）"}
