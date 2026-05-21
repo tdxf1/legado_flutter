@@ -137,6 +137,77 @@ Bridge fns like `__legado_get_string` recursively call `execute_legado_rule`, wh
 - Cross-thread Runtime sharing: `rquickjs::Context` is `!Send`. `Mutex<Runtime> + Vec<Context>` was considered and rejected (per-thread pool already amortizes the dominant cost; cross-thread complexity buys little).
 - Caching compiled jsLib bytecode: separate concern (per-source cache, keyed by source ID). Not implemented yet; track as a follow-up if profile data justifies it.
 
+## Legado 规则单一执行路径 (BATCH-15)
+
+`core-source` 的规则执行入口收口到 `crate::legado::execute_legado_rule(rule, html, context)`（`core-source/src/legado/rule.rs:122`）。`crate::rule_engine::RuleEngine::execute_rule` 路径 **deprecated**，新代码不允许调用 — 编译期由 `RuleEngine` 上的 `#[deprecated]` 阻挡，外部 crate 由 `lib.rs::pub use` 不再 re-export `RuleEngine`/`RuleError` 阻挡。
+
+### 执行 vs 校验：模块职责切分
+
+`rule_engine.rs` 模块整体保留，但用途收窄到 **规则字符串静态校验**：
+
+| 来源 | 用途 | 谁用 |
+|---|---|---|
+| `rule_engine::RuleExpression::parse(rule_str)` | 解析规则字符串识别 type（CSS / XPath / Regex / JSONPath / JS） | `lib.rs::check_rule_expression`（导入 / 校验阶段） |
+| `rule_engine::RuleType` | 规则类型枚举 | 同上 |
+| `rule_engine::strip_legado_replace_rules` | 剥离 `##` 替换规则后缀 | 同上 |
+| `rule_engine::strip_css_modifiers` | 剥离 `!1` / `@@-2` 修饰符 | 同上 |
+| `rule_engine::split_css_alternatives` | `||` 分支拆分 | 同上 |
+| `rule_engine::RuleEngine::execute_rule` | **deprecated** — 用 `legado::execute_legado_rule` 代替 | 仅 `rule_engine.rs` 自身的内部 test（已 `#[allow(deprecated)]`） |
+| `rule_engine::RuleExpression::evaluate` | **deprecated** | 同上 |
+
+新增校验 helper（如 `validate_xxx` 类）若需要规则的纯文本预处理，加在 `rule_engine.rs` 模块（pub(crate)）；新增执行 helper 加在 `legado::rule::*`。两者不要混淆。
+
+### 删除 fallback 的行为变化
+
+BATCH-15 之前 `BookSourceParser::run_rule` 是 "先试 legado/rule 再 fallback rule_engine" 的过渡形态：
+
+```rust
+// 旧（BATCH-15 之前）
+match crate::legado::execute_legado_rule(rule, html, context) {
+    Ok(results) if !results.is_empty() => return Ok(results),
+    Ok(results) if !can_fallback_to_legacy_rule_engine(rule) => return Ok(results),
+    _ => {}
+}
+self.rule_engine.execute_rule(rule, html).map_err(|e| e.to_string())
+```
+
+```rust
+// 新（BATCH-15 之后）
+crate::legado::execute_legado_rule(rule, html, context).map_err(|e| e.to_string())
+```
+
+行为差异：legado/rule 返回 `Ok(vec![])` 时不再 fallback 到 rule_engine。对真实书源意味着：
+
+- 同一规则在 legado/rule 实际匹配为空时：用户立即看到结果列表为空（更好的可调试性）；不再被 rule_engine 兜底误以为有结果。
+- 同一规则在 legado/rule 返回 `Err(...)` 时：错误直接上抛而不再被 fallback 吞掉。
+
+如果未来发现某真实书源 case 在 legado/rule 上 fail 但在旧 rule_engine 上 work，**修 legado/rule（按真实规则语义）而不是恢复 fallback**。fallback 是历史债，不是 feature。
+
+### `#[deprecated]` × `-D warnings` 配套
+
+deprecated struct / fn 在工作区内部仍有少量调用点（`rule_engine.rs` 内部的 `impl RuleEngine` body / `impl Default` / `mod tests`），需要 `#[allow(deprecated)]` 覆盖以避免 `-D warnings` 触发。模式：
+
+```rust
+#[deprecated(note = "use legado::execute_legado_rule; rule_engine retained only for ...")]
+pub struct RuleEngine { ... }
+
+#[allow(deprecated)]
+impl RuleEngine { pub fn new() -> Self { ... } }
+
+#[allow(deprecated)]
+impl Default for RuleEngine { fn default() -> Self { Self::new() } }
+
+#[cfg(test)]
+#[allow(deprecated)]
+mod tests { ... }
+```
+
+不要在外部 caller 上加 `#[allow(deprecated)]` — 那是用毒。`#[allow]` 仅在 deprecated 项**自身定义所在模块**的 internal scaffold 上使用，让 deprecated 项保持工作但触不到 caller。新代码绝对不要新增 `RuleEngine::new()` / `RuleExpression::evaluate(...)` 调用点。
+
+### `legado::execute_legado_rule` 空 rule_str 契约
+
+`execute_legado_rule(rule_str, html, context)` 在 `rule_str.trim()` 为空时返回 `Ok(Vec::new())`（不是 `Ok(vec![html.to_string()])` 透传）。caller 用结果非空判定"是否匹配成功"是合法的。已有单测 `test_execute_legado_rule_empty_rule_returns_empty` 固化此契约。如果 caller 有"空 rule 表示透传整章 html"的特殊业务需求，应在 caller 层显式处理（None / "" 提前返回 html）而不是依赖 `execute_legado_rule` 的旧透传行为。
+
 ## Code Hygiene Checks
 
 Before committing:
