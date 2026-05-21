@@ -286,6 +286,7 @@ class MainActivity : FlutterActivity() {
                         "sourceRegexMatched" to matchedResources.isNotEmpty(),
                     )
                     payload.putAll(payloadExtra)
+                    try { webView.removeJavascriptInterface("legadoNative") } catch (_: Exception) {}
                     finish(payload)
                 })
             }

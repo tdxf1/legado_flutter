@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{debug, warn};
 
+use super::ssrf_guard;
 use super::url::{
     get_charset_from_option, guess_charset_from_response, parse_headers, parse_proxy, LegadoUrl,
 };
@@ -70,6 +71,11 @@ impl LegadoHttpClient {
         &self, method: &str, url: &str, body: Option<&str>,
         headers: &[(String, String)], charset: Option<&str>, proxy: Option<&str>,
     ) -> Result<String, String> {
+        ssrf_guard::is_url_safe_for_fetch(url).map_err(|e| {
+            warn!("SSRF blocked in LegadoHttpClient: {e}");
+            format!("SSRF blocked: {e}")
+        })?;
+
         let agent = if let Some(p) = proxy { self.proxy_agent(p)? } else { self.agent.clone() };
         let method = method.to_string();
         let url = url.to_string();

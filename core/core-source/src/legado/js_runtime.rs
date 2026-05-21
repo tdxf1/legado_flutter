@@ -72,6 +72,9 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 #[cfg(feature = "js-quickjs")]
+use super::ssrf_guard;
+
+#[cfg(feature = "js-quickjs")]
 thread_local! {
     static LEGADO_SET_CONTENT: std::cell::RefCell<Option<(String, String)>> = std::cell::RefCell::new(None);
     static LEGADO_JS_VARIABLES: std::cell::RefCell<HashMap<String, LegadoValue>> = std::cell::RefCell::new(HashMap::new());
@@ -153,6 +156,8 @@ where
     // we must not re-enter `Context::with` on it.
     if QUICKJS_POOL_BUSY.with(|cell| cell.get()) {
         let runtime = Runtime::new().map_err(|e| format!("quickjs runtime: {e}"))?;
+        runtime.set_memory_limit(QUICKJS_MEMORY_LIMIT);
+        runtime.set_max_stack_size(QUICKJS_STACK_LIMIT);
         let context = Context::full(&runtime).map_err(|e| format!("quickjs context: {e}"))?;
         if timeout_ms > 0 {
             let start = std::time::Instant::now();
@@ -1130,6 +1135,11 @@ fn java_http_request_blocking(
     body: String,
     headers_json: String,
 ) -> String {
+    if let Err(e) = ssrf_guard::is_url_safe_for_fetch(&url) {
+        tracing::warn!("SSRF blocked in java.ajax: {e}");
+        return String::new();
+    }
+
     let cookie_jar = current_js_cookie_jar();
 
     let mut charset = None;
@@ -1233,6 +1243,7 @@ fn js_http_client(cookie_jar: Arc<reqwest::cookie::Jar>) -> reqwest::blocking::C
         .timeout(std::time::Duration::from_secs(30))
         .connect_timeout(std::time::Duration::from_secs(15))
         .cookie_provider(cookie_jar)
+        .redirect(reqwest::redirect::Policy::limited(5))
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         .build()
         .expect("failed to build JS HTTP client")
@@ -1930,7 +1941,7 @@ fn java_get_zip_byte_array_content(url: String, path: String) -> String {
     serde_json::to_string(&bytes).unwrap_or_else(|_| "[]".into())
 }
 
-const MAX_ZIP_DOWNLOAD: u64 = 50 * 1024 * 1024;
+const MAX_ZIP_DOWNLOAD: u64 = 10 * 1024 * 1024;
 const MAX_ZIP_ENTRY: u64 = 10 * 1024 * 1024;
 
 #[cfg(feature = "js-quickjs")]
@@ -2026,6 +2037,11 @@ fn is_safe_relative_path(path: &std::path::Path) -> bool {
 fn java_download_file(url: String, path: String) -> String {
     use std::io::{Read, Write};
 
+    if let Err(e) = ssrf_guard::is_url_safe_for_fetch(&url) {
+        tracing::warn!("SSRF blocked in java.downloadFile: {e}");
+        return String::new();
+    }
+
     let resolved = match resolve_write_path(&path) {
         Some(p) => p,
         None => return String::new(),
@@ -2035,12 +2051,6 @@ fn java_download_file(url: String, path: String) -> String {
         Ok(response) => response,
         Err(_) => return String::new(),
     };
-    if response
-        .content_length()
-        .is_some_and(|len| len > MAX_ZIP_DOWNLOAD)
-    {
-        return String::new();
-    }
     let mut file = match std::fs::File::create(&tmp_path) {
         Ok(file) => file,
         Err(_) => return String::new(),
@@ -2140,6 +2150,10 @@ fn java_unzip_file(zip_path: String, dest_dir: String) -> String {
             ok = false;
             continue;
         };
+        // Reject symlink entries (S_IFLNK = 0o120000) to prevent path traversal
+        if file.unix_mode().unwrap_or(0) & 0o170000 == 0o120000 {
+            continue;
+        }
         let Some(file_name) = file.enclosed_name() else {
             ok = false;
             continue;
@@ -2259,6 +2273,7 @@ fn font_mappings_json(bytes: &[u8]) -> String {
 #[cfg(feature = "js-quickjs")]
 fn resolve_ttf_input(input: &str) -> Option<Vec<u8>> {
     if input.starts_with("http://") || input.starts_with("https://") {
+        ssrf_guard::is_url_safe_for_fetch(input).ok()?;
         let max_bytes: usize = 10 * 1024 * 1024;
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
@@ -2286,13 +2301,17 @@ fn resolve_ttf_input(input: &str) -> Option<Vec<u8>> {
 }
 
 #[cfg(feature = "js-quickjs")]
-fn java_query_base64_ttf(base64: String) -> String {
+fn java_query_base64_ttf(base64_input: String) -> String {
     use base64::Engine;
-    let bytes = match base64::engine::general_purpose::STANDARD.decode(&base64) {
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(&base64_input) {
         Ok(b) => b,
         Err(_) => return "null".to_string(),
     };
-    font_mappings_json(&bytes)
+    // catch_unwind: defense-in-depth against malformed TTF triggering panic
+    match catch_unwind(AssertUnwindSafe(|| font_mappings_json(&bytes))) {
+        Ok(result) => result,
+        Err(_) => "null".to_string(),
+    }
 }
 
 #[cfg(feature = "js-quickjs")]
@@ -2301,7 +2320,11 @@ fn java_query_ttf(input: String) -> String {
         Some(b) => b,
         None => return "null".to_string(),
     };
-    font_mappings_json(&bytes)
+    // catch_unwind: defense-in-depth against malformed TTF triggering panic
+    match catch_unwind(AssertUnwindSafe(|| font_mappings_json(&bytes))) {
+        Ok(result) => result,
+        Err(_) => "null".to_string(),
+    }
 }
 
 /// Apply the `mapping1 → glyph → mapping2` font-substitution algorithm to

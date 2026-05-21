@@ -8,6 +8,7 @@ pub mod js_shim;
 pub mod regex_rule;
 pub mod rule;
 pub mod selector;
+pub mod ssrf_guard;
 pub mod url;
 pub mod value;
 
