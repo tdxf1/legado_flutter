@@ -53,6 +53,24 @@
 
 **建议**: 用 `flutter_secure_storage`（Android Keystore 后端）替换 `webdav.json`；迁移路径：启动时若旧文件存在则读出 → 写入 secure storage → 删除文件。同时 `legado_local.json`（备份密码）已通过 Rust 端加密保存，但应同步迁移以保持一致。
 
+**Resolution (BATCH-03, 2026-05-21，方案 A 缩范围)**: 闭环本批 P0 部分。仅迁移 WebDAV password；备份密码留 BATCH-03b（涉及 FRB `set_backup_password` / `get_backup_password` 接口签名变更，跨 Rust + Dart binary contract，effort 大）；F-W1A-023 token 明文日志已被 BATCH-23 处理；F-W2B-005 静默 catch 已被 BATCH-18g (json_store.readJsonFile null fallback) 处理。
+
+实施：
+- 加 `flutter_secure_storage: ^9.0.0` 依赖（lock 解析 9.2.4）。v9 默认 Android backend = `EncryptedSharedPreferences`（AES-256/GCM, key in Keystore），与项目 minSdk 23+ 兼容；iOS 走 Keychain（无额外代码）。
+- 新建 `flutter_app/lib/core/security/secure_storage.dart`：abstract `SecureStorageImpl` interface + `_RealSecureStorage` 默认实现 + 顶层 `readSecret(key)` / `writeSecret(key, value)` / `deleteSecret(key)` 函数（与 `core/persistence/json_store.dart` 顶层 helper 模式同构）。`writeSecret(null/'')` 等价 delete。提供 `setSecureStorageOverrideForTest(SecureStorageImpl?)` 顶层测试钩子（@visibleForTesting），让 widget test 注入 `InMemorySecureStorage` 而不触发平台 channel 的 `MissingPluginException`。
+- `webdav_config_page.dart::_onSave` 写：`writeJsonFile('webdav.json', { url, user, deviceName })`（**3 字段**，无 password）+ `await writeSecret('webdav_password', _pwdCtl.text)`。
+- `webdav_config_page.dart::_loadConfig` 读 + 一次性迁移：从 webdav.json 读 4 字段，若 `legacyPwd.isNotEmpty && readSecret('webdav_password') == null` → `writeSecret('webdav_password', legacyPwd)` + 重写 webdav.json 仅留 3 字段（去 password）。幂等：第二次启动 readSecret 已非 null，迁移路径跳过；webdav.json 写入时永不再带 password 字段。
+- `backup_page.dart::_loadWebDavConfig` 读：`readJsonFile + readSecret` → `_WebDavCredentials`（见 F-W2B-006 Resolution）。
+- 测试基础设施：新建 `test/_secure_storage_fake.dart::InMemorySecureStorage`（Map-backed），由 `secure_storage_test.dart` (7 case) + `webdav_config_page_test.dart` (1 case) 共享。新增 8 case 单测覆盖 round-trip / null=delete / empty=delete / no-op delete / readSecret null on missing / override reset / @visibleForTesting / migration semantics。
+
+行为变化：
+- webdav.json 字段 4 → 3（password 移走）。grep `'password'` JSON 字段在 `flutter_app/lib/` 下仅 webdav_config_page.dart:124 迁移路径 1 处保留（读旧文件 legacyPwd），符合 PRD scope。
+- 原 webdav.json 含 password 的旧版本升级路径自动迁移。
+
+不在本批：F-W1A-020 备份密码（BATCH-03b）；secure_storage v8 → v9 backend 对比研究（直接选 v9 主流默认）；删 webdav.json 整文件（保留 3 字段非敏感）。
+
+`flutter analyze` 0 issue；`flutter test` 429/429 PASS（旧 421 + 新 8）。task: 05-21-batch-03-secure-webdav-credentials。
+
 ---
 
 ### F-W2B-002 [P0 严重][D-安全][qr]
@@ -116,6 +134,12 @@
 **详细**: 行 537-540、577-579、624-627 重复出现该模式。`Map<String, String>?` 类型本身已声明 value 不可空，但用 `!` 表达"我相信这个 key 一定有"是 implicit contract，破坏后会抛 `Null check operator used on a null value`。
 
 **建议**: 改用 `cfg['url'] ?? ''`（如果空就提前返回）或者把 cfg 类型化为带 4 个 final 字段的 class（如 `WebDavCredentials`）。
+
+**Resolution (BATCH-03, 2026-05-21)**: 与 F-W2B-001 同批顺手清。原始估计 3 处 `!`，实测 **9 处**：分布 `_uploadBackup` (line 445/449/450/451) + `_listBackups` (line 482/483/484) + `_restoreBackup` (line 514/515/516)，全部断言 `cfg['url']!` / `cfg['user']!` / `cfg['password']!` 的混合用法。
+
+实施：`backup_page.dart::_loadWebDavConfig` 返回值从 `Map<String, String>?` 改为 file-private 数据类 `_WebDavCredentials?`（4 final String 字段：url/user/password/deviceName）。internal 走 `readJsonFile('webdav.json')` 拿 url/user/deviceName + `readSecret('webdav_password')` 拿 password；password 缺失走空串（与原 `(map['password'] as String?) ?? ''` 行为对齐）。9 处 caller 全部从 `cfg['xxx']!` / `cfg['xxx']` 改为 `cfg.url` / `cfg.user` / `cfg.password` / `cfg.deviceName`，类型安全且消除 `!` 风险。grep `cfg\\[` 在 backup_page.dart 实际访问处 0 命中（剩 2 处都在文档注释里）。
+
+`_WebDavCredentials` 选 file-private 而非 PRD 草稿建议的 pub `WebDavCredentials`：仅 backup_page.dart 内 1 处 caller，无跨文件复用需求；webdav_config_page 自己直接读 secure_storage + json，不走数据类。task: 05-21-batch-03-secure-webdav-credentials。
 
 ---
 

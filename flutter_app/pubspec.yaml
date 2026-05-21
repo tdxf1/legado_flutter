@@ -57,6 +57,10 @@ dependencies:
   # 5.x 版本配套 Flutter ≥ 3.16，Dart SDK ≥ 3.3。
   mobile_scanner: ^5.0.0
 
+  # BATCH-03 (F-W2B-001): 凭据保险柜 — Android Keystore / iOS Keychain。
+  # v9 默认走 EncryptedSharedPreferences (Keystore-backed AES/GCM)，与项目 minSdk 23+ 对齐。
+  flutter_secure_storage: ^9.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

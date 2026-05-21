@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/persistence/json_store.dart';
+import '../../core/security/secure_storage.dart';
 import '../../core/widgets/safe_setstate.dart';
 import '../../src/rust/api.dart' as rust_api;
 
@@ -12,27 +13,32 @@ import '../../src/rust/api.dart' as rust_api;
 /// [`backup_page.dart`] 端在"上传到 WebDAV" / "从 WebDAV 恢复" 时
 /// 读取此文件取凭据。
 ///
-/// **配置文件格式**：
+/// **配置文件格式**（BATCH-03 起）：
 /// ```json
 /// {
 ///   "url": "https://dav.jianguoyun.com/dav/legado/",
 ///   "user": "alice@example.com",
-///   "password": "...",
 ///   "deviceName": "Pixel"
 /// }
 /// ```
 ///
-/// 密码本批次**先存明文**（PRD §"先存明文"），批次 12 加密备份时再补
-/// AES 加密。
+/// 密码字段不再写 webdav.json，改走
+/// [`flutter_app/lib/core/security/secure_storage.dart`] 的
+/// `webdav_password` key（Android Keystore / iOS Keychain）。BATCH-03
+/// 引入启动迁移：旧版本写过的 password 字段会在首次打开本页时一次性
+/// 迁到 secure_storage 并从 webdav.json 移除。
 ///
 /// 批次 12（05-19）补充：新增"备份密码"字段（独立于 WebDAV 密码），调
 /// [`setBackupPassword`] / [`getBackupPassword`] 持久化到
 /// `<documentsDir>/legado_local.json`，对齐原 Legado `LocalConfig.password`。
 /// 留空 = 不加密备份；设密码后 zip 内 servers.json + webDavPassword 走
-/// AES，与原 Legado 兼容。
+/// AES，与原 Legado 兼容。备份密码迁移到 secure_storage 留独立 BATCH-03b。
 ///
-/// **测试钩子**：所有外部 IO（path_provider / FRB 桥）通过 `*Override`
-/// 参数注入 fake 实现。生产代码不传 override 时走真实路径。
+/// **测试钩子**：
+/// - WebDAV password / FRB / path_provider 走 *Override 构造参数 +
+///   top-level [setSecureStorageOverrideForTest]（避免 widget test 触发
+///   platform channel）。
+/// - 生产代码不传 override 时走真实路径。
 class WebDavConfigPage extends ConsumerStatefulWidget {
   /// 测试钩子：注入假 documents 目录路径。
   final String? configDirOverride;
@@ -109,8 +115,29 @@ class _WebDavConfigPageState extends ConsumerState<WebDavConfigPage> {
       if (map != null) {
         _urlCtl.text = (map['url'] as String?) ?? '';
         _userCtl.text = (map['user'] as String?) ?? '';
-        _pwdCtl.text = (map['password'] as String?) ?? '';
         _deviceCtl.text = (map['deviceName'] as String?) ?? '';
+
+        // BATCH-03 (F-W2B-001)：password 字段迁移到 secure_storage。
+        // 旧版本写过的 webdav.json 含 password 字段，首次打开本页时一次性
+        // 迁到 Keystore-backed 存储并从 webdav.json 移除（保留 url/user/
+        // deviceName 3 个非敏感字段不动）。secure_storage 已存在则直接用。
+        final legacyPwd = (map['password'] as String?) ?? '';
+        final securePwd = await readSecret('webdav_password');
+        if (legacyPwd.isNotEmpty && securePwd == null) {
+          await writeSecret('webdav_password', legacyPwd);
+          await writeJsonFile('webdav.json', {
+            'url': map['url'] ?? '',
+            'user': map['user'] ?? '',
+            'deviceName': map['deviceName'] ?? '',
+          }, directory: dir);
+          _pwdCtl.text = legacyPwd;
+        } else {
+          _pwdCtl.text = securePwd ?? '';
+        }
+      } else {
+        // 文件不存在也尝试读 secure_storage（之前用户首次配置过 url 但没保存 /
+        // 或仅设了密码的边角场景）。
+        _pwdCtl.text = (await readSecret('webdav_password')) ?? '';
       }
       // 批次 12: 备份密码独立持久化（legado_local.json），通过 FRB 拉取。
       try {
@@ -176,12 +203,13 @@ class _WebDavConfigPageState extends ConsumerState<WebDavConfigPage> {
       final dir = await _resolveConfigDir();
       // BATCH-18g (F-W2A-058)：webdav.json 整文件覆盖式写走 json_store 公共
       // helper。writeJsonFile rethrow 让外层 try-catch 保留 '保存失败' SnackBar。
+      // BATCH-03 (F-W2B-001)：password 字段不再写 webdav.json，改 secure_storage。
       await writeJsonFile('webdav.json', {
         'url': url,
         'user': _userCtl.text.trim(),
-        'password': _pwdCtl.text,
         'deviceName': _deviceCtl.text.trim(),
       }, directory: dir);
+      await writeSecret('webdav_password', _pwdCtl.text);
       // 批次 12: 备份密码独立保存（legado_local.json）。失败不影响 webdav.json。
       try {
         final fn = widget.setBackupPasswordOverride ??

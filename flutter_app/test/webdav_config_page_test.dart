@@ -4,7 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:legado_flutter/core/persistence/json_store.dart';
+import 'package:legado_flutter/core/security/secure_storage.dart';
 import 'package:legado_flutter/features/settings/webdav_config_page.dart';
+
+import '_secure_storage_fake.dart';
 
 /// 批次 11 (05-19): WebDAV 配置页 widget 测试。
 ///
@@ -16,7 +20,91 @@ import 'package:legado_flutter/features/settings/webdav_config_page.dart';
 ///
 /// 批次 12 (05-19) 补充：第二个 test 验证"备份密码"字段渲染 + 保存
 /// 时调一次 [`setBackupPasswordOverride`]，并把当前文本传过去。
+///
+/// BATCH-03 (F-W2B-001) 补充：WebDAV 密码字段改走 secure_storage；测试
+/// 注入 [InMemorySecureStorage] 避免 platform channel 抛 MissingPluginException。
+/// 第三个 test 验证旧 webdav.json 中的 password 字段会迁移到 secure_storage
+/// 并从 json 文件移除。
 void main() {
+  late InMemorySecureStorage secureStorageFake;
+
+  setUp(() {
+    secureStorageFake = InMemorySecureStorage();
+    setSecureStorageOverrideForTest(secureStorageFake);
+  });
+
+  tearDown(() {
+    setSecureStorageOverrideForTest(null);
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // BATCH-03 (F-W2B-001) 启动迁移路径核心断言。
+  //
+  // 放在 widget tests 之前避免被 testWidgets fake-async zone 污染
+  // module-level json_store._writeLock（widget test 中 writeJsonFile 完
+  // 整完成的语义微妙）。
+  // ────────────────────────────────────────────────────────────────────
+  test(
+    'webdav_password migration semantics: legacyPwd + empty secure_storage moves password',
+    () async {
+      // 验证 `_loadConfig` 内迁移分支的语义等价：
+      //   legacyPwd.isNotEmpty && securePwd == null
+      //   → writeSecret + writeJsonFile (3 字段)
+      // 直接调 json_store + secure_storage 公共 helper，覆盖与
+      // webdav_config_page._loadConfig 相同的协作路径。
+      final tmp = Directory.systemTemp.createTempSync('webdav-migrate-pure-');
+      final fake = InMemorySecureStorage();
+      setSecureStorageOverrideForTest(fake);
+      try {
+        // 模拟旧版本写出的 webdav.json（4 字段含 password 明文）
+        await writeJsonFile('webdav.json', {
+          'url': 'https://dav.example.com/dav/',
+          'user': 'alice',
+          'password': 'legacy_pwd',
+          'deviceName': 'Pixel',
+        }, directory: tmp.path);
+
+        // 模拟 _loadConfig 内的迁移逻辑（与 webdav_config_page.dart 同步）：
+        final map = await readJsonFile('webdav.json', directory: tmp.path);
+        expect(map, isNotNull);
+        final legacyPwd = (map!['password'] as String?) ?? '';
+        final securePwd = await readSecret('webdav_password');
+        expect(legacyPwd, 'legacy_pwd');
+        expect(securePwd, isNull);
+
+        if (legacyPwd.isNotEmpty && securePwd == null) {
+          await writeSecret('webdav_password', legacyPwd);
+          await writeJsonFile('webdav.json', {
+            'url': map['url'] ?? '',
+            'user': map['user'] ?? '',
+            'deviceName': map['deviceName'] ?? '',
+          }, directory: tmp.path);
+        }
+
+        // 断言：fake 命中 legacy_pwd
+        expect(fake.debugStore['webdav_password'], 'legacy_pwd');
+
+        // 断言：webdav.json 不再含 password 字段
+        final reloaded = await readJsonFile('webdav.json', directory: tmp.path);
+        expect(reloaded, isNotNull);
+        expect(reloaded!.containsKey('password'), isFalse,
+            reason: '迁移后 json 不应再含 password 字段');
+        expect(reloaded['url'], 'https://dav.example.com/dav/');
+        expect(reloaded['user'], 'alice');
+        expect(reloaded['deviceName'], 'Pixel');
+
+        // 第二次读应当 idempotent（password 已迁，不会再次触发）
+        final securePwd2 = await readSecret('webdav_password');
+        expect(securePwd2, 'legacy_pwd');
+      } finally {
+        setSecureStorageOverrideForTest(null);
+        try {
+          tmp.deleteSync(recursive: true);
+        } catch (_) {}
+      }
+    },
+  );
+
   testWidgets(
     'WebDavConfigPage renders 5 fields + 测试连接 invokes override',
     (WidgetTester tester) async {

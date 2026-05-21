@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/persistence/json_store.dart';
 import '../../core/providers.dart';
+import '../../core/security/secure_storage.dart';
 import '../../core/services/backup_api_client.dart';
 import '../../core/services/file_picker_service.dart';
 import '../../core/util/import_summary_label.dart';
@@ -386,9 +387,17 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     );
   }
 
-  /// 读 `<documentsDir>/webdav.json`。返回 `null` 表示未配置（让 caller
-  /// 提示"先去配置"）。
-  Future<Map<String, String>?> _loadWebDavConfig() async {
+  /// 读 `<documentsDir>/webdav.json` + `secure_storage` 的 `webdav_password`，
+  /// 拼回类型化数据类。返回 `null` 表示未配置（让 caller 提示"先去配置"）。
+  ///
+  /// BATCH-03 (F-W2B-001)：webdav.json 仅含 url / user / deviceName 3 个非
+  /// 敏感字段；password 字段从 secure_storage 取（Android Keystore / iOS
+  /// Keychain）。secure_storage 未配置时 password 走空串兜底，由 webdav
+  /// 服务器最终返 401 给用户错误反馈（与原行为一致）。
+  ///
+  /// BATCH-03 (F-W2B-006)：返回值从 `Map<String, String>?` 改为类型化
+  /// [_WebDavCredentials]，消除 caller 9 处 `cfg['xxx']!` 强制断言。
+  Future<_WebDavCredentials?> _loadWebDavConfig() async {
     // BATCH-18g (F-W2A-058)：走 json_store 公共 helper。readJsonFile 自吞
     // 异常返回 null（与原 catch (_) → null 等价）。url trim+empty→null
     // 校验保留在 caller，因为这是 backup_page 特有的"未配置"语义。
@@ -400,12 +409,12 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     if (map == null) return null;
     final url = (map['url'] as String?)?.trim() ?? '';
     if (url.isEmpty) return null;
-    return {
-      'url': url,
-      'user': (map['user'] as String?) ?? '',
-      'password': (map['password'] as String?) ?? '',
-      'deviceName': (map['deviceName'] as String?) ?? '',
-    };
+    return _WebDavCredentials(
+      url: url,
+      user: (map['user'] as String?) ?? '',
+      password: (await readSecret('webdav_password')) ?? '',
+      deviceName: (map['deviceName'] as String?) ?? '',
+    );
   }
 
   /// 拼接远端 backup 文件名。优先用 `deviceName-` 后缀，否则用 `legado_flutter`
@@ -432,13 +441,13 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     setState(() => _webdavBusy = true);
     try {
       final dbPath = await _resolveDbPath();
-      final fileName = _buildRemoteBackupFileName(cfg['deviceName']);
+      final fileName = _buildRemoteBackupFileName(cfg.deviceName);
       final api = ref.read(backupApiClientProvider);
       await api.webdavUpload(
         dbPath: dbPath,
-        url: cfg['url']!,
-        user: cfg['user']!,
-        password: cfg['password']!,
+        url: cfg.url,
+        user: cfg.user,
+        password: cfg.password,
         fileName: fileName,
       );
       if (!mounted) return;
@@ -469,9 +478,9 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     try {
       final api = ref.read(backupApiClientProvider);
       final json = await api.webdavList(
-        url: cfg['url']!,
-        user: cfg['user']!,
-        password: cfg['password']!,
+        url: cfg.url,
+        user: cfg.user,
+        password: cfg.password,
       );
       final List<dynamic> raw = jsonDecode(json) as List<dynamic>;
       final files = raw.cast<String>();
@@ -501,9 +510,9 @@ class _BackupPageState extends ConsumerState<BackupPage> {
       final dbPath = await _resolveDbPath();
       final summaryJson = await api.webdavDownload(
         dbPath: dbPath,
-        url: cfg['url']!,
-        user: cfg['user']!,
-        password: cfg['password']!,
+        url: cfg.url,
+        user: cfg.user,
+        password: cfg.password,
         fileName: picked,
       );
       if (!mounted) return;
@@ -530,4 +539,27 @@ class _BackupPageState extends ConsumerState<BackupPage> {
       safeSetState(() => _webdavBusy = false);
     }
   }
+}
+
+/// WebDAV 凭据 + 设备名（BATCH-03 / F-W2B-006）。
+///
+/// 替代原 `Map<String, String>` 表达，避免 9 处 `cfg['xxx']!` 强制断言。
+/// 保持 file-private（无跨文件复用必要 — webdav_config_page 自己直接读
+/// secure_storage + json，不走这个数据类）。
+///
+/// password 字段非 nullable，由 [_BackupPageState._loadWebDavConfig] 在
+/// secure_storage 缺失时填空串兜底（与原 `(map['password'] as String?) ?? ''`
+/// 行为对齐）。
+class _WebDavCredentials {
+  final String url;
+  final String user;
+  final String password;
+  final String deviceName;
+
+  const _WebDavCredentials({
+    required this.url,
+    required this.user,
+    required this.password,
+    required this.deviceName,
+  });
 }
