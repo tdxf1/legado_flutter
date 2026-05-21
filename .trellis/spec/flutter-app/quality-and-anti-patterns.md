@@ -2,6 +2,45 @@
 
 What the Flutter app rejects and why.
 
+## Reader 正确性边界 (BATCH-19a)
+
+reader 模块踩过 4 个 B-正确性 finding（F-W2A-004/005/006/007），沉淀出三条契约。新代码踩到任一条直接 review 卡。
+
+### `ReaderSettings` ==/hashCode 契约
+
+`ReaderSettings` 是 `StateProvider` 持有的数据类，reader_page 在 `build` 内拿它做 `providerSettings != _settings` short-circuit。**没有 `==` override 时 != 永远是 true**（reference 不等），导致每帧 schedule postFrame 回写 + setState，PageView 动画期间一秒数十次空跑。
+
+契约：
+
+- 4 处字段集合必须一致：构造器 / `copyWith` / `toJson` / `fromJson` / `==` / `hashCode`。
+- `==`：先 `identical(this, other)` 短路 → `other is! ReaderSettings` 类型检查 → 全字段比较。
+- `hashCode`：`Object.hashAll([...全部字段])`。
+- `List<int>` 字段（如 `tapZones`）必须用 `listEquals` 深比较 + `Object.hashAll(field)` 入外层 `hashAll`，否则 == 返回 false 但 hashCode 相等会撞键。
+- 单测 `flutter_app/test/reader_settings_equality_test.dart` 用参数化 mutator 列表把每个字段轮一遍 != case + `set_dedup` size 校验。新增字段时**必须同时改**：构造器、copyWith、toJson、fromJson、==、hashCode、equality 测试 mutator 列表（共 7 处）；测试里的 `mutators.length == 31` 断言会在漏改时先红。
+- 不引 freezed / build_runner——手写够用，构建链不被打扰。
+
+### `replaceRuleGenerationProvider` 主隔离边界
+
+`StateProvider<int>` 计数器每次 ReplaceRule CRUD 后自增，Rust 端缓存 key 是 `(db_path, generation)`。**不同 isolate 各自从 0 计数**会导致两个 isolate 都 bump 到 1 但规则集不同，缓存撞键命中错误版本。
+
+契约：
+
+- 所有调 `bumpReplaceRuleGeneration(ref)` 的代码路径必须在 main isolate。当前 100% 满足（`replace_rule_page.dart` UI CRUD + import flow），`download_runner` 不写规则。
+- 如果以后引入 download isolate / worker isolate 写规则，必须升级为 `StateProvider<({String salt, int counter})>` 把 process-startup salt 也带进 cache key（短 hex 串足够），Rust 侧同步把 `cache_key` 拼接为 `(db_path, salt, counter)` 三元组。
+- 不在 dart 端加 `assert(Isolate.current.debugName == 'main')`：`debugName` 在 release build 不可靠，依赖它做 production assertion 会引入误报。spec 文档化即可。
+
+### `_onScroll` 防抖隔离原则
+
+reader_page `_onScroll` 内同时挂三种独立路径，每路径节流策略不同。原版用一个 `_scrollDebounceTimer` 早 return 拦下整个函数 → 长程滚动期间章节标题不更新、append/prepend 不触发。
+
+契约：
+
+- **save 路径**（`_saveScrollPosition`）独占 `_scrollDebounceTimer`：500ms 节流，timer 在 fire 后置 null 让下次 `_onScroll` 重新 schedule。
+- **visible chapter 更新路径**（`_updateVisibleChapter`）用 `_visibleChapterTimer ??= Timer(...)`：300ms 防抖，窗口内只 schedule 一次但**不被** save debounce 拦下。
+- **反向滚动检测 + append/prepend 触发**：每帧执行，**完全不防抖**。临界滚动到边缘时立即追加下一章，否则用户滚到底等 500ms 才拼章节，体验差。
+- 新加滚动路径时按"防抖窗口语义不同就独占 timer"原则拆，不要复用 `_scrollDebounceTimer`。
+
+
 ## Lint Bar
 
 `flutter_app/analysis_options.yaml` enables the default flutter_lints set with project-specific tightenings. `flutter analyze` must report **0 issues** before any commit.

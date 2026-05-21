@@ -91,6 +91,8 @@
 
 **建议**: 把 generation 升为 `(String processSalt, int monotonicCounter)`，或在 Rust 端把 cache key 加上 process-startup-uuid。短期防御：在 spec 中明确"replace rule CRUD 必须在 main isolate"，并加 assert。
 
+**Resolution**: BATCH-19a (2026-05-22, 方案 B) — 保守方案：保 `int` 类型不动 FFI cache key 序列化路径。`providers.dart::replaceRuleGenerationProvider` (line 125-150) 升级 doc 注释说明：(1) 当前 download_runner 在 main isolate，无真实漂移；(2) 未来如把 replace rule CRUD 移到 worker isolate，必须升级为 `(salt, counter)` tuple 同步 Rust 端 cache key。`debugName` 在 release build 不可靠，不加 runtime assert；改为 spec 文档化（`.trellis/spec/flutter-app/quality-and-anti-patterns.md` 「Reader 正确性边界 (BATCH-19a)」段）。task: 05-22-batch-19a-reader-correctness。
+
 ---
 
 ### F-W2A-005 [P1][B-正确性][reader/state]
@@ -102,6 +104,8 @@
 **详细**: 比较用 `!=` 但 `ReaderSettings` 没有 override `==`/`hashCode`，所以**每次都是 reference 不等**。结果是每帧都会 schedule 一个 postFrame 回调把 provider 状态再灌回 _settings + setState。虽然有 mounted/`ref.read` 二次校验，但仍是无谓的状态同步循环。
 
 **建议**: 用 `ref.listen(readerSettingsProvider)` 替代 build 内部 `ref.watch + 比较`；或给 `ReaderSettings` 增加 `==`/`hashCode`（推荐用 `package:freezed` 或手写 `Object.hashAll([...])`），这样首次相等比较就能短路。
+
+**Resolution**: BATCH-19a (2026-05-22) — 选「手写 == / hashCode」方案，免引 freezed/build_runner。`providers.dart::class ReaderSettings` 加 `@override bool operator ==(Object other)` 全 31 字段比较（含 `listEquals` 深比较 `tapZones: List<int>`）+ `@override int get hashCode => Object.hashAll([...])`。31 字段集合与 `copyWith` / `fromJson` / `toJson` 三处对齐。`reader_page.dart::build` 保持现有 `ref.watch + != 比较 + postFrame` 结构（`_readerSettingsLoaded` 路径需要），加 == 后稳态命中等价短路至零 schedule；首次同步与真实 settings 变更照常。新增 `flutter_app/test/reader_settings_equality_test.dart` 40 case：default equal / type mismatch / 字段集合规模 == 31 / 每个字段 not_equal_when_<field>_differs 参数化 / hashCode 等价 / tapZones 深比较 / set_dedup。task: 05-22-batch-19a-reader-correctness。
 
 ---
 
@@ -115,6 +119,8 @@
 
 **建议**: 拆开两段：`_scrollDebounceTimer ??= Timer(...)` 模式（不 reset），让 visible chapter 与 backward detect 不被 debounce 早 return 拦下。也可以把 backward detect 与 prefetch 移到 `_scrollDebounceTimer == null` 分支之外。
 
+**Resolution**: BATCH-19a (2026-05-22) — `reader_page.dart::_onScroll` (line 1094-1140) 重构为三段独立路径：(1) `if (_scrollDebounceTimer == null) { _scrollDebounceTimer = Timer(500ms, save) }` 独占 save debounce；(2) `_visibleChapterTimer ??= Timer(300ms, updateVisibleChapter)` 独立计时器；(3) backward detect / append-prepend 总执行（不被早 return 拦截）。修复后连续滚动期间章节标题更新 + 追加/前置章节正常触发。task: 05-22-batch-19a-reader-correctness。
+
 ---
 
 ### F-W2A-007 [P1][B-正确性][reader/state]
@@ -126,6 +132,8 @@
 **详细**: 同样的反模式在 `_fetchBookName` 里是对的（L420 `setState(() => _bookName = ...);`）但 `_fetchSourceInfo` L431-438 在 setState 外赋值。表现：一次紧跟着的 rebuild（如 `replaceRuleGeneration` 触发）能拿到刚赋值的数据，但 `setState({})` 触发的本次 rebuild 的 build phase 已经读过旧值——AppBar 的"书源"显示与底部 chapterUrl 显示有可能慢一帧。
 
 **建议**: 把 L431-438 的 4 个赋值移进 `setState` callback；或者改为 unconditional `setState(() { _sourceName = ...; ... });`。
+
+**Resolution**: BATCH-19a (2026-05-22) — `reader_page.dart::_fetchSourceInfo` (line 428-451) 把 4 个 plain field (`_sourceName` / `_sourceUrl` / `_sourceId` / `_chapterUrl`) 的赋值全部移进 `setState(() {...})` callback；删空 `setState(() {})` 反模式。下一次 build 直接拿到新值，AppBar 书源显示与 chapterUrl 不再慢一帧。task: 05-22-batch-19a-reader-correctness。
 
 ---
 
