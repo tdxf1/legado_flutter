@@ -17,7 +17,12 @@ pub use parser::{
     SearchResult,
 };
 pub use rss::RssParser;
-pub use rule_engine::{RuleEngine, RuleError, RuleExpression, RuleType};
+// `RuleEngine` / `RuleError` are intentionally NOT re-exported here. Both are
+// part of the deprecated execution path; new code must use
+// `legado::execute_legado_rule` instead. `RuleExpression` / `RuleType` are
+// retained because `lib.rs::check_rule_expression` (rule validation, not
+// execution) uses them as static-analysis tools (F-W1B-032).
+pub use rule_engine::{RuleExpression, RuleType};
 pub use types::{BookInfoRule, BookSource, ContentRule, ExtractType, SearchRule, TocRule};
 
 use serde::{Deserialize, Serialize};

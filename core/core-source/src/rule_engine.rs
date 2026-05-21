@@ -700,10 +700,27 @@ impl std::fmt::Display for RuleError {
 impl std::error::Error for RuleError {}
 
 /// 规则引擎（统一管理所有规则执行）
+///
+/// **DEPRECATED — F-W1B-032**：本 struct 是早期 CSS / XPath / Regex /
+/// JSONPath 简化执行器，已被 [`crate::legado::execute_legado_rule`] 完全
+/// 取代（后者支持 JSOUP Default + `||` 组合 + `<js>` inline + `@put/@get`
+/// 等更完整的 Legado 语义）。
+///
+/// 整个 `rule_engine` 模块仍然保留，因为
+/// [`crate::check_rule_expression`] 复用其中的纯文本预处理 helper
+/// (`strip_legado_replace_rules` / `strip_css_modifiers` /
+/// `split_css_alternatives` / [`RuleExpression::parse`] / [`RuleType`])
+/// 做规则_校验_（不是执行）。这些 helper 与执行路径解耦，新代码不应
+/// 调用 `RuleEngine::execute_rule` / `execute_rule_first` /
+/// `execute_rules`。
+#[deprecated(
+    note = "use legado::execute_legado_rule; rule_engine retained only for lib.rs::check_rule_expression validation helpers"
+)]
 pub struct RuleEngine {
     // 可扩展配置
 }
 
+#[allow(deprecated)]
 impl RuleEngine {
     /// 创建新的规则引擎
     pub fn new() -> Self {
@@ -742,6 +759,7 @@ impl RuleEngine {
     }
 }
 
+#[allow(deprecated)]
 impl Default for RuleEngine {
     fn default() -> Self {
         Self::new()
@@ -749,6 +767,7 @@ impl Default for RuleEngine {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 

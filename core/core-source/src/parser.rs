@@ -3,8 +3,7 @@
 //! 整合规则引擎和脚本引擎，提供完整的书源解析功能。
 //! 对应原 Legado 的 WebBook 模块 (model/webBook/)。
 
-use crate::rule_engine::RuleEngine;
-use crate::types::{BookSource, TocRule};
+use crate::types::{content_rule_field, BookSource, TocRule};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -441,7 +440,6 @@ impl std::error::Error for ParserError {}
 
 /// 书源解析器
 pub struct BookSourceParser {
-    rule_engine: RuleEngine,
     http_client: crate::legado::LegadoHttpClient,
 }
 
@@ -455,26 +453,28 @@ impl BookSourceParser {
     /// 创建新的书源解析器
     pub fn new() -> Self {
         Self {
-            rule_engine: RuleEngine::new(),
             http_client: crate::legado::LegadoHttpClient::new(),
         }
     }
 
-    /// Execute a rule string, preferring the legado selector chain for Legado-style rules.
+    /// Execute a rule string against `html` using the legado selector chain.
+    ///
+    /// **F-W1B-032 收口**：本函数曾经"先试 legado/rule，失败/空再 fallback 到
+    /// 旧 `rule_engine.execute_rule`"双系统并存。fallback 在 legado 真正匹配
+    /// 为空（合法语义）时也会触发，掩盖书源 / 规则错误，并且让两条路径行为
+    /// 不一致难以预测（master finding F-W1B-032）。现统一收口到
+    /// [`crate::legado::execute_legado_rule`] 单一执行路径；规则_校验_
+    /// (`lib.rs::check_rule_expression`) 仍复用 `rule_engine` 模块的纯文本
+    /// 预处理 helper（`strip_legado_replace_rules` / `strip_css_modifiers` /
+    /// `split_css_alternatives` / `RuleExpression::parse`），那是 deprecated
+    /// `RuleEngine` struct 之外的合法 use case。
     fn run_rule(
         &self,
         rule: &str,
         html: &str,
         context: &crate::legado::RuleContext,
     ) -> Result<Vec<String>, String> {
-        match crate::legado::execute_legado_rule(rule, html, context) {
-            Ok(results) if !results.is_empty() => return Ok(results),
-            Ok(results) if !can_fallback_to_legacy_rule_engine(rule) => return Ok(results),
-            _ => {}
-        }
-        self.rule_engine
-            .execute_rule(rule, html)
-            .map_err(|e| e.to_string())
+        crate::legado::execute_legado_rule(rule, html, context)
     }
 
     /// Execute a rule string and return the first result.
@@ -1749,16 +1749,6 @@ impl BookSourceParser {
     }
 }
 
-fn can_fallback_to_legacy_rule_engine(rule: &str) -> bool {
-    let trimmed = rule.trim_start();
-    !(trimmed.starts_with("@js:")
-        || trimmed.starts_with("js:")
-        || trimmed.contains("<js>")
-        || trimmed.starts_with("@put:")
-        || trimmed.starts_with("@get:")
-        || trimmed.starts_with("@get."))
-}
-
 fn list_context_rule(rule: &str) -> String {
     let trimmed = rule.trim();
     if trimmed.is_empty()
@@ -1920,11 +1910,6 @@ fn source_user_agent(header: Option<&str>) -> Option<String> {
         .map(|(_, value)| value)
 }
 
-/// Extract a field from the source's ContentRule.
-fn content_rule_field(source: &BookSource, f: impl FnOnce(&crate::types::ContentRule) -> Option<String>) -> Option<String> {
-    source.rule_content.as_ref().and_then(f).filter(|s| !s.trim().is_empty())
-}
-
 /// Apply formatJs to chapter titles.
 /// In Legado, formatJs runs once per chapter with bindings:
 ///   - `index`: 1-based chapter index
@@ -2004,6 +1989,16 @@ fn apply_format_js(
     chapters
 }
 
+/// Sync core for chapter-list JS rule execution.
+///
+/// Pairs with [`execute_chapter_list_js_rule_blocking`] which is the async
+/// wrapper that runs this fn on a `tokio::task::spawn_blocking` thread.
+/// This is **not** two duplicated implementations — `_blocking` is a thin
+/// `move`-and-`spawn_blocking` wrapper so async callers don't block the
+/// reactor on QuickJS evaluation. Sync callers (typically from another
+/// `block_in_place` site or non-tokio test contexts) can use this fn
+/// directly without paying for an extra `spawn_blocking` round-trip.
+/// F-W1B-037.
 fn execute_chapter_list_js_rule(
     rule: &str,
     html: &str,

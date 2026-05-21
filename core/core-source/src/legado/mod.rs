@@ -15,7 +15,7 @@ pub use context::RuleContext;
 pub use http::LegadoHttpClient;
 pub use import::{import_legado_source, normalize_legado_rule, LegadoBookSource};
 pub use js_runtime::{DefaultJsRuntime, JsRuntime, JsRuntimeConfig};
-pub use js_shim::{build_js_vars, is_blocking_rule, is_js_rule};
+pub use js_shim::{is_blocking_rule, is_js_rule};
 pub use rule::{
     clear_html_parse_cache, execute_legado_rule, execute_legado_rule_values,
     execute_legado_rule_values_with_cookie_jar, execute_legado_rule_values_with_http_state,

@@ -125,8 +125,12 @@ pub fn execute_legado_rule(
     context: &RuleContext,
 ) -> Result<Vec<String>, String> {
     let rule_str = rule_str.trim();
+    // F-W1B-041: 空规则返回空 Vec 而非把整个 html 透传出去。
+    // 旧行为是 Legado 原版"空规则=透传"语义复刻，但 caller 用结果做
+    // "是否成功匹配"判断时被误导（把整页 html 当成匹配结果）。
+    // 改为 Ok(Vec::new()) 让"匹配为空"的语义清晰可见。
     if rule_str.is_empty() {
-        return Ok(vec![html.to_string()]);
+        return Ok(Vec::new());
     }
 
     if contains_combinator(rule_str) {
@@ -339,7 +343,17 @@ fn execute_css_rule(rule: &str, html: &str) -> Result<Vec<String>, String> {
             }
             match execute_single_css(part, html) {
                 Ok(mut r) => results.append(&mut r),
-                Err(_) => {}
+                // F-W1B-040: 不再静默吞错。`||` 组合的语义是"取首个非空结果"，
+                // 当前 branch 失败应继续尝试下一 branch（语义不变），但加 warn!
+                // 让 source 作者能看到哪个 branch 在崩 — 调试 CSS 选择器时
+                // 帮助定位。
+                Err(e) => {
+                    tracing::warn!(
+                        "execute_css_rule: || branch '{}' failed: {}",
+                        part,
+                        e
+                    );
+                }
             }
             if !results.is_empty() {
                 break;
@@ -1030,5 +1044,40 @@ mod tests {
         context.set_variable("token", LegadoValue::String("abc".into()));
         let result = execute_legado_rule("@get:{token}", html, &context).unwrap();
         assert_eq!(result, vec!["abc"]);
+    }
+
+    /// F-W1B-041：空规则字符串返回空 Vec，不再透传整个 html。
+    ///
+    /// 旧行为：`execute_legado_rule("", html, ...)` 返回 `vec![html.to_string()]`，
+    /// 让 caller 误以为"匹配到了一条结果（整页 html）"。新行为返回 `Ok(Vec::new())`
+    /// 让"无规则 = 无匹配"的语义清晰可见。
+    #[test]
+    fn test_execute_legado_rule_empty_rule_returns_empty() {
+        let html = "<html><body><h1>title</h1></body></html>";
+        let context = RuleContext::new("https://example.com", html);
+
+        // 完全空字符串
+        let result = execute_legado_rule("", html, &context).unwrap();
+        assert!(
+            result.is_empty(),
+            "empty rule should return empty Vec, got: {:?}",
+            result
+        );
+
+        // 仅空白
+        let result = execute_legado_rule("   ", html, &context).unwrap();
+        assert!(
+            result.is_empty(),
+            "whitespace-only rule should return empty Vec, got: {:?}",
+            result
+        );
+
+        // 仅换行
+        let result = execute_legado_rule("\n\t\n", html, &context).unwrap();
+        assert!(
+            result.is_empty(),
+            "newline-only rule should return empty Vec, got: {:?}",
+            result
+        );
     }
 }

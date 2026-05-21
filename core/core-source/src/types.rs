@@ -183,6 +183,27 @@ pub struct ContentRule {
     pub download_urls: Option<String>,
 }
 
+/// Extract a field from the source's `ContentRule`, treating empty / whitespace-only
+/// strings as `None`.
+///
+/// Centralizes the convention that an empty string in any `ContentRule` field
+/// means "field absent" — collapsing the three-step `source.rule_content.as_ref()
+/// .and_then(f).filter(|s| !s.trim().is_empty())` chain to a single call site.
+///
+/// Lives here (next to `ContentRule`) rather than in `parser.rs` so that any
+/// future caller wanting to read a `ContentRule` field with the same convention
+/// only has one helper to import. F-W1B-035.
+pub fn content_rule_field(
+    source: &BookSource,
+    f: impl FnOnce(&ContentRule) -> Option<String>,
+) -> Option<String> {
+    source
+        .rule_content
+        .as_ref()
+        .and_then(f)
+        .filter(|s| !s.trim().is_empty())
+}
+
 /// 评论/书评规则
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ReviewRule {

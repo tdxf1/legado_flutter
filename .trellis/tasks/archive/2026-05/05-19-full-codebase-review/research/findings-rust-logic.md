@@ -466,6 +466,8 @@
 
 **建议**: 单一 source-of-truth：把 rule_engine 的能力合并到 legado/rule，标 deprecated；新增 case 都进 legado/rule；分阶段删除 rule_engine。
 
+**Resolution**: BATCH-15 (2026-05-21) — 删除 fallback 路径（方案 A）+ 保留 `rule_engine` 模块作为规则_校验_helper（折中）。`core/core-source/src/parser.rs::BookSourceParser::run_rule` body 收口为 `crate::legado::execute_legado_rule(rule, html, context).map_err(|e| e.to_string())` 单一路径；`BookSourceParser` 删 `rule_engine: RuleEngine` 字段 + `RuleEngine::new()` 构造；删 `can_fallback_to_legacy_rule_engine` helper（原 line 1752-1760）。`lib.rs:20` `pub use rule_engine::*` 收窄到 `{RuleExpression, RuleType}`（移除 `RuleEngine` / `RuleError`）。`rule_engine.rs::RuleEngine` 加 `#[deprecated(note = "use legado::execute_legado_rule; rule_engine retained only for lib.rs::check_rule_expression validation helpers")]` + 详尽 doc；`impl RuleEngine` / `impl Default for RuleEngine` / `mod tests` 三处加 `#[allow(deprecated)]` 防 -D warnings 触发。**保留** `rule_engine.rs::strip_legado_replace_rules` / `strip_css_modifiers` / `split_css_alternatives` / `RuleExpression::parse` / `RuleType` 给 `lib.rs::check_rule_expression`（line 363-470）做规则字符串静态校验，不进入执行路径。删除 fallback 后行为变化：legado/rule 返回 `[]` 时不再 silently fallback 到 rule_engine —— 用户能立刻看到"匹配为空"而非误以为有结果；返回 `Err` 时也直接上抛而非吞掉。382 个 lib 单测全过，sy/*.json live test 抽样验证 trellis-check 阶段未跑（in-tree mock 全过）。task: 05-21-batch-15-unify-rule-engine。
+
 ---
 
 ### F-W1B-033 [P1 主要][A-架构][core-source/legado]
@@ -477,6 +479,8 @@
 **详细**: 死代码 + 误导（看起来像设计文档但实际未实施）。
 
 **建议**: 删除未引用函数；保留 `is_js_rule` 改放 rule.rs 私有 helper。
+
+**Resolution**: BATCH-15 (2026-05-21) — 删 5 个未引用 pub fn：`build_js_vars`（`js_shim.rs:62-91`，原 90 行包含整段 doc）+ `build_minimal_js_vars`（line 94-105）+ `js_requires_http`（line 41-46）+ `js_uses_clist_api`（line 49-51）+ `js_uses_challenge`（line 54-56）。grep 全工作区确认 0 caller。**保留** `is_js_rule` + `is_blocking_rule`（BATCH-16 spec 段固化"`legado::is_blocking_rule` + `legado::is_js_rule`"，是 selective `block_in_place` 的 detection helper）+ 1 单测 `test_is_blocking_rule_detects_js_markers`。**未做** "保留的部分挪进 rule.rs 私有 helper"（PRD 决定保留在 js_shim.rs，因为 BATCH-16 spec 段已固化此处路径）。`legado/mod.rs:18` re-export 列表删 `build_js_vars`。模块顶部 doc 重写：原"实际 HTTP 调用由 parser.rs 中的 Rust fallback 处理"行（指 rule_engine fallback，已删）+ "支持的 Legado JS API" 列表（误导性 — 此模块不是 JS bridge，`js_runtime.rs` 才是）替换为"Legado 规则的 JS 标记检测 helper（`is_js_rule` / `is_blocking_rule`）。Bridge 在 `js_runtime.rs`"。文件从 128 行降到 49 行。task: 05-21-batch-15-unify-rule-engine。
 
 ---
 
@@ -504,6 +508,8 @@
 
 **建议**: 把 ContentRule field 提取的 helper 都搬到 types.rs 作为 ContentRule 方法（如 `image_style_or_default`）。
 
+**Resolution**: BATCH-15 (2026-05-21) — 把 `parser.rs::content_rule_field` 整段移到 `types.rs::ContentRule` 之后（pub fn，与 ContentRule 共生）。6 处 caller（line 1503/1504/1505 + 1679/1680/1681 各 3 个 `image_style` / `image_decode` / `pay_action`）行数完全不变，仅通过 `use crate::types::{content_rule_field, ...}` 导入。**未选**泛型 method 形式（`ContentRule::non_empty_field<F>`）— 引入额外语法噪声且 caller 改成 `ContentRule::non_empty_field(source, ...)` 反而更长。新加 ContentRule 字段时立即与 helper 共生，避免漏 helper 的问题。task: 05-21-batch-15-unify-rule-engine。
+
 ---
 
 ### F-W1B-036 [P1 主要][A-架构][core-source/legado/url]
@@ -529,6 +535,8 @@
 **详细**: 调用方语义不清；维护时改一个忘改另一个。
 
 **建议**: 统一入口 `RuleEngineExt::execute(rule, ctx, opts)` 用 builder 选择 mode（async/blocking, with-cookie-jar/without）。
+
+**Resolution**: BATCH-15 (2026-05-21, contract-docs-only) — `parser.rs:2007 fn execute_chapter_list_js_rule(...)` 同步 + `parser.rs:2133 async fn execute_chapter_list_js_rule_blocking(...)` 用 `tokio::task::spawn_blocking` 包装前者，是 BATCH-16 之前的常见 "sync core + async wrapper" pattern，并非真"两份重复实现"。在 sync fn 上加 doc comment 解释这对双胞胎的关系（sync core 给规则执行单元用，async wrapper 给 reactor 上跑 JS 规则用，对应 BATCH-16 选性 `block_in_place` 策略）。**未做** `RuleEngineExt::execute(rule, ctx, opts)` builder 抽象（PRD Out of Scope，effort 远超 BATCH-15；现有签名兼容 11 处 caller 已 OK）。三变体 `execute_legado_rule_values` / `execute_legado_rule_with_http_state` / `execute_chapter_list_js_rule` 的语义边界由 doc comment 固化，调用方不再需要靠"读名字猜功能"。task: 05-21-batch-15-unify-rule-engine。
 
 ---
 
@@ -570,6 +578,8 @@
 
 **建议**: 至少 `warn!` 记录错误；或返回 Vec<Result<...>> 让 caller 区分"全部失败"和"匹配为空"。
 
+**Resolution**: BATCH-15 (2026-05-21) — `core/core-source/src/legado/rule.rs::execute_css_rule` 的 `||` 分支 `Err(_) => {}` 改 `Err(e) => tracing::warn!("execute_css_rule: || branch '{}' failed: {}", part, e)`。语义不变（仍然继续下一 branch + 用 `if !results.is_empty() { break; }` 取首个非空），但 Err 不再 silently 吞，运维 / 调试可见。**未做** 返回 `Vec<Result<...>>` 让 caller 区分"全部失败"vs"匹配为空"（重构面较大且当前 `||` 行为符合 Legado 语义，仅可见性问题）。task: 05-21-batch-15-unify-rule-engine。
+
 ---
 
 ### F-W1B-041 [P1 主要][B-正确性][core-source/legado/rule]
@@ -581,6 +591,8 @@
 **详细**: 这是 Legado 的"空规则=透传"语义复刻，但 Rust 端 `execute_rule_part_with_context` 在 combinator 路径会触发 — 用户写 `||` 组合两个规则中间不小心多个 `||` 就出现空 part，然后透传整个 html。
 
 **建议**: 文档化此契约，并在 combinator 解析阶段过滤掉空 parts；或改返回 Vec::new()。
+
+**Resolution**: BATCH-15 (2026-05-21) — `core/core-source/src/legado/rule.rs::execute_legado_rule`（line 122-130）在 rule_str trim 后为空时改返回 `Ok(Vec::new())`（原 `Ok(vec![html.to_string()])` 透传 html）。caller 用结果做"是否成功匹配"判断不再被误导。新增单测 `test_execute_legado_rule_empty_rule_returns_empty` 断言空 rule 返回空 Vec。**未做** combinator 解析阶段过滤掉空 parts（`||` 的 split 已在每个 part 上做 `if part.is_empty() { continue; }` 跳过；execute_combinator_rule 链路同理；空 rule 改返回值已经从源头消除问题）。**风险评估**：sy/*.json grep 0 处书源用 `""` 字面量作 rule 字段；既有 caller（run_rule / run_rule_first / extract_from_contexts / 5 处 closure）都对 `Some(rule)` 做了显式 None 检查或空过滤（如 `content_rule_field` 配 trim filter + Option<&str> 类型），不会传空 string 到 `execute_legado_rule`。382 个 lib 单测全过验证无回归。task: 05-21-batch-15-unify-rule-engine。
 
 ---
 
