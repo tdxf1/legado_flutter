@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/flutter-app/index.md", "reason": "Flutter app 包总览 + 文件夹边界 + spec 索引"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "Forbidden patterns 表 + 凭据保险柜段 + 验证节奏；本批要扩「WebView/Untrusted-Network 边界 (BATCH-05)」段"}
+{"file": ".trellis/spec/flutter-app/directory-structure.md", "reason": "core/security/ 与 features/ 边界规则；webview_safety.dart 落 core/security/"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "测试钩子 *Override 模式 + ProviderScope.overrides 模式；本批继续走 *Override（permissionDeniedOverride / disableWebView 已有）"}
+{"file": ".trellis/spec/flutter-app/async-and-mounted.md", "reason": "mounted 检查 + safeSetState 规约；RSS detail _bootstrap async chain 涉及"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-core.md", "reason": "F-W2A-009 / F-W2A-010 详细 finding"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-features.md", "reason": "F-W2B-002 / F-W2B-010 / F-W2B-011 / F-W2B-058 详细 finding"}
+{"file": ".trellis/tasks/archive/2026-05/05-21-batch-03-secure-webdav-credentials/prd.md", "reason": "BATCH-03 同样 core/security/ 引入 wrapper + top-level fn 模式范式参考"}

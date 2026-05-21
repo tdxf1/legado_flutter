@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/flutter-app/index.md", "reason": "Flutter app 包总览"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "lint 0 / test 全过 verification cadence；新增 BATCH-05 段后此文件验证"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "*Override 钩子模式核验"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings.md", "reason": "master report 主题 5 (WebView/JS 边界 gating) 主索引"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-core.md", "reason": "Wave 2A 详细 findings (W2A-009/010)"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-features.md", "reason": "Wave 2B 详细 findings (W2B-002/010/011/058)"}
+{"file": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-05-tighten-webview-and-qr-boundaries.md", "reason": "本批自身验收清单（roadmap 原始 batch 文档）"}
