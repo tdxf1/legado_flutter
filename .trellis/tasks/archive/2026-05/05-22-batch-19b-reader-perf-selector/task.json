@@ -1,0 +1,17 @@
+{
+  "id": "05-22-batch-19b-reader-perf-selector",
+  "title": "BATCH-19b Reader 性能（selector 拆订阅 + GlobalKey 对称保存）",
+  "createdAt": "2026-05-22",
+  "completedAt": "2026-05-22",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "depends_on": ["05-22-batch-19a-reader-correctness"],
+  "context": {
+    "findings": ["F-W2A-011", "F-W2A-014"],
+    "roadmap": ".trellis/tasks/archive/2026-05/05-20-fix-roadmap/plan/batches/BATCH-19-reader-state-machine-controller.md",
+    "split": "BATCH-19 拆 19a/19b/19c：19a 已完成；19b 2 个性能 (selector + GlobalKey)；19c 2 个性能 (Listenable 拆层 + measure)"
+  }
+}
