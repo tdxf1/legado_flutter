@@ -120,6 +120,11 @@ class _RssArticleDetailPageState extends ConsumerState<RssArticleDetailPage> {
 
   WebViewController? _webController;
 
+  /// WebView init 失败的错误信息（BATCH-05 / F-W2B-011）。非 null 时
+  /// disableWebView 占位分支会显示具体原因，方便区分"测试模式占位"与
+  /// "真实 init 失败"。
+  String? _webError;
+
   @override
   void initState() {
     super.initState();
@@ -221,13 +226,43 @@ class _RssArticleDetailPageState extends ConsumerState<RssArticleDetailPage> {
 
       // 5. WebView controller（非 test 模式下）
       WebViewController? controller;
+      String? webError;
       if (!widget.disableWebView && !kIsWeb && html.isNotEmpty) {
         try {
+          // BATCH-05 (F-W2B-010): RSS 文章 HTML 是远端 untrusted 内容，
+          // 默认关 JS（用户在 webview 内只看正文，不需要远端 script
+          // 跑）。`<script>` 标签仍会出现在 DOM 但不会执行。
           controller = WebViewController()
-            ..setJavaScriptMode(JavaScriptMode.unrestricted);
+            ..setJavaScriptMode(JavaScriptMode.disabled)
+            // BATCH-05 (F-W2B-010): 拦跨 host 导航 —— 用户点文章内的链接
+            // 不会让 webview 去加载攻击者控制的页面；同 host 放行（让锚点 /
+            // 同站资源 / image link 加载）。"阅读原文"应在批次 19+ 用
+            // url_launcher 跳系统浏览器，更安全。
+            ..setNavigationDelegate(NavigationDelegate(
+              onNavigationRequest: (req) {
+                try {
+                  final reqHost = Uri.parse(req.url).host;
+                  final baseHost = Uri.parse(baseUrl).host;
+                  if (reqHost.isEmpty ||
+                      baseHost.isEmpty ||
+                      reqHost == baseHost) {
+                    return NavigationDecision.navigate;
+                  }
+                  debugPrint(
+                    '[RssDetail] blocked cross-origin nav: $reqHost (base=$baseHost)',
+                  );
+                  return NavigationDecision.prevent;
+                } catch (_) {
+                  return NavigationDecision.prevent;
+                }
+              },
+            ));
           await controller.loadHtmlString(html, baseUrl: baseUrl);
         } catch (e) {
-          // 平台 channel 在 widget test 环境会失败 — 不阻塞页面
+          // BATCH-05 (F-W2B-011): 平台 channel 在 widget test 环境会失败 ——
+          // 不阻塞页面，但记日志 + 把错误透到 _webError 让 UI 区分原因。
+          debugPrint('[RssDetail] WebView init failed: $e');
+          webError = e.toString();
           controller = null;
         }
       }
@@ -240,6 +275,7 @@ class _RssArticleDetailPageState extends ConsumerState<RssArticleDetailPage> {
         _baseUrl = baseUrl;
         _isStarred = starred;
         _webController = controller;
+        _webError = webError;
         _loading = false;
       });
     } catch (e) {
@@ -303,6 +339,7 @@ class _RssArticleDetailPageState extends ConsumerState<RssArticleDetailPage> {
     setState(() {
       _loading = true;
       _error = null;
+      _webError = null;
     });
     _bootstrap();
   }
@@ -373,10 +410,15 @@ class _RssArticleDetailPageState extends ConsumerState<RssArticleDetailPage> {
       // 测试模式 / WebView 不可用：用 Text 显示 HTML 长度作占位（widget
       // test 验证渲染流程进入到这一步即可）。生产场景里 _webController
       // 在 _bootstrap 里已成功 init，会走 WebViewWidget 分支。
+      // BATCH-05 (F-W2B-011): _webError 非 null 时多显示一行错误原因，
+      // 让用户能区分"测试模式占位"与"真实 WebView init 失败"。
+      final placeholderText = _webError != null
+          ? 'WebView 加载失败：$_webError\nHTML 长度=${html.length}\nbase_url=${_baseUrl ?? ''}'
+          : 'HTML 长度=${html.length}\nbase_url=${_baseUrl ?? ''}';
       return SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Text(
-          'HTML 长度=${html.length}\nbase_url=${_baseUrl ?? ''}',
+          placeholderText,
           // ignore: deprecated_member_use
           style: Theme.of(context).textTheme.bodyMedium,
         ),

@@ -139,4 +139,67 @@ void main() {
 
     expect(result, contains('替换规则订阅暂未实装'));
   });
+
+  group('validateFetchedBody (BATCH-05)', () {
+    test('body within 10MB + json content-type passes', () {
+      expect(
+        () => QrImportHandler.validateFetchedBody(
+          '{"name":"src1"}',
+          'application/json; charset=utf-8',
+        ),
+        returnsNormally,
+      );
+    });
+
+    test('body > 10MB rejected', () {
+      // 构造 10 MB + 1 字符串
+      final big = 'x' * (10 * 1024 * 1024 + 1);
+      expect(
+        () => QrImportHandler.validateFetchedBody(big, 'application/json'),
+        throwsA(isA<Exception>()),
+      );
+    });
+
+    test('binary content-type rejected', () {
+      expect(
+        () => QrImportHandler.validateFetchedBody(
+          'whatever',
+          'application/x-msdownload',
+        ),
+        throwsA(isA<Exception>()),
+      );
+    });
+
+    test('text/plain content-type allowed', () {
+      expect(
+        () => QrImportHandler.validateFetchedBody(
+          '{"name":"src1"}',
+          'text/plain; charset=utf-8',
+        ),
+        returnsNormally,
+      );
+    });
+
+    test('application/octet-stream allowed (GitHub raw)', () {
+      // GitHub raw / pages 给 .json 文件常返 application/octet-stream
+      expect(
+        () => QrImportHandler.validateFetchedBody(
+          '{"name":"src1"}',
+          'application/octet-stream',
+        ),
+        returnsNormally,
+      );
+    });
+
+    test('empty content-type allowed (compatibility)', () {
+      expect(
+        () => QrImportHandler.validateFetchedBody('{}', null),
+        returnsNormally,
+      );
+      expect(
+        () => QrImportHandler.validateFetchedBody('{}', ''),
+        returnsNormally,
+      );
+    });
+  });
 }

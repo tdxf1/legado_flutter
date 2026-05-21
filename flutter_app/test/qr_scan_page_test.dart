@@ -72,4 +72,87 @@ void main() {
     expect(find.text('未识别为 Legado 协议'), findsOneWidget);
     expect(find.text('random-text-not-a-protocol'), findsOneWidget);
   });
+
+  testWidgets(
+      'permissionDeniedOverride=true → 显示拒绝 UI + 系统设置引导文案',
+      (WidgetTester tester) async {
+    // BATCH-05 (F-W2B-058): 注入"权限被拒"状态测试。
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(
+          home: QrScanPage(
+            permissionDeniedOverride: true,
+            dbPathOverride: '/tmp/legado-test.db',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('相机权限被拒绝'), findsOneWidget);
+    expect(find.textContaining('系统设置'), findsOneWidget);
+    expect(find.text('返回'), findsOneWidget);
+    // 不显示扫码界面文案
+    expect(find.text('将二维码对准框内'), findsNothing);
+  });
+
+  testWidgets(
+      'legado:// with file:// src is rejected as unrecognized (BATCH-05)',
+      (WidgetTester tester) async {
+    // BATCH-05 (F-W2B-002): scheme 白名单 —— file:// 经 protocol parser
+    // 校验后被当成"未识别"，弹未识别 dialog。
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(
+          home: QrScanPage(
+            scanResultOverride:
+                'legado://import/bookSource?src=file:///etc/passwd',
+            dbPathOverride: '/tmp/legado-test.db',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // 越界 scheme 走 parseLegadoQrPayload 返 null → 未识别 dialog
+    expect(find.text('未识别为 Legado 协议'), findsOneWidget);
+  });
+
+  testWidgets(
+      'confirm dialog shows SSRF warning for private host (BATCH-05)',
+      (WidgetTester tester) async {
+    // BATCH-05 (F-W2B-002): rfc1918 host 触发警告。
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(
+          home: QrScanPage(
+            scanResultOverride:
+                'legado://import/bookSource?src=http://192.168.1.1/x.json',
+            dbPathOverride: '/tmp/legado-test.db',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('确认导入'), findsOneWidget);
+    // host class 警告
+    expect(find.textContaining('内网/本地地址'), findsOneWidget);
+  });
+
+  testWidgets(
+      'confirm dialog has NO SSRF warning for public host (BATCH-05)',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(
+          home: QrScanPage(
+            scanResultOverride:
+                'legado://import/bookSource?src=https://example.com/x.json',
+            dbPathOverride: '/tmp/legado-test.db',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('确认导入'), findsOneWidget);
+    expect(find.textContaining('内网/本地地址'), findsNothing);
+  });
 }

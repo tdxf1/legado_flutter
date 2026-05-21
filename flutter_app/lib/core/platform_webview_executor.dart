@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -7,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'dto.dart';
+import 'security/webview_safety.dart';
 
 class WebViewExecutionResult {
   final String content;
@@ -22,6 +22,21 @@ class WebViewExecutionResult {
   });
 }
 
+/// Reader 主路径 WebView 执行器。
+///
+/// **业务约束**：必须 [JavaScriptMode.unrestricted] —— 远端书源 JS 规则
+/// （`webJs` / source regex extraction）在此跑，关闭 JS 直接破坏业务路径。
+///
+/// **安全边界**（BATCH-05 引入）：
+/// - 所有 `Uri.parse(url)` 之前必经 [enforceWebViewScheme]（仅放 http/https）
+/// - 缺省 UA 走 [defaultUserAgent]，避免 webview-flutter 默认 UA 暴露指纹
+/// - JS 返回值走 [safeJsResultDecode] 取代旧 `_normalizeJsResult` 的
+///   粗暴 `substring(1, len-1)` 去引号路径
+///
+/// **新增 webview caller 必须走 `core/security/webview_safety.dart` 这套**；
+/// JS mode 由 caller 决定（reader=unrestricted, RSS=disabled，见
+/// `.trellis/spec/flutter-app/quality-and-anti-patterns.md`「WebView /
+/// Untrusted-Network 边界 (BATCH-05)」段）。
 class PlatformWebViewExecutor {
   static const MethodChannel _channel =
       MethodChannel('legado/webview_executor');
@@ -37,6 +52,9 @@ class PlatformWebViewExecutor {
     if (url == null || url.isEmpty) {
       throw ArgumentError('WebView request missing url');
     }
+    // BATCH-05 (F-W2A-009): scheme 白名单防线。caller 之前是 reader 链路，
+    // url 来自书源 JSON，恶意源可能塞 file:// / javascript: / data: 等。
+    enforceWebViewScheme(url);
     final nativeResult = await _executeNative(request);
     if (nativeResult != null) {
       return nativeResult;
@@ -119,15 +137,29 @@ class _WebViewExecutionPageState extends State<_WebViewExecutionPage> {
     final ua = widget.request.userAgent;
     if (ua != null && ua.isNotEmpty) {
       _controller.setUserAgent(ua);
+    } else {
+      // BATCH-05 (F-W2A-009): caller 没指定 UA 时走项目统一 UA，避免
+      // webview-flutter 默认 UA 暴露 Android API 版本等指纹。
+      _controller.setUserAgent(defaultUserAgent());
+    }
+    final url = widget.request.url!;
+    try {
+      // BATCH-05 (F-W2A-009): 二次防线 —— PlatformWebViewExecutor.execute()
+      // 已校验过，但 page 可能被外部直接构造，再校一次代价低。
+      enforceWebViewScheme(url);
+    } on WebViewSafetyException catch (e) {
+      // 校验失败：不发起 loadRequest，直接展示错误占位。
+      _error = e.toString();
+      return;
     }
     final headers = widget.request.headers;
     if (headers.isNotEmpty) {
       _controller.loadRequest(
-        Uri.parse(widget.request.url!),
+        Uri.parse(url),
         headers: headers,
       );
     } else {
-      _controller.loadRequest(Uri.parse(widget.request.url!));
+      _controller.loadRequest(Uri.parse(url));
     }
   }
 
@@ -146,7 +178,7 @@ class _WebViewExecutionPageState extends State<_WebViewExecutionPage> {
           'document.documentElement.outerHTML',
         );
       }
-      final content = _normalizeJsResult(rawResult);
+      final content = safeJsResultDecode(rawResult);
       if (!mounted) return;
       Navigator.of(context).pop(
         WebViewExecutionResult(
@@ -176,20 +208,6 @@ $script
   return String(out);
 })()
 ''';
-  }
-
-  String _normalizeJsResult(Object? value) {
-    if (value == null) return '';
-    final text = value.toString();
-    if (text.length >= 2 && text.startsWith('"') && text.endsWith('"')) {
-      try {
-        return jsonDecode(text) as String;
-      } catch (e) {
-        debugPrint('[WebViewExec] decode JS string failed: $e');
-        return text.substring(1, text.length - 1);
-      }
-    }
-    return text;
   }
 
   @override

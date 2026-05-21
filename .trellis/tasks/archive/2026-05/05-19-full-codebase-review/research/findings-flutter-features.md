@@ -83,6 +83,14 @@
 
 **建议**: (1) 默认拒绝 `http://` 与 RFC1918 / 链路本地 / loopback；(2) 在确认 dialog 中 prominently 显示 host 是否首次出现；(3) 考虑维护可选白名单（如 raw.githubusercontent.com / gitee.com），非白名单走二次警告；(4) `_fetchText` 限制 max body size（避免 OOM）。
 
+**Resolution (BATCH-05, 2026-05-21，方案 A 集中安全库)**: 闭环。引入 `core/security/webview_safety.dart` 4 件套（`enforceWebViewScheme` / `classifyHost` / `defaultUserAgent` / `safeJsResultDecode`）。
+- `legado_qr_protocol.dart::parseLegadoQrPayload` 在两条解析分支末尾都调 `enforceWebViewScheme`：`legado://import/...?src=file:///etc/passwd` 直接被当"未识别"返回 null（与原"未识别 → 弹未识别 dialog"路径自然衔接，不需要额外 UX）。
+- `qr_import_handler.dart::_fetchText` defense-in-depth 再调 `enforceWebViewScheme`，并加 `User-Agent: defaultUserAgent()` request header；新增 `validateFetchedBody(body, contentType)` `@visibleForTesting` static method 做 10 MB body 上限 + Content-Type allow-list（`json` / `text/plain` / `application/octet-stream` / 空 → 兼容许多源用 octet-stream 给 .json）。
+- `qr_scan_page.dart::_showConfirmDialog` 多显示一行 host class 警告（loopback / linkLocal / privateNetwork / invalid 红字提示），public host 不显示，让用户辨别 SSRF。
+- 单测：`webview_safety_test.dart` 全 4 fn 覆盖 30+ case；`legado_qr_protocol_test.dart` 加 3 case 验证 file:// / javascript: / data: src 都被拒；`qr_scan_page_test.dart` 加 4 case（permissionDenied UI + file:// 走未识别 + private host 警告 + public host 无警告）；`qr_import_handler_test.dart` 加 6 case 覆盖 validateFetchedBody 边界。
+
+**未做**（PRD Out of Scope）：白名单 host（raw.githubusercontent.com / gitee.com），维护成本高且与 Trellis 项目"用户自主决策"哲学冲突；token 在 QR URL 中检测留 BATCH-22+。
+
 ---
 
 ### F-W2B-003 [P1 主要][B-正确性][settings/settings_page]
@@ -193,6 +201,8 @@
 
 **建议**: (1) 默认 `JavaScriptMode.disabled`，加用户开关"加载 JS"；(2) 配置 `setNavigationDelegate` 拦截非 article baseUrl 的跳转；(3) 考虑在 fetch 后用 readability-style sanitizer 剥离 `<script>`/`<iframe>`（Rust 端 `core-parser` 已有 HTML 解析，可加 sanitize 函数）。
 
+**Resolution (BATCH-05, 2026-05-21)**: 闭环。`rss_article_detail_page.dart` WebViewController 初始化路径：(1) `JavaScriptMode.unrestricted` → `JavaScriptMode.disabled`（远端 RSS 文章 HTML 不需要 script 执行）；(2) 加 `setNavigationDelegate(NavigationDelegate(onNavigationRequest: ...))`：跨 host 导航返 `NavigationDecision.prevent`（同 host / 空 host 放行让锚点 / 同站资源加载），attempt-to-cross-origin 时 `debugPrint('[RssDetail] blocked cross-origin nav: $reqHost (base=$baseHost)')`；(3) 用户开关"加载 JS" PRD Out of Scope 留 P3 future work；(4) HTML sanitize（剥 `<script>`/`<iframe>`）需要 Rust 端 `core-parser` 加 sanitize 函数，跨层 effort 大，留 BATCH-05b。`disabled` JS + NavigationDelegate 已足够中和"远端 HTML 含 `<script>` 任意执行 + 用户点链接被劫持"的核心风险。同 file F-W2B-011 同 PR 解决。
+
 ---
 
 ### F-W2B-011 [P1 主要][B-正确性][rss/article_detail]
@@ -204,6 +214,8 @@
 **详细**: `try { controller = WebViewController() ..setJavaScriptMode... await controller.loadHtmlString }` 整段 catch 后只把 `controller = null`，没有 debugPrint、没有 error UI。生产环境下用户看到"HTML 长度=N"占位时无法判断是 WebView 不支持还是真实加载失败。
 
 **建议**: catch 内 `debugPrint('[RssDetail] WebView init failed: $e')`；并把错误存到 `_webError` State，UI 占位时分"测试模式"vs"WebView 加载失败"两种文案。
+
+**Resolution (BATCH-05, 2026-05-21)**: 闭环。`_RssArticleDetailPageState` 加 `String? _webError` 字段；`_bootstrap()` WebView init catch 块改为 `debugPrint('[RssDetail] WebView init failed: $e')` + 把 e.toString() 存到 local `webError` 变量再随 `setState({...})` 写入 `_webError` State；`_buildBody` 在 disableWebView / null controller 占位分支判 `_webError != null` 时多显示一行 "WebView 加载失败：$_webError"；`_retry()` 重置 `_webError = null`。同 file F-W2B-010 同 PR 解决。
 
 ---
 
@@ -788,6 +800,14 @@
 **详细**: `_isRealCameraMode` 只判断 `!kIsWeb && scanResultOverride == null`，没有检查实际权限状态。MobileScanner 内部权限被拒后 onDetect 永不触发，用户无任何反馈。
 
 **建议**: 进页前用 permission_handler 检查 camera 权限；拒绝时显示 "请授予相机权限以使用扫码功能"页 + 跳转设置按钮。
+
+**Resolution (BATCH-05, 2026-05-21)**: 闭环。不引入 `permission_handler` / `app_settings` 包（保持依赖最小）；改用 mobile_scanner v5 自身的权限拒绝信号 —— `MobileScannerController` 是 `ValueNotifier<MobileScannerState>`，权限被拒时 `state.error?.errorCode == MobileScannerErrorCode.permissionDenied`。
+- `_QrScanPageState` 加 `bool _permissionDenied` 字段 + `addListener(_onScannerStateChanged)` 监听 controller value changes；检测到 permissionDenied → setState 翻 true；`dispose` 配套 `removeListener`。
+- 加 `_PermissionDeniedView`（私有 StatelessWidget）：`Icons.no_photography` 大图标 + "相机权限被拒绝"标题 + "请到系统设置 → 应用 → 当前应用 → 权限 中开启相机权限"引导文案 + "返回"按钮（`context.pop()`）。
+- 加 `permissionDeniedOverride` 测试钩子让 widget test 直接置位拒绝状态（mobile_scanner platform channel 在 widget test 环境难 mock）。
+- 单测：1 case 验证 `permissionDeniedOverride=true` 时 UI 显示拒绝引导文案、不显示扫码框文案。
+
+PRD Out of Scope：跳系统设置按钮（需要 `app_settings` 或 platform-specific intent）；本批仅给文案引导让用户自行操作。
 
 ---
 

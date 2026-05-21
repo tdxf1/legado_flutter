@@ -1,9 +1,11 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/providers.dart';
+import '../../core/security/webview_safety.dart';
 import '../../src/rust/api.dart' as rust_api;
 import 'legado_qr_protocol.dart';
 
@@ -25,21 +27,61 @@ import 'legado_qr_protocol.dart';
 /// - [importBookSourcesOverride] / [importRssSourcesOverride] /
 ///   [createRuleSubOverride] / [refreshRuleSubOverride] 注入假 FRB
 class QrImportHandler {
-  /// 拉取 URL → 返回响应 body（纯文本）。MVP 用 dio + 30s 超时。
+  /// QR fetch 响应体上限：10 MB。攻击者构造的恶意源可能推大流量耗手机存储 /
+  /// 内存；超此上限直接拒绝。
+  static const int _maxBodyBytes = 10 * 1024 * 1024;
+
+  /// 校验 fetch 拿到的 body：[Content-Type allow-list + size 上限]。
+  ///
+  /// 单独抽出方便单测；[contentType] 传 `resp.headers.value('content-type')`
+  /// 原值（含 mime + charset），由本函数 lower-case 后子串匹配。
+  ///
+  /// 拒绝条件：
+  /// - body 字节数 > [_maxBodyBytes]（10 MB）
+  /// - contentType 非空且既不含 `json` / `text/plain` / `text` —— 避免被
+  ///   骗下载二进制（如 `.exe` / `.zip`）。空 Content-Type 放行（许多 GitHub
+  ///   raw 服务给 `.json` 文件返 `application/octet-stream` 或缺省）。
+  ///
+  /// 抛 [Exception] 表示拒绝。
+  @visibleForTesting
+  static void validateFetchedBody(String body, String? contentType) {
+    if (body.length > _maxBodyBytes) {
+      throw Exception('响应过大（> 10 MB），已拒绝');
+    }
+    final ct = contentType?.toLowerCase().trim() ?? '';
+    if (ct.isEmpty) return; // 缺 Content-Type 放行（兼容性）
+    final ok = ct.contains('json') ||
+        ct.contains('text/plain') ||
+        ct.contains('application/octet-stream');
+    if (!ok) {
+      throw Exception('远端 Content-Type 不允许: $ct');
+    }
+  }
+
+  /// 拉取 URL → 返回响应 body（纯文本）。MVP 用 dio + 30s 超时 +
+  /// 10 MB body 上限 + Content-Type allow-list（BATCH-05 / F-W2B-002）。
   /// 测试钩子绕过这一步。
   static Future<String> _fetchText(String url) async {
+    // BATCH-05 (F-W2B-002): defense-in-depth —— protocol parser 已校过
+    // scheme，但万一别的 caller 直接调 _fetchText（含未来 path），仍守住。
+    enforceWebViewScheme(url);
     final dio = Dio(BaseOptions(
       connectTimeout: const Duration(seconds: 30),
       receiveTimeout: const Duration(seconds: 30),
     ));
     final resp = await dio.get<String>(
       url,
-      options: Options(responseType: ResponseType.plain),
+      options: Options(
+        responseType: ResponseType.plain,
+        headers: {'User-Agent': defaultUserAgent()},
+      ),
     );
     final data = resp.data;
     if (data == null || data.isEmpty) {
       throw Exception('远端返回空内容');
     }
+    final ct = resp.headers.value('content-type');
+    validateFetchedBody(data, ct);
     return data;
   }
 

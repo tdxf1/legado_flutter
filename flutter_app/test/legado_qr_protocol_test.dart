@@ -89,6 +89,31 @@ void main() {
       expect(parseLegadoQrPayload('https://example.com/page'), isNull);
       expect(parseLegadoQrPayload('https://example.com/'), isNull);
     });
+
+    test('legado:// with file:// src rejected (BATCH-05)', () {
+      // BATCH-05 (F-W2B-002): scheme 白名单 —— file:// 越界不识别
+      expect(
+        parseLegadoQrPayload(
+            'legado://import/bookSource?src=file:///etc/passwd'),
+        isNull,
+      );
+    });
+
+    test('legado:// with javascript: src rejected (BATCH-05)', () {
+      expect(
+        parseLegadoQrPayload(
+            'legado://import/bookSource?src=javascript:alert(1)'),
+        isNull,
+      );
+    });
+
+    test('legado:// with data: src rejected (BATCH-05)', () {
+      expect(
+        parseLegadoQrPayload(
+            'legado://import/bookSource?src=data:text/html,foo'),
+        isNull,
+      );
+    });
   });
 
   group('legadoQrTypeLabel', () {

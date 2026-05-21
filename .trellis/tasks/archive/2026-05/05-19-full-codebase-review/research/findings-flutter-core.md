@@ -153,6 +153,8 @@
 
 **建议**: (1) 在 `_executeNative` / `Uri.parse(widget.request.url!)` 之前强校验 `uri.scheme == 'http' || uri.scheme == 'https'`，其它直接抛异常；(2) `addJavaScriptChannel` 当前未用，若后续添加必须命名空间隔离；(3) 限制 `webJs` 长度上限并在日志中只打前 200 字符；(4) 给 WebView 设 `setBackgroundColor(transparent)` 之外，关闭 `setMixedContentMode`（默认禁），并考虑 `clearLocalStorage` / `clearCache` 在 dispose 时调用避免跨书源 cookie 持久化。
 
+**Resolution (BATCH-05, 2026-05-21)**: P0 部分闭环。新建 `flutter_app/lib/core/security/webview_safety.dart` 集中 4 件套：`enforceWebViewScheme(url)` (http/https 白名单越界 throw `WebViewSafetyException`)、`classifyHost(url) → HostClass enum`、`defaultUserAgent()` 项目统一 UA、`safeJsResultDecode(raw)` 取代旧 `_normalizeJsResult`。`platform_webview_executor.dart`：`PlatformWebViewExecutor.execute()` 入口 + `_WebViewExecutionPageState.initState` 在 `loadRequest` 前都调 `enforceWebViewScheme`（双层防线）；caller 没指定 UA 时走 `defaultUserAgent()` 而非 webview-flutter 默认 UA；`_normalizeJsResult` 删除，统一走 `safeJsResultDecode`。`PlatformWebViewExecutor` class doc 加 ADR 注释说明 reader webview 是业务豁免：必须保留 `JavaScriptMode.unrestricted` 以跑远端 webJs 规则；新增 webview caller 默认 disabled，要 unrestricted 必须文档化业务必要性。**未做**（PRD Out of Scope）：webJs 长度限制、`clearCache`/`clearLocalStorage` on dispose（webview_flutter 4.x 跨平台 API 不一致，留 BATCH-05b）。`flutter analyze` 0 issue；`flutter test` 479/479 PASS（旧 429 + 新 50）。同 file F-W2A-010 顺手在同 PR 解决。
+
 ---
 
 ### F-W2A-010 [P1][D-安全][core/platform_webview_executor]
@@ -162,6 +164,8 @@
 **问题**: `_normalizeJsResult` 对 JS 返回的字符串用 `jsonDecode(text)` 还原引号，但 fallback 路径 L189 直接 `text.substring(1, text.length - 1)` 去除首尾引号——若 JS 返回的字符串包含转义序列（`\n` / `\u4e2d` / `\\`），fallback 路径会把它们当字面量保留，与 jsonDecode 路径行为不一致；有些章节内容会因此出现奇怪的反斜杠串。
 
 **建议**: jsonDecode 失败时记录原始长度 + hash 后直接返回 `text`（带首尾引号）由调用方上报错误，而不是粗暴去引号。或者退化用 `unescape` 手动处理常见转义。
+
+**Resolution (BATCH-05, 2026-05-21)**: 闭环。`_normalizeJsResult` 删除；`safeJsResultDecode` 在 `core/security/webview_safety.dart` 替代实现，jsonDecode 失败时 `debugPrint('[WebViewSafety] decode JS string failed: len=$len hash=<md5>')` 后返回原 `raw.toString()`（保留引号），不再 `substring(1, len-1)` 丢字符。+ 5 case 单测覆盖 null / plain / JSON-string / JSON-string-with-escapes / malformed JSON 路径。同 file F-W2A-009 同 PR 解决。
 
 ---
 

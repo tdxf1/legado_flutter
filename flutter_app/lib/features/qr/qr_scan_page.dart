@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../../core/security/webview_safety.dart';
 import 'legado_qr_protocol.dart';
 import 'qr_import_handler.dart';
 
@@ -59,6 +60,11 @@ class QrScanPage extends ConsumerStatefulWidget {
   final Future<String> Function(String dbPath, String id)?
       refreshRuleSubOverride;
 
+  /// 测试钩子：直接置位"相机权限被拒"状态，跳过 mobile_scanner，UI 显示
+  /// 拒绝引导文案 + 返回按钮。生产代码不传（默认 false）。
+  /// 引入：BATCH-05 / F-W2B-058。
+  final bool permissionDeniedOverride;
+
   const QrScanPage({
     super.key,
     this.scanResultOverride,
@@ -68,6 +74,7 @@ class QrScanPage extends ConsumerStatefulWidget {
     this.importRssSourcesOverride,
     this.createRuleSubOverride,
     this.refreshRuleSubOverride,
+    this.permissionDeniedOverride = false,
   });
 
   @override
@@ -81,6 +88,11 @@ class _QrScanPageState extends ConsumerState<QrScanPage> {
   /// 防重复扫码：第一条二维码触发后置 true，后续 onDetect 直接 return。
   bool _detected = false;
 
+  /// 相机权限拒绝标志（BATCH-05 / F-W2B-058）。监听 controller 的
+  /// [ValueNotifier]，[MobileScannerState.error] 含 [permissionDenied]
+  /// errorCode 时翻 true，UI 切到 [_PermissionDeniedView]。
+  bool _permissionDenied = false;
+
   /// 真实运行模式（非测试钩子模式 + 平台支持）。
   bool get _isRealCameraMode =>
       !kIsWeb && widget.scanResultOverride == null;
@@ -88,11 +100,20 @@ class _QrScanPageState extends ConsumerState<QrScanPage> {
   @override
   void initState() {
     super.initState();
+    // 测试钩子优先：直接置位拒绝状态，跳过 controller / 扫码路径。
+    if (widget.permissionDeniedOverride) {
+      _permissionDenied = true;
+      return;
+    }
     if (_isRealCameraMode) {
       _controller = MobileScannerController(
         // 防快速重复扫码
         detectionTimeoutMs: 1000,
       );
+      // BATCH-05 (F-W2B-058): 监听 ValueNotifier，state.error 出现
+      // permissionDenied 时切到拒绝 UI。controller 在 dispose 自带
+      // removeListener 清理（ValueNotifier dispose 时会自动）。
+      _controller!.addListener(_onScannerStateChanged);
     }
     // 测试模式：跳过相机直接走假扫码结果。在第一帧后调，避免 initState
     // 直接弹 dialog 时上下文还没准备好。
@@ -103,8 +124,21 @@ class _QrScanPageState extends ConsumerState<QrScanPage> {
     }
   }
 
+  void _onScannerStateChanged() {
+    final c = _controller;
+    if (c == null) return;
+    final err = c.value.error;
+    if (err == null) return;
+    if (err.errorCode == MobileScannerErrorCode.permissionDenied) {
+      if (mounted && !_permissionDenied) {
+        setState(() => _permissionDenied = true);
+      }
+    }
+  }
+
   @override
   void dispose() {
+    _controller?.removeListener(_onScannerStateChanged);
     _controller?.dispose();
     super.dispose();
   }
@@ -195,6 +229,16 @@ class _QrScanPageState extends ConsumerState<QrScanPage> {
   }
 
   Future<bool?> _showConfirmDialog(ParsedLegadoQr parsed) async {
+    // BATCH-05 (F-W2B-002): host 风险分类，向用户透出 SSRF 警告。
+    final hostClass = classifyHost(parsed.fetchUrl);
+    final warningText = switch (hostClass) {
+      HostClass.loopback ||
+      HostClass.linkLocal ||
+      HostClass.privateNetwork =>
+        '⚠️ 警告：这是内网/本地地址，可能是 SSRF 攻击。仍要导入吗？',
+      HostClass.invalid => '⚠️ 警告：URL 无法解析。',
+      HostClass.public => null,
+    };
     return showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -209,6 +253,16 @@ class _QrScanPageState extends ConsumerState<QrScanPage> {
               const Text('源 URL：'),
               const SizedBox(height: 4),
               SelectableText(parsed.fetchUrl),
+              if (warningText != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  warningText,
+                  style: TextStyle(
+                    color: Theme.of(ctx).colorScheme.error,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -263,6 +317,9 @@ class _QrScanPageState extends ConsumerState<QrScanPage> {
   }
 
   Widget _buildBody(BuildContext context) {
+    if (_permissionDenied) {
+      return const _PermissionDeniedView();
+    }
     if (!_isRealCameraMode) {
       // 测试 / web fallback：占位即可，实际扫码结果靠 scanResultOverride
       return const ColoredBox(
@@ -331,6 +388,51 @@ class _ScanOverlay extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 相机权限被拒时的引导视图（BATCH-05 / F-W2B-058）。引导用户去系统设置
+/// 手动开启权限；不引入 permission_handler / app_settings 包跳转 —— 用户
+/// 自行操作。
+class _PermissionDeniedView extends StatelessWidget {
+  const _PermissionDeniedView();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.no_photography,
+              size: 64,
+              color: Theme.of(context).colorScheme.error,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '相机权限被拒绝',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              '请到系统设置 → 应用 → 当前应用 → 权限 中开启相机权限，然后重新进入扫码页。',
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 20),
+            FilledButton(
+              onPressed: () {
+                if (context.canPop()) {
+                  context.pop();
+                }
+              },
+              child: const Text('返回'),
+            ),
+          ],
+        ),
       ),
     );
   }
