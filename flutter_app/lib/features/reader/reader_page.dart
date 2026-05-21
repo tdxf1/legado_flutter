@@ -429,16 +429,21 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     try {
       final book = await ref.read(bookByIdProvider(widget.bookId).future);
       if (book != null && mounted) {
-        _sourceName = book['source_name'] as String? ?? '';
-        _sourceUrl = book['source_url'] as String? ?? '';
-        if (_sourceId.isEmpty) {
-          _sourceId = book['source_id'] as String? ?? '';
-        }
-        if (_cachedChapters != null &&
-            _currentIndex < _cachedChapters!.length) {
-          _chapterUrl = _cachedChapters![_currentIndex]['url'] as String? ?? '';
-        }
-        setState(() {});
+        // BATCH-19a (F-W2A-007): 4 个赋值移进 setState callback。原版在
+        // setState 外赋值再调 setState(() {})，是反模式：本次 build 已经
+        // 读过旧值，赋值需要由 setState 标脏才会被下一帧拾起。
+        setState(() {
+          _sourceName = book['source_name'] as String? ?? '';
+          _sourceUrl = book['source_url'] as String? ?? '';
+          if (_sourceId.isEmpty) {
+            _sourceId = book['source_id'] as String? ?? '';
+          }
+          if (_cachedChapters != null &&
+              _currentIndex < _cachedChapters!.length) {
+            _chapterUrl =
+                _cachedChapters![_currentIndex]['url'] as String? ?? '';
+          }
+        });
       }
     } catch (e) {
       debugPrint('[Reader] fetchSourceInfo failed: $e');
@@ -1092,23 +1097,38 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
   }
 
   void _onScroll() {
-    if (_scrollDebounceTimer != null) return;
-    _scrollDebounceTimer = Timer(const Duration(milliseconds: 500), () {
-      _scrollDebounceTimer = null;
-      _saveScrollPosition();
-    });
-    if (_visibleChapterTimer != null) return;
-    _visibleChapterTimer = Timer(const Duration(milliseconds: 300), () {
+    // BATCH-19a (F-W2A-006): 拆分防抖路径——save 路径独占 debounce，
+    // visible chapter / backward detect / append-prepend 路径不被早 return
+    // 拦下。原版在 save debounce 命中时整个 _onScroll early return，
+    // 长程滚动期间章节标题不更新、章节追加/前置触发完全靠运气。
+    //
+    // 1) 保存滚动位置：仅本路径用 _scrollDebounceTimer 防抖（500ms 节流），
+    //    timer 在 fire 后置 null 让下一次 _onScroll 重新 schedule。
+    if (_scrollDebounceTimer == null) {
+      _scrollDebounceTimer = Timer(const Duration(milliseconds: 500), () {
+        _scrollDebounceTimer = null;
+        _saveScrollPosition();
+      });
+    }
+
+    // 2) 可见章节更新：300ms 防抖；用 ??= 保证窗口内只 schedule 一次，
+    //    不与 save debounce 互相拦截。
+    _visibleChapterTimer ??=
+        Timer(const Duration(milliseconds: 300), () {
       _visibleChapterTimer = null;
       _updateVisibleChapter();
     });
 
+    // 3) 反向滚动检测——必须每帧执行，不能被 debounce 拦下，否则用户
+    //    在窗口内反向滑动时 _isScrollingBackward 不更新。
     if (_scrollController.hasClients) {
       final currentOffset = _scrollController.offset;
       _isScrollingBackward = currentOffset < _lastScrollOffset;
       _lastScrollOffset = currentOffset;
     }
 
+    // 4) 滚动模式追加 / 前置章节——临界滚动到边缘时立即触发，否则
+    //    debounce 期间用户滚到底也不会拼下一章。
     if (_settings.isScrollMode &&
         _scrollController.hasClients &&
         !_isAppendingChapter &&
@@ -1722,6 +1742,13 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
   @override
   Widget build(BuildContext context) {
     final providerSettings = ref.watch(readerSettingsProvider);
+    // BATCH-19a (F-W2A-005): `ReaderSettings` 已实现 ==/hashCode，稳态下
+    // `providerSettings != _settings` 会按字段相等性返回 false → postFrame
+    // 不再每帧 schedule。仅在 settings 真实变更（设置页 slider 调整、字号
+    // 长按调节等）时进入分支，回写 _settings + 触发一次 setState。
+    //
+    // 保留 build 内 watch 而非改 ref.listen 是为了 `_readerSettingsLoaded`
+    // 路径正确——首帧 disk load 完成时这里会拾起新值。
     if (_readerSettingsLoaded && providerSettings != _settings) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && ref.read(readerSettingsProvider) != _settings) {

@@ -134,10 +134,22 @@ final allReplaceRulesProvider = FutureProvider<List<Map<String, dynamic>>>((ref)
 /// 单 db_path + 多 isolate 各自 bump 时仍可能撞车（两个 isolate 都从 0
 /// 开始，各自 bump 到 1 但规则集不同，Rust 缓存命中错误的版本）。
 ///
-/// 当前没有跨 isolate 写规则的路径——`replace_rule_page.dart` 只在 UI
-/// isolate 用——所以风险隐藏。如果以后引入 download isolate 写规则，
-/// 这个 provider 需要改成 `StateProvider<(String, int)>` 把进程级随机
-/// salt 也带进去，避免不同 isolate 的 generation 撞值。
+/// BATCH-19a (F-W2A-004): 选保守方案——保持 `int` 类型不动，避免改 cache
+/// key 类型对 FFI 序列化路径产生连锁影响。**契约边界**：所有调用
+/// [bumpReplaceRuleGeneration] 的路径（`replace_rule_page.dart` UI CRUD、
+/// import flow 完成回调）必须在 main isolate 内执行。当前生产代码 100%
+/// 走 main isolate（`download_runner` 不写规则），无运行时漂移。
+///
+/// 如果以后引入 download isolate / worker isolate 写规则，必须升级为
+/// `StateProvider<({String salt, int counter})>` 把 process-startup salt
+/// 也带进 cache key（短 hex 串足够），避免不同 isolate 各自 bump 到相同
+/// counter 但规则集不同时的 cache 撞键。Rust 侧需要同步把 `cache_key`
+/// 拼接为 `(db_path, salt, counter)` 三元组。
+///
+/// 不在此处加 `assert(Isolate.current.debugName == 'main')`：`debugName`
+/// 在 release build 不可靠，依赖它做 production assertion 会引入误报。
+/// 主 isolate 边界在 spec 文档化（quality-and-anti-patterns.md "Reader
+/// 正确性边界"段）即可。
 final replaceRuleGenerationProvider = StateProvider<int>((ref) => 0);
 
 void bumpReplaceRuleGeneration(WidgetRef ref) {
@@ -709,6 +721,89 @@ class ReaderSettings {
         'enableLongPressMenu': enableLongPressMenu,
         'bookshelfSort': bookshelfSort,
       };
+
+  /// BATCH-19a (F-W2A-005): 等价比较契约。
+  ///
+  /// 所有 31 个 `final` 字段必须一致；`tapZones` 是 `List<int>`，用
+  /// `listEquals` 做深比较（list 自带 == 是引用相等，不够）。
+  ///
+  /// 字段集合必须与 [copyWith] / [toJson] / [ReaderSettings.fromJson] 三处
+  /// 严格对齐——新增字段时必须同时改 4 处（含本方法 + [hashCode]）。
+  /// 漏一个会出现 == 和 hashCode 契约不一致：set/map dedup 会撞键，
+  /// reader_page build 中 short-circuit 漏掉差异，settings 写盘后某些
+  /// 字段不被识别为变更。
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! ReaderSettings) return false;
+    return fontSize == other.fontSize &&
+        fontWeightIndex == other.fontWeightIndex &&
+        fontFamily == other.fontFamily &&
+        textColor == other.textColor &&
+        backgroundColor == other.backgroundColor &&
+        backgroundImagePath == other.backgroundImagePath &&
+        letterSpacing == other.letterSpacing &&
+        lineHeight == other.lineHeight &&
+        paragraphSpacing == other.paragraphSpacing &&
+        horizontalPadding == other.horizontalPadding &&
+        verticalPadding == other.verticalPadding &&
+        paragraphIndent == other.paragraphIndent &&
+        pageAnim == other.pageAnim &&
+        nightMode == other.nightMode &&
+        nightBackgroundColor == other.nightBackgroundColor &&
+        nightTextColor == other.nightTextColor &&
+        showReadingInfo == other.showReadingInfo &&
+        showChapterTitle == other.showChapterTitle &&
+        showClock == other.showClock &&
+        showProgress == other.showProgress &&
+        ttsSpeed == other.ttsSpeed &&
+        pageAnimDurationMs == other.pageAnimDurationMs &&
+        screenBrightness == other.screenBrightness &&
+        keepScreenOn == other.keepScreenOn &&
+        enableVolumeKeyPage == other.enableVolumeKeyPage &&
+        volumeKeyPageOnTts == other.volumeKeyPageOnTts &&
+        listEquals(tapZones, other.tapZones) &&
+        autoScrollSpeed == other.autoScrollSpeed &&
+        autoPageIntervalSeconds == other.autoPageIntervalSeconds &&
+        enableLongPressMenu == other.enableLongPressMenu &&
+        bookshelfSort == other.bookshelfSort;
+  }
+
+  @override
+  int get hashCode => Object.hashAll([
+        fontSize,
+        fontWeightIndex,
+        fontFamily,
+        textColor,
+        backgroundColor,
+        backgroundImagePath,
+        letterSpacing,
+        lineHeight,
+        paragraphSpacing,
+        horizontalPadding,
+        verticalPadding,
+        paragraphIndent,
+        pageAnim,
+        nightMode,
+        nightBackgroundColor,
+        nightTextColor,
+        showReadingInfo,
+        showChapterTitle,
+        showClock,
+        showProgress,
+        ttsSpeed,
+        pageAnimDurationMs,
+        screenBrightness,
+        keepScreenOn,
+        enableVolumeKeyPage,
+        volumeKeyPageOnTts,
+        // tapZones 元素逐个 hash，避免 List 引用 hash 与 == 契约不一致
+        Object.hashAll(tapZones),
+        autoScrollSpeed,
+        autoPageIntervalSeconds,
+        enableLongPressMenu,
+        bookshelfSort,
+      ]);
 
   factory ReaderSettings.fromJson(Map<String, dynamic> json) {
     final version = json['settingsVersion'] as int? ?? 1;
