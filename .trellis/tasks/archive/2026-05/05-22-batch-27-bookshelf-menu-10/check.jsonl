@@ -1,0 +1,3 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "Forbidden 反向 + spec 段写入位置"}
+{"file": ".trellis/spec/cross-language/frb-bridge.md", "reason": "FRB 接口约定"}

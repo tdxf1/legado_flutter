@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "BATCH-26 系列页面布局对齐段（含 26a/b/c/d 已落地，27a 续）+ Forbidden 反向"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "Flutter 测试模式（ProviderScope.overrides + UncontrolledProviderScope）"}
+{"file": ".trellis/spec/cross-language/frb-bridge.md", "reason": "FRB 函数签名约定 (db_path 参数 / Result<T, String>)"}
+{"file": ".trellis/spec/rust-core/error-handling.md", "reason": "Rust 错误处理与字符串错误返回"}
+{"file": "flutter_app/lib/features/bookshelf/bookshelf_page.dart", "reason": "PopupMenu 主改文件"}
