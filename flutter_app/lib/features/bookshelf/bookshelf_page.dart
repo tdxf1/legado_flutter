@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -9,6 +10,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/persistence/json_store.dart';
 import '../../core/providers.dart';
+import '../../core/update_toc_runner.dart';
 import '../../core/util/time_format.dart';
 import '../../core/widgets/safe_setstate.dart';
 import '../../src/rust/api.dart' as rust_api;
@@ -55,6 +57,12 @@ class BookshelfPage extends ConsumerStatefulWidget {
   /// 此字段决定 books.json 的写入位置。
   final String? exportDocumentsDirectoryOverride;
 
+  /// BATCH-27b: 测试钩子，注入假的 updateBookToc FRB 调用，返回新章节数。
+  /// 透传给 [UpdateTocRunner.enqueue] 让 worker 走假实现，避免 widget test
+  /// 走真 FRB / 网络。生产路径不传该 override，runner 默认调
+  /// [`rust_api.updateBookToc`]。
+  final UpdateBookTocFn? updateBookTocOverride;
+
   const BookshelfPage({
     super.key,
     this.dbPathOverride,
@@ -63,6 +71,7 @@ class BookshelfPage extends ConsumerStatefulWidget {
     this.importLocalBookOverride,
     this.exportBookshelfJsonOverride,
     this.exportDocumentsDirectoryOverride,
+    this.updateBookTocOverride,
   });
 
   @override
@@ -72,12 +81,54 @@ class BookshelfPage extends ConsumerStatefulWidget {
 class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   bool _isGridView = false;
 
+  /// BATCH-27b: 「更新目录」批量任务进度状态。监听 [UpdateTocRunner.onProgress]
+  /// 后写回这三字段触发 AppBar transient badge rebuild。
+  bool _isUpdatingToc = false;
+  int _updateTocProcessed = 0;
+  int _updateTocTotal = 0;
+  StreamSubscription<UpdateTocProgress>? _updateTocSub;
+
   @override
   void initState() {
     super.initState();
     loadBookshelfGridViewFromDisk().then((value) {
       safeSetState(() => _isGridView = value);
     });
+    // BATCH-27b: 挂 progress 监听。runner 是 singleton —— 即使其它入口（未来
+    // batch-deep-cache 等）也能共享同一进度通道。dispose 时 cancel 避免
+    // 旧 page 的 setState 在 unmount 后被触发。
+    _updateTocSub = UpdateTocRunner().onProgress.listen((p) {
+      if (!mounted) return;
+      safeSetState(() {
+        _isUpdatingToc = p.isRunning;
+        _updateTocProcessed = p.processed;
+        _updateTocTotal = p.total;
+      });
+      if (p.isDone) {
+        // invalidate 让书架重新拉书（chapter_count 已变 / dur_chapter_title
+        // 不动，但订单时间或 last_check_time 可能影响排序）
+        ref.invalidate(allBooksProvider);
+        ref.invalidate(booksByGroupProvider);
+        if (mounted) {
+          // hide 当前 SnackBar：批次开始时 _onUpdateToc 弹的「已开始刷新目录」
+          // 还可能在 4s 默认 dismiss timer 内，让位给完成消息。
+          ScaffoldMessenger.of(context).hideCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '目录刷新完成：成 ${p.success} / 失 ${p.fail}',
+              ),
+            ),
+          );
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _updateTocSub?.cancel();
+    super.dispose();
   }
 
   @override
@@ -125,6 +176,50 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
               tooltip: '搜索',
               onPressed: () => context.push('/search'),
             ),
+            // BATCH-27b (05-22): 「更新目录」批量任务进度 transient badge。
+            // 仅 `_isUpdatingToc` 为 true 时渲染，跑完自动消失。点击不取消
+            // (cancel UX 留 follow-up)，按 PRD §C/Q6 决策。
+            if (_isUpdatingToc)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Tooltip(
+                  message:
+                      '正在更新目录 $_updateTocProcessed/$_updateTocTotal',
+                  child: SizedBox(
+                    width: 40,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      clipBehavior: Clip.none,
+                      children: [
+                        const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        Positioned(
+                          right: -8,
+                          top: -2,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 4, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.primary,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              '$_updateTocProcessed/$_updateTocTotal',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             IconButton(
               icon: Icon(_isGridView ? Icons.view_list : Icons.grid_view),
               tooltip: _isGridView ? '列表视图' : '网格视图',
@@ -141,163 +236,173 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
               tooltip: '书架排序',
               onPressed: () => _showSortDialog(context),
             ),
-            PopupMenuButton<String>(
-              tooltip: '更多',
-              onSelected: (value) async {
-                // BATCH-27a (05-22)：PopupMenu 严格按原 legado
-                // `main_bookshelf.xml` 12 项 + flutter 自加「扫码导入」共
-                // 13 项排布。6 项灰显占位（更新目录 / 添加远程书 /
-                // 添加网络URL / 书架管理 / 导入书架 / 日志）走
-                // `enabled: false` + 不写 onTap，对齐 BATCH-26b 决策
-                // —— 灰显本身就是信号，不弹 SnackBar。新增真功能 2 项：
-                // bookshelf_layout 弹 SimpleDialog 切「列表 / 网格」；
-                // export_bookshelf 调 FRB 写 documents_dir/books.json。
-                if (value == 'manage_groups') {
-                  await showDialog(
-                    context: context,
-                    builder: (_) => const GroupManageDialog(),
-                  );
-                } else if (value == 'import_local') {
-                  // 批次 13 (05-19): 导入本地书。
-                  await _onImportLocalBook(context);
-                } else if (value == 'cache_export') {
-                  // BATCH-26a (05-22): /downloads 退 tab 后入口移到此。
-                  if (context.mounted) context.push('/downloads');
-                } else if (value == 'qr_scan') {
-                  // 批次 20 (05-19): QR 扫码导入。扫描结果由 qr_scan_page
-                  // 自己处理 + pop 后回到原页。
-                  if (context.mounted) context.push('/qr-scan');
-                } else if (value == 'bookshelf_layout') {
-                  // BATCH-27a (05-22): 书架布局对话框（列表 / 网格）。
-                  await _showLayoutDialog(context);
-                } else if (value == 'export_bookshelf') {
-                  // BATCH-27a (05-22): 导出书架 JSON 到 documents_dir。
-                  await _onExportBookshelf(context);
-                }
-              },
-              itemBuilder: (context) => const [
-                // 1. 搜索 — 已是 AppBar IconButton（不进 menu）
-                // 2. 更新目录 — 灰显占位
-                PopupMenuItem(
-                  enabled: false,
-                  value: 'update_toc',
-                  child: ListTile(
+            // BATCH-27b: PopupMenu 包 Builder 让 onSelected 内的 context 能
+            // 命中 DefaultTabController（PopupMenuButton 自身已是 Scaffold
+            // 子节点 + DefaultTabController 子树，但 menu 触发的 context
+            // 是 PopupMenuButton 本身的 BuildContext，已能 of(context) 拿
+            // 到 controller —— 这里 Builder 主要是隔离 actions 列表外层
+            // context 让 _onUpdateToc 拿到 tab index 一定不空）。
+            Builder(
+              builder: (innerCtx) => PopupMenuButton<String>(
+                tooltip: '更多',
+                onSelected: (value) async {
+                  // BATCH-27a (05-22)：PopupMenu 严格按原 legado
+                  // `main_bookshelf.xml` 12 项 + flutter 自加「扫码导入」共
+                  // 13 项排布。6 项灰显占位（更新目录 / 添加远程书 /
+                  // 添加网络URL / 书架管理 / 导入书架 / 日志）走
+                  // `enabled: false` + 不写 onTap，对齐 BATCH-26b 决策
+                  // —— 灰显本身就是信号，不弹 SnackBar。新增真功能 2 项：
+                  // bookshelf_layout 弹 SimpleDialog 切「列表 / 网格」；
+                  // export_bookshelf 调 FRB 写 documents_dir/books.json。
+                  // BATCH-27b: 「更新目录」从灰显改可点 → _onUpdateToc。
+                  if (value == 'manage_groups') {
+                    await showDialog(
+                      context: innerCtx,
+                      builder: (_) => const GroupManageDialog(),
+                    );
+                  } else if (value == 'import_local') {
+                    // 批次 13 (05-19): 导入本地书。
+                    await _onImportLocalBook(innerCtx);
+                  } else if (value == 'cache_export') {
+                    // BATCH-26a (05-22): /downloads 退 tab 后入口移到此。
+                    if (innerCtx.mounted) innerCtx.push('/downloads');
+                  } else if (value == 'qr_scan') {
+                    // 批次 20 (05-19): QR 扫码导入。扫描结果由 qr_scan_page
+                    // 自己处理 + pop 后回到原页。
+                    if (innerCtx.mounted) innerCtx.push('/qr-scan');
+                  } else if (value == 'bookshelf_layout') {
+                    // BATCH-27a (05-22): 书架布局对话框（列表 / 网格）。
+                    await _showLayoutDialog(innerCtx);
+                  } else if (value == 'export_bookshelf') {
+                    // BATCH-27a (05-22): 导出书架 JSON 到 documents_dir。
+                    await _onExportBookshelf(innerCtx);
+                  } else if (value == 'update_toc') {
+                    // BATCH-27b (05-22): 当前 Tab books 批量刷目录。
+                    await _onUpdateToc(innerCtx, tabSpec, sortOrder);
+                  }
+                },
+                itemBuilder: (context) => const [
+                  // 1. 搜索 — 已是 AppBar IconButton（不进 menu）
+                  // 2. 更新目录 — BATCH-27b 改可点
+                  PopupMenuItem(
+                    value: 'update_toc',
+                    child: ListTile(
+                      leading: Icon(Icons.refresh),
+                      title: Text('更新目录'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  // 3. 添加本地书
+                  PopupMenuItem(
+                    value: 'import_local',
+                    child: ListTile(
+                      leading: Icon(Icons.note_add),
+                      title: Text('添加本地书'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  // 4. 添加远程书 — 灰显占位
+                  PopupMenuItem(
                     enabled: false,
-                    leading: Icon(Icons.refresh),
-                    title: Text('更新目录'),
-                    contentPadding: EdgeInsets.zero,
+                    value: 'add_remote',
+                    child: ListTile(
+                      enabled: false,
+                      leading: Icon(Icons.cloud_outlined),
+                      title: Text('添加远程书'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
                   ),
-                ),
-                // 3. 添加本地书
-                PopupMenuItem(
-                  value: 'import_local',
-                  child: ListTile(
-                    leading: Icon(Icons.note_add),
-                    title: Text('添加本地书'),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
-                // 4. 添加远程书 — 灰显占位
-                PopupMenuItem(
-                  enabled: false,
-                  value: 'add_remote',
-                  child: ListTile(
+                  // 5. 添加网络URL — 灰显占位
+                  PopupMenuItem(
                     enabled: false,
-                    leading: Icon(Icons.cloud_outlined),
-                    title: Text('添加远程书'),
-                    contentPadding: EdgeInsets.zero,
+                    value: 'add_url',
+                    child: ListTile(
+                      enabled: false,
+                      leading: Icon(Icons.link),
+                      title: Text('添加网络URL'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
                   ),
-                ),
-                // 5. 添加网络URL — 灰显占位
-                PopupMenuItem(
-                  enabled: false,
-                  value: 'add_url',
-                  child: ListTile(
+                  // 6. 扫码导入 — flutter 自加项，置于本地书 / 远程书附近
+                  PopupMenuItem(
+                    value: 'qr_scan',
+                    child: ListTile(
+                      leading: Icon(Icons.qr_code_scanner),
+                      title: Text('扫码导入'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  // 7. 书架管理 — 灰显占位（27c 批量编辑页）
+                  PopupMenuItem(
                     enabled: false,
-                    leading: Icon(Icons.link),
-                    title: Text('添加网络URL'),
-                    contentPadding: EdgeInsets.zero,
+                    value: 'bookshelf_manage',
+                    child: ListTile(
+                      enabled: false,
+                      leading: Icon(Icons.edit_note),
+                      title: Text('书架管理'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
                   ),
-                ),
-                // 6. 扫码导入 — flutter 自加项，置于本地书 / 远程书附近
-                PopupMenuItem(
-                  value: 'qr_scan',
-                  child: ListTile(
-                    leading: Icon(Icons.qr_code_scanner),
-                    title: Text('扫码导入'),
-                    contentPadding: EdgeInsets.zero,
+                  // 8. 缓存/导出
+                  PopupMenuItem(
+                    value: 'cache_export',
+                    child: ListTile(
+                      leading: Icon(Icons.download_outlined),
+                      title: Text('缓存/导出'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
                   ),
-                ),
-                // 7. 书架管理 — 灰显占位（27c 批量编辑页）
-                PopupMenuItem(
-                  enabled: false,
-                  value: 'bookshelf_manage',
-                  child: ListTile(
+                  // 9. 分组管理（保留 manage_groups key 名 backward compat）
+                  PopupMenuItem(
+                    value: 'manage_groups',
+                    child: ListTile(
+                      leading: Icon(Icons.folder_outlined),
+                      title: Text('分组管理'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  // 10. 书架布局 — 真功能（27a 新增）
+                  PopupMenuItem(
+                    value: 'bookshelf_layout',
+                    child: ListTile(
+                      leading: Icon(Icons.dashboard_outlined),
+                      title: Text('书架布局'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  // 11. 导出书架 — 真功能（27a 新增）
+                  PopupMenuItem(
+                    value: 'export_bookshelf',
+                    child: ListTile(
+                      leading: Icon(Icons.upload_file),
+                      title: Text('导出书架'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  // 12. 导入书架 — 灰显占位
+                  PopupMenuItem(
                     enabled: false,
-                    leading: Icon(Icons.edit_note),
-                    title: Text('书架管理'),
-                    contentPadding: EdgeInsets.zero,
+                    value: 'import_bookshelf',
+                    child: ListTile(
+                      enabled: false,
+                      leading: Icon(Icons.file_download_outlined),
+                      title: Text('导入书架'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
                   ),
-                ),
-                // 8. 缓存/导出
-                PopupMenuItem(
-                  value: 'cache_export',
-                  child: ListTile(
-                    leading: Icon(Icons.download_outlined),
-                    title: Text('缓存/导出'),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
-                // 9. 分组管理（保留 manage_groups key 名 backward compat）
-                PopupMenuItem(
-                  value: 'manage_groups',
-                  child: ListTile(
-                    leading: Icon(Icons.folder_outlined),
-                    title: Text('分组管理'),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
-                // 10. 书架布局 — 真功能（27a 新增）
-                PopupMenuItem(
-                  value: 'bookshelf_layout',
-                  child: ListTile(
-                    leading: Icon(Icons.dashboard_outlined),
-                    title: Text('书架布局'),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
-                // 11. 导出书架 — 真功能（27a 新增）
-                PopupMenuItem(
-                  value: 'export_bookshelf',
-                  child: ListTile(
-                    leading: Icon(Icons.upload_file),
-                    title: Text('导出书架'),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
-                // 12. 导入书架 — 灰显占位
-                PopupMenuItem(
-                  enabled: false,
-                  value: 'import_bookshelf',
-                  child: ListTile(
+                  // 13. 日志 — 灰显占位
+                  PopupMenuItem(
                     enabled: false,
-                    leading: Icon(Icons.file_download_outlined),
-                    title: Text('导入书架'),
-                    contentPadding: EdgeInsets.zero,
+                    value: 'log',
+                    child: ListTile(
+                      enabled: false,
+                      leading: Icon(Icons.article_outlined),
+                      title: Text('日志'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
                   ),
-                ),
-                // 13. 日志 — 灰显占位
-                PopupMenuItem(
-                  enabled: false,
-                  value: 'log',
-                  child: ListTile(
-                    enabled: false,
-                    leading: Icon(Icons.article_outlined),
-                    title: Text('日志'),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ],
           bottom: TabBar(
@@ -523,6 +628,80 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('导出失败: $e')),
+      );
+    }
+  }
+
+  /// BATCH-27b (05-22): 当前 Tab 内非本地、可更新的书批量刷目录。
+  ///
+  /// 对齐原 legado `BaseBookshelfFragment.kt:98 activityViewModel.upToc(books)` +
+  /// `MainViewModel.kt:96-180 upToc/startUpTocJob`：
+  /// 1. 读当前 tab `(groupId, sortOrder)` → `booksByGroupProvider.future`
+  /// 2. filter `!isLocal && canUpdate`（local 判断对齐 import_local_book 落库
+  ///    时的 `source_id` 字段；local 书 source_id 是 'local'，远程书是真实
+  ///    source UUID。)
+  /// 3. 提取 bookIds → `UpdateTocRunner().enqueue(...)`，listen onProgress
+  ///    在 [initState] 已挂；这里 fire-and-forget。
+  /// 4. 空批早返回 + SnackBar「无可刷新的书」。
+  ///
+  /// 失败处理：单本失败由 runner 内部静默 catch + log；整批不抛错。结果
+  /// 总结 SnackBar 由 [initState] 的 onProgress listener 在 isDone 时弹。
+  Future<void> _onUpdateToc(
+    BuildContext context,
+    List<_TabSpec> tabSpec,
+    int sortOrder,
+  ) async {
+    try {
+      final controller = DefaultTabController.maybeOf(context);
+      final tabIndex = controller?.index ?? 0;
+      if (tabIndex < 0 || tabIndex >= tabSpec.length) {
+        return;
+      }
+      final groupId = tabSpec[tabIndex].groupId;
+      final books = await ref
+          .read(booksByGroupProvider((groupId, sortOrder)).future);
+      if (!context.mounted) return;
+      final ids = <String>[];
+      for (final b in books) {
+        // local 判断：import_local_book 落库时把 source_id 写成 'local'
+        // (core/bridge/src/local_book.rs ensure_local_source LOCAL_SOURCE_ID)。
+        // 远程书 source_id 是真实 UUID 形态，长度 + 字符集都不会撞。
+        // can_update：原 legado Book.canUpdate 默认 true；只在书源类型为
+        // 仅本地或用户手动关闭时为 false。Dart 端 schema 字段名是
+        // `can_update`（snake_case，与 storage::Book serde 输出一致）。
+        final sourceId = (b['source_id'] as String?)?.trim() ?? '';
+        if (sourceId.isEmpty || sourceId == 'local') continue;
+        final canUpdate = b['can_update'];
+        if (canUpdate is bool && !canUpdate) continue;
+        if (canUpdate is num && canUpdate == 0) continue;
+        final id = (b['id'] as String?) ?? '';
+        if (id.isEmpty) continue;
+        ids.add(id);
+      }
+      if (ids.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('当前 Tab 无可刷新的书')),
+        );
+        return;
+      }
+      final String dbPath =
+          widget.dbPathOverride ?? await ref.read(dbPathProvider.future);
+      if (!context.mounted) return;
+      // ignore: discarded_futures — enqueue 内部 fire-and-forget 启 worker，
+      // 调用方靠 onProgress 监听完成；此处不能 await，否则 SnackBar 在
+      // 跑完前不会弹。
+      UpdateTocRunner().enqueue(
+        ids,
+        dbPath: dbPath,
+        overrideFn: widget.updateBookTocOverride,
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已开始刷新目录（${ids.length} 本）')),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('刷新目录失败: $e')),
       );
     }
   }

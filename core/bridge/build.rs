@@ -130,6 +130,8 @@ const REQUIRED_WIRE_FN_FRAGMENTS: &[&str] = &[
     "wire__crate__api__rss_article_get_by_origin_link_impl",
     // BATCH-27a (bookshelf 导出 JSON) — 1 个 wire fn (funcId 111)
     "wire__crate__api__export_bookshelf_json_impl",
+    // BATCH-27b (单本目录刷新) — 1 个 wire fn (funcId 112)
+    "wire__crate__api__update_book_toc_impl",
 ];
 
 const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
@@ -214,6 +216,8 @@ const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
     "        110 =>",
     // BATCH-27a (bookshelf 导出 JSON) 手动 dispatch 注册
     "        111 =>",
+    // BATCH-27b (单本目录刷新) 手动 dispatch 注册
+    "        112 =>",
 ];
 
 /// R3: the dispatcher default arms must surface the unknown funcId
@@ -274,7 +278,7 @@ fn main() {
             "frb_generated.rs is missing {} hand-edited wire/dispatch fragment(s). \
              A `flutter_rust_bridge_codegen generate` run probably overwrote the manual \
              patches. This guard only covers the funcIds we know were hand-edited \
-             (currently 42-52 plus 54 and 57 plus 63-65 plus 66-70 plus 71-72 plus 73 plus 74-77 plus 78-81 plus 82-90 plus 91-96 plus 97-101 plus 102-108 plus 109 plus 110 plus 111; 53/55/56 are intentionally holes — 53 was never registered, 55/56 were deleted with `explore` / `get_explore_entries` in BATCH-07a, do not re-introduce), \
+             (currently 42-52 plus 54 and 57 plus 63-65 plus 66-70 plus 71-72 plus 73 plus 74-77 plus 78-81 plus 82-90 plus 91-96 plus 97-101 plus 102-108 plus 109 plus 110 plus 111 plus 112; 53/55/56 are intentionally holes — 53 was never registered, 55/56 were deleted with `explore` / `get_explore_entries` in BATCH-07a, do not re-introduce), \
              plus the R3 informative panic in the dispatcher default arms. \
              funcIds outside that range are produced by codegen and are NOT checked here, \
              so a regression in those needs separate attention. See CURRENT_STATUS.md \

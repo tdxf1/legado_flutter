@@ -88,8 +88,9 @@ void main() {
     }
   });
 
-  /// 2. 6 项灰显占位 enabled: false。
-  testWidgets('BATCH-27a: 6 disabled placeholder items have enabled=false',
+  /// 2. 灰显占位 enabled: false。
+  /// BATCH-27b: update_toc 从灰显改可点 → 灰显 6 → 5。enabled 项 6 → 7。
+  testWidgets('BATCH-27a: disabled placeholder items have enabled=false',
       (WidgetTester tester) async {
     await tester.pumpWidget(buildPage(exportFn: null));
     await tester.pumpAndSettle();
@@ -97,9 +98,8 @@ void main() {
     await tester.tap(find.byTooltip('更多'));
     await tester.pumpAndSettle();
 
-    // 期望灰显的 6 项 value
+    // 期望灰显的 5 项 value（27b 后 update_toc 已改可点）
     const disabledValues = <String>[
-      'update_toc',
       'add_remote',
       'add_url',
       'bookshelf_manage',
@@ -116,8 +116,9 @@ void main() {
       expect(widget.enabled, isFalse, reason: '$v 应 enabled: false');
     }
 
-    // 期望 enabled 的项也校验对应（对照组）
+    // 期望 enabled 的项也校验对应（对照组），27b 加 update_toc
     const enabledValues = <String>[
+      'update_toc',
       'import_local',
       'qr_scan',
       'cache_export',

@@ -949,6 +949,110 @@ pub fn export_bookshelf_json(db_path: String) -> Result<String, String> {
     serde_json::to_string_pretty(&entries).map_err(|e| format!("序列化失败: {}", e))
 }
 
+/// BATCH-27b: 单本书目录刷新（"更新目录"批量任务的 leaf FRB）。
+///
+/// 对齐原 legado `MainViewModel.kt:159 updateToc(bookUrl)`：
+///
+/// 1. `BookDao::get_by_id(book_id)` → 拿到 Book；找不到返错
+/// 2. `SourceDao::get_by_id(book.source_id)` → 拿到 BookSource；
+///    找不到返错（local book 应在 Dart 端 filter，不会进到这里）
+/// 3. `parser.get_chapters(&source, &toc_url_or_book_url)` → 拉远端 toc
+/// 4. `ChapterDao::replace_by_book_preserving_content_in_tx`
+///    保章节 content cache，与原版 `delByBook + insert` 等价
+/// 5. `BookDao::upsert_in_tx`：更新 `last_check_time = now` +
+///    `chapter_count = chapters.len()`，对齐原版 `book.totalChapterNum`
+/// 6. 返回新章节数（i32）
+///
+/// 步骤 4-5 走单事务（与 [`download_and_save_chapter`] / `import_local_book`
+/// 同款 `with_transaction` helper），中间 panic 时整批 rollback 不留脏
+/// 数据。FK / 外键由 `replace_by_book_preserving_content_in_tx` 保证：
+/// 必须先 BookDao::upsert（chapter.book_id 是外键），再写章节；这里反过
+/// 来——书在第 1 步已 get_by_id 拿到，先 replace 章节再 upsert book 元数
+/// 据是合法的（books.id 已存在）。
+///
+/// 错误信息含中文 context 对齐 `.trellis/spec/rust-core/error-handling.md`。
+pub async fn update_book_toc(db_path: String, book_id: String) -> Result<i32, String> {
+    // 1+2: 同一 Connection 内拿 Book + Source，避免两次 open_db
+    let (book, storage_source, toc_url) = {
+        let mut conn = open_db(&db_path)?;
+        let book = {
+            let dao = core_storage::book_dao::BookDao::new(&conn);
+            dao.get_by_id(&book_id)
+                .map_err(|e| format!("查询书 {} 失败: {}", book_id, e))?
+                .ok_or_else(|| format!("书不存在: {}", book_id))?
+        };
+        if book.source_id.trim().is_empty() {
+            return Err(format!("书 {} 缺少书源 ID（本地书无法刷新目录）", book_id));
+        }
+        let toc_url = book
+            .toc_url
+            .clone()
+            .filter(|t| !t.trim().is_empty())
+            .or_else(|| book.book_url.clone())
+            .filter(|u| !u.trim().is_empty())
+            .ok_or_else(|| format!("书 {} 缺少 book_url / toc_url", book_id))?;
+        let source_dao = core_storage::source_dao::SourceDao::new(&mut conn);
+        let storage_source = source_dao
+            .get_by_id(&book.source_id)
+            .map_err(|e| format!("查询书源 {} 失败: {}", book.source_id, e))?
+            .ok_or_else(|| format!("书源不存在: {}", book.source_id))?;
+        (book, storage_source, toc_url)
+    };
+
+    // 3: 转 storage::BookSource → core_source::types::BookSource 后跑 parser
+    let source = storage_to_source_book_source(&storage_source)?;
+    let parser = core_source::parser::BookSourceParser::new();
+    let chapter_infos = match parser.get_chapters(&source, &toc_url).await {
+        Ok(c) => c,
+        Err(core_source::ParserError::Empty) => {
+            return Err(format!("书 {} 章节列表为空（书源规则未匹配）", book_id));
+        }
+        Err(e) => {
+            return Err(format!("书 {} 章节列表抓取失败: {}", book_id, e));
+        }
+    };
+
+    let now = chrono::Utc::now().timestamp();
+    let total_count = chapter_infos.len() as i32;
+    let book_id_owned = book_id.clone();
+    let storage_chapters: Vec<core_storage::models::Chapter> = chapter_infos
+        .iter()
+        .map(|ch| core_storage::models::Chapter {
+            id: uuid::Uuid::new_v4().to_string(),
+            book_id: book_id_owned.clone(),
+            index_num: ch.index,
+            title: ch.title.clone(),
+            url: ch.url.clone(),
+            content: None, // preserve 路径会从已有章节拷回
+            is_volume: ch.is_volume,
+            is_checked: false,
+            start: 0,
+            end: 0,
+            created_at: now,
+            updated_at: now,
+        })
+        .collect();
+
+    // 4+5: 单事务：替换章节（保留 content cache）+ 更新书元数据
+    crate::transaction::with_transaction(&db_path, |tx| {
+        core_storage::chapter_dao::ChapterDao::replace_by_book_preserving_content_in_tx(
+            tx,
+            &book_id_owned,
+            &storage_chapters,
+        )
+        .map_err(|e| format!("替换章节失败: {}", e))?;
+        let mut updated = book.clone();
+        updated.chapter_count = total_count;
+        updated.last_check_time = Some(now);
+        updated.updated_at = now;
+        core_storage::book_dao::BookDao::upsert_in_tx(tx, &updated)
+            .map_err(|e| format!("更新书元数据失败: {}", e))?;
+        Ok(())
+    })?;
+
+    Ok(total_count)
+}
+
 // ============================================================
 // 替换规则 (Replace Rules) — 返回 JSON 字符串
 // ============================================================
@@ -2875,5 +2979,45 @@ mod export_bookshelf_tests {
         // 缺失字段落回空串，不是 null
         assert_eq!(v2["author"].as_str().unwrap(), "");
         assert_eq!(v2["intro"].as_str().unwrap(), "");
+    }
+
+    /// BATCH-27b: 不存在的 book_id 返「书不存在」错误，不 panic / unwrap。
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_update_book_toc_book_not_found() {
+        let (_dir, db_path) = fresh_db();
+        let err = update_book_toc(db_path, "no_such_book".to_string())
+            .await
+            .unwrap_err();
+        assert!(err.contains("书不存在"), "实际错误: {}", err);
+    }
+
+    /// BATCH-27b: 书的 source_id 指向不存在的书源时返「书源不存在」错误。
+    /// 这种 case 在生产里出现于：用户删了书源但没删依赖该书源的书，或
+    /// 数据库恢复时 source 表被截断。Dart 端会把错信息浮到 SnackBar。
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_update_book_toc_no_source() {
+        let (_dir, db_path) = fresh_db();
+        // 插一本 book，source_id 指向 fresh_db 里建的 's1'，但下面 DELETE
+        // 把 's1' 删掉，造成 dangling source_id。注意 books.source_id 是
+        // 外键 ON DELETE 没设 CASCADE / SET NULL（schema v11 默认），所以
+        // 直接 DELETE source 在 PRAGMA foreign_keys=ON 下会失败 —— 改先
+        // 关闭 FK 再插一条 dangling source_id 的 book。
+        {
+            let conn = open_db(&db_path).unwrap();
+            conn.execute("PRAGMA foreign_keys = OFF", []).unwrap();
+            // 用合规字段集插书：source_id 用一个不存在的 id
+            conn.execute(
+                "INSERT INTO books (id, source_id, name, chapter_count, last_check_count, total_word_count, can_update, order_time, dur_chapter_index, dur_chapter_pos, dur_chapter_time, group_id, book_url, toc_url, created_at, updated_at) \
+                 VALUES ('b_dangling', 's_missing', 'Dangling', 0, 0, 0, 1, 0, 0, 0, 0, 0, 'https://e/b', 'https://e/toc', 1, 1)",
+                [],
+            )
+            .unwrap();
+            conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        }
+
+        let err = update_book_toc(db_path, "b_dangling".to_string())
+            .await
+            .unwrap_err();
+        assert!(err.contains("书源不存在"), "实际错误: {}", err);
     }
 }

@@ -486,6 +486,9 @@ abstract class RustLibApi extends BaseApi {
       {required String dbPath, required String origin, required String link});
 
   Future<String> crateApiExportBookshelfJson({required String dbPath});
+
+  Future<int> crateApiUpdateBookToc(
+      {required String dbPath, required String bookId});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -3567,6 +3570,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiExportBookshelfJsonConstMeta => const TaskConstMeta(
         debugName: "export_bookshelf_json",
         argNames: ["dbPath"],
+      );
+
+  @override
+  Future<int> crateApiUpdateBookToc(
+      {required String dbPath, required String bookId}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(bookId, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 112, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_i_32,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiUpdateBookTocConstMeta,
+      argValues: [dbPath, bookId],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiUpdateBookTocConstMeta => const TaskConstMeta(
+        debugName: "update_book_toc",
+        argNames: ["dbPath", "bookId"],
       );
 
   @protected

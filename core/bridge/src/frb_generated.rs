@@ -1865,6 +1865,45 @@ fn wire__crate__api__export_bookshelf_json_impl(
         },
     )
 }
+// BATCH-27b (funcId 112) — update_book_toc(db_path, book_id) -> Result<i32, String>
+fn wire__crate__api__update_book_toc_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "update_book_toc",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_db_path = <String>::sse_decode(&mut deserializer);
+            let api_book_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok =
+                            crate::api::update_book_toc(api_db_path, api_book_id).await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 // funcId 93 — rss_mark_read(db_path, link, ts) -> Result<i64, String>
 fn wire__crate__api__rss_mark_read_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
@@ -4325,6 +4364,8 @@ fn pde_ffi_dispatcher_primary_impl(
         110 => wire__crate__api__rss_article_get_by_origin_link_impl(port, ptr, rust_vec_len, data_len),
         // BATCH-27a (bookshelf 导出 JSON) — 手动 wire fn 注册
         111 => wire__crate__api__export_bookshelf_json_impl(port, ptr, rust_vec_len, data_len),
+        // BATCH-27b (单本目录刷新) — 手动 wire fn 注册
+        112 => wire__crate__api__update_book_toc_impl(port, ptr, rust_vec_len, data_len),
         // R3: codegen default branch hit at runtime means Rust and Dart
         // have inconsistent funcId tables. build.rs catches this at
         // compile time when both sides are visible (R3 cross-check),

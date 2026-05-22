@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
+import 'update_toc_runner.dart' show UpdateTocProgress;
+
 class NotificationService {
   static const _channel = MethodChannel('legado/notifications');
   static final FlutterLocalNotificationsPlugin _plugin =
@@ -132,6 +134,77 @@ class NotificationService {
       await _plugin.cancel(id);
     } catch (e) {
       debugPrint('[Notification] cancel($id) failed: $e');
+    }
+  }
+
+  /// BATCH-27b: 批量「更新目录」进度通知。与
+  /// [showDownloadProgress] / [showDownloadComplete] 同模式，但只用一个
+  /// 方法（progress.isDone 决定 ongoing / autoCancel / 文案）。
+  ///
+  /// notificationId 99001（与 download 99000 区分），让用户同时跑下载 +
+  /// 刷目录时两个 notification 不互相覆盖。
+  static Future<void> showUpdateTocProgress(UpdateTocProgress progress) async {
+    try {
+      if (!await hasPermission()) return;
+      if (progress.isDone) {
+        await _plugin.show(
+          99001,
+          '目录刷新完成',
+          progress.fail > 0
+              ? '完成 (成功: ${progress.success}, 失败: ${progress.fail})'
+              : '已刷新 ${progress.success} 本',
+          NotificationDetails(
+            android: AndroidNotificationDetails(
+              _downloadChannelId,
+              _downloadChannelName,
+              channelDescription: '书架批量任务进度',
+              importance: Importance.defaultImportance,
+              priority: Priority.defaultPriority,
+              ongoing: false,
+              autoCancel: true,
+              icon: 'ic_notification',
+            ),
+            iOS: const DarwinNotificationDetails(
+              presentAlert: true,
+              presentBadge: true,
+              // BATCH-27b spec「批量任务 + Notification 通道契约」: isDone
+              // 阶段 presentSound: true 提醒用户（与 showDownloadComplete
+              // 同款 / spec 段「ongoing/autoCancel 二段」决策一致）。
+              presentSound: true,
+            ),
+          ),
+        );
+        return;
+      }
+      if (progress.total <= 0) return; // 空批不显示通知
+      await _plugin.show(
+        99001,
+        '正在更新目录...',
+        '${progress.processed}/${progress.total}'
+        '${progress.fail > 0 ? '  (失败: ${progress.fail})' : ''}',
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            _downloadChannelId,
+            _downloadChannelName,
+            channelDescription: '书架批量任务进度',
+            importance: Importance.low,
+            priority: Priority.low,
+            ongoing: true,
+            onlyAlertOnce: true,
+            showProgress: true,
+            maxProgress: progress.total,
+            progress: progress.processed,
+            icon: 'ic_notification',
+          ),
+          iOS: const DarwinNotificationDetails(
+            presentAlert: false,
+            presentBadge: true,
+            presentSound: false,
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('[Notification] showUpdateTocProgress failed: $e');
     }
   }
 

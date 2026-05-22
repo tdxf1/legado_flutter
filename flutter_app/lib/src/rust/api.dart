@@ -401,6 +401,21 @@ Future<String> exportAllSources({required String dbPath}) =>
 Future<String> exportBookshelfJson({required String dbPath}) =>
     RustLib.instance.api.crateApiExportBookshelfJson(dbPath: dbPath);
 
+/// BATCH-27b: 刷新单本书的目录（"更新目录"批量任务的 leaf FRB）。
+///
+/// 流程：BookDao + SourceDao 拿数据 → parser.get_chapters 抓远端 toc →
+/// 单事务写章节（保 content cache）+ 更新书 chapter_count / last_check_time。
+/// 返回新章节数。
+///
+/// 错误：书 / 书源不存在、书源未配置 rule_toc、网络抓取失败等都返
+/// `Future.error(String)`，调用方自行 catch 决定是否记 fail 计数。
+/// 本地书（`source_id` 为空）应在 Dart 端 filter 掉，不会进到这里；
+/// 真到这里也会返「缺少书源 ID」错。
+Future<int> updateBookToc(
+        {required String dbPath, required String bookId}) =>
+    RustLib.instance.api
+        .crateApiUpdateBookToc(dbPath: dbPath, bookId: bookId);
+
 /// 获取所有替换规则，返回 JSON 数组
 Future<String> getReplaceRules({required String dbPath}) =>
     RustLib.instance.api.crateApiGetReplaceRules(dbPath: dbPath);
