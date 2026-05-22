@@ -1,7 +1,7 @@
 name: legado_flutter
 description: Legado Flutter - 基于Flutter+Rust重构的开源阅读应用
 publish_to: 'none'
-version: 0.1.0+1
+version: 0.1.1+2
 
 environment:
   # 批次 BATCH-06: sdk 下限 3.0.0 → 3.3.0，与 mobile_scanner 5.x 要求对齐
