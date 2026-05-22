@@ -1069,8 +1069,9 @@ PreferredSizeWidget _buildAppBar(BuildContext context) {
 **测试钩子（BATCH-27c-4 范本）**：
 
 - `remote_book_sort_persist_test.dart` × 10 unit-persistence 测试：sort key round-trip name/time × 2 / load 不存在 → default time / 损坏 JSON 字符串值 → 兜回 time / 损坏类型（int 非 String）→ 兜回 time / save 非法 key → fallback 写 time / sort asc round-trip true/false × 2 / load 不存在 → default true / 损坏类型（String 非 bool）→ 兜回 true。`Directory.systemTemp.createTempSync` + `addTearDown` 兜底清理。
-- `remote_books_page_test.dart` 既有 12 testWidgets 不变；`buildPage` helper 加 `sortKey/sortAsc` 参数注入到 `RemoteBooksPage.sortKeyOverride / sortAscOverride`，避免触 path_provider。**27c-4 widget 测试覆盖（≥6 项）留 27c-4-followup**：sub-agent 输出截断未追加，production 代码 + helper 注入参数已就绪。
-- 27c-4-followup 待覆盖测试（参考 PRD §7 R3-R6）：默认 sort PopupMenu trailing check / 选「按名称（降）」→ entries 顺序变 / 搜索 IconButton → AppBar 切搜索模式 / debounce 300ms + 空 query 立即清 / mode 互斥（搜索 ↔ 选择）/ 下钻清搜索 + 保留排序。
+- `remote_books_page_test.dart` 既有 12 testWidgets（27c-1 + 27c-3）不变；BATCH-27c-4-followup 追加 7 项 27c-4 widget 测试（共 19 项）；`buildPage` helper 加 `sortKey/sortAsc` 参数注入到 `RemoteBooksPage.sortKeyOverride / sortAscOverride`，避免触 path_provider。
+- 27c-4 7 项 widget 覆盖（BATCH-27c-4-followup 落地）：默认 sort PopupMenu trailing check / 选「按名称（降）」→ entries 顺序变（文件夹永远在前 + 名称倒序）/ 搜索 IconButton → AppBar 切搜索模式 / debounce 300ms + 空 query 立即清 / mode 互斥（搜索模式下长按文件被忽略）/ mode 互斥（选择模式下搜索 IconButton 不可见）/ 下钻清搜索 + 保留排序。
+- 测试 fixture：mixedListDir 4 项（folderA + 3 files），lastModified 时间分布让时间排序可观察。`download_outlined` icon 在 ListView file 项 trailing 与 AppBar action 同名，AppBar scope 测试**必须**用 `find.descendant(of: find.byType(AppBar), matching: find.byIcon(...))` 限定查找范围 — 否则 R5 mode 互斥测试会将 ListView 内的 file trailing icon 误判为 AppBar action 失败。
 
 **Forbidden 反向（BATCH-27c-4 新增 4 条）**：
 
