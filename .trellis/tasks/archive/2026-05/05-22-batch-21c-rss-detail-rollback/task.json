@@ -1,0 +1,17 @@
+{
+  "id": "05-22-batch-21c-rss-detail-rollback",
+  "title": "BATCH-21c RSS detail → list rollback 通信（GoRouter result + PopScope）",
+  "createdAt": "2026-05-22",
+  "completedAt": "2026-05-22",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "depends_on": ["05-21-batch-21-rss-search-reactivity"],
+  "context": {
+    "findings": ["F-W2B-012"],
+    "follow_up_of": "BATCH-21",
+    "scope": "RSS detail mark_read 失败时 GoRouter result 回传 → list rollback optimistic read_time"
+  }
+}

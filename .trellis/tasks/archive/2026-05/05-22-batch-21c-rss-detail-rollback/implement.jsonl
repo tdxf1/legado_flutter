@@ -1,0 +1,6 @@
+{"role": "system", "content": "BATCH-21c implement context"}
+{"file": ".trellis/tasks/05-22-batch-21c-rss-detail-rollback/prd.md", "reason": "本批 PRD（GoRouter result 路径设计 + 风险点）"}
+{"file": "flutter_app/lib/features/rss/rss_article_detail_page.dart", "reason": "加 MarkReadResult enum + _markReadResult 字段 + _bootstrap 三路径设值 + PopScope/leading IconButton context.pop(result)"}
+{"file": "flutter_app/lib/features/rss/rss_article_list_page.dart", "reason": "_onArticleTap 改 await + result rollback 分支（line 262-287）"}
+{"file": "flutter_app/lib/core/router.dart", "reason": "/rss-articles-detail GoRoute 现状参考，type 不需改"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "新增「跨页通信模式 (BATCH-21c)」小节"}
