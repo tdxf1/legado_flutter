@@ -241,6 +241,8 @@
 
 **未做**：detail → list 的 rollback 通信机制（GoRouter `state.extra` 回传 / Riverpod 通知）— PRD Out of Scope，留 BATCH-21c future work（rollback 复杂度高 ROI 低）。
 
+**Resolution (BATCH-21c, 2026-05-22)**: 完整收尾。选 GoRouter result 路径而非 Riverpod 跨页 StateProvider（不引入跨页状态管理复杂度）。新增 `MarkReadResult` 三态枚举（`success` / `failed` / `skipped`）置 `rss_article_detail_page.dart` 顶部公开。`_RssArticleDetailPageState._bootstrap` mark_read 三路径设值：try 成功 → `success`；catch → `failed`；不进 if 分支（readTime != 0 / link 空）保持默认 `skipped`。`build` 用 `PopScope(canPop: true, onPopInvokedWithResult: (didPop, _) {})` 包 `Scaffold` + AppBar `leading: IconButton(arrow_back, onPressed: () => context.pop(_markReadResult))` 替换默认 back 让 result 携带（Flutter 3.41.9 SDK，3.22+ 新 API）。list 端 `_onArticleTap` `await context.push<MarkReadResult>(...)`，仅 `result == failed` 时 setState 回滚 `read_time = 0` + SnackBar；`success` / `skipped` / `null`（OS back）保留 optimistic 走老软一致兜底。OS back 路径 result null 是已知 limitation（PopScope 在 OS back 时 pop 已发生无法携带 result），文档化在 spec 「跨页通信模式 (BATCH-21c)」段。新增 6 widget test：detail 3 case（success/failed/skipped）+ list 3 case（failed rollback / success 保留 / null 保留）。flutter test 542 PASS（baseline 536 + 6 新）。task: 05-22-batch-21c-rss-detail-rollback。
+
 ---
 
 ### F-W2B-013 [P1 主要][C-性能][rss/article_list]

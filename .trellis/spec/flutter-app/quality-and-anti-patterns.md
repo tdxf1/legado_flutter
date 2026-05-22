@@ -537,6 +537,96 @@ class _XxxState extends State<XxxPage> {
 - `search_page_test.dart::BATCH-21 (F-W2B-019): seq token` — 用 hanging dbInitializedProvider future 让两次 `_doSearch` 都悬停，验 `debugSearchSeq` 从 1 自增到 2，`debugLastSearchKeyword` 不被旧 future 覆盖
 
 
+## 跨页通信模式 (BATCH-21c)
+
+GoRouter `context.push<T>(...).then((result) { ... })` 是项目跨页通信首选模式。**不**为简单的"detail → list 状态回传"引入 Riverpod 跨页 `StateProvider` / `StateProvider.family`，避免无谓的状态管理复杂度。
+
+### MarkReadResult 模式（detail → list 三态回传）
+
+适用场景：detail 页有 optimistic state 需要 rollback / commit 决策；list 端按结果分支处理。BATCH-21c 用此模式收尾 F-W2B-012 — RSS list optimistic read_time 在 detail mark_read **失败**时主动 rollback。
+
+```dart
+// detail 端：top-level enum + state field 跟踪三种结果
+enum MarkReadResult {
+  success,  // 真正写库成功（含原本已读跳过的情况）
+  failed,   // 写库抛异常（FRB / 网络 / db lock）
+  skipped,  // 未走到写库（早返回 / 入参缺 / 状态已是目标值）
+}
+
+class _XxxDetailState extends ConsumerState<XxxDetail> {
+  MarkReadResult _result = MarkReadResult.skipped; // 默认兜底
+
+  Future<void> _bootstrap() async {
+    // ...拉数据...
+    if (条件) {
+      try {
+        await rust_api.markRead(...);
+        _result = MarkReadResult.success;
+      } catch (_) {
+        _result = MarkReadResult.failed;
+      }
+    }
+    // 不进 if 分支保持默认 skipped
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, _) {},
+      child: Scaffold(
+        appBar: AppBar(
+          // 替换默认 leading 让 AppBar back 携带 result
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => context.pop(_result),
+          ),
+          // ...
+        ),
+      ),
+    );
+  }
+}
+
+// list 端：await context.push + 仅 failed 时 rollback
+final result = await context.push<MarkReadResult>('/detail?...');
+if (!mounted) return;
+if (result == MarkReadResult.failed) {
+  setState(() {
+    article['read_time'] = 0; // rollback optimistic
+  });
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(content: Text('已读状态同步失败，下次刷新会重试')),
+  );
+}
+// success / skipped / null（OS back）→ 保留 optimistic
+```
+
+### OS back 限制（已知 trade-off）
+
+`PopScope.onPopInvokedWithResult` 在 OS back / 手势返回 / iOS swipe back 时 `didPop=true` 表示 pop 已发生，**无法**再携带 result。这条路径上 list 收到的 `result` 是 `null`，必须走 fall-back 软一致策略：保留 optimistic state，等下次刷新自然修正。
+
+仅 **AppBar leading IconButton / 主动 `context.pop(result)`** 路径携带 result。
+
+不适合扩展到"任何 detail 修改都要回传 list rollback"——detail 修改的 state 已是单一 source of truth（无 optimistic）时不需要这条通道。
+
+### 三态 vs 两态
+
+为什么 `success / failed / skipped` 而非 `bool`：
+- `failed` 要 rollback；`success` 不要 rollback；`skipped` **也不要** rollback（db 状态未变）
+- `bool` 表达不出 success vs skipped 的区别 —— skipped 路径 (article 原本已读 / link 空 / _error 早返回) 让默认 `false` 会被误判为 failed 触发 rollback
+- enum 让 detail 端「未进 mark_read 分支」与「mark_read 抛错」语义分离
+
+### 显式类型参数
+
+GoRouter `context.push<T>(...)` 必须显式声明类型参数。无类型参数时返回 `Future<Object?>`，强转风险大；显式 `context.push<MarkReadResult>(...)` 让 Dart 直接推断为 `Future<MarkReadResult?>`（null 兜 OS back 路径）。
+
+### 测试钩子（BATCH-21c 范本）
+
+- `rss_article_detail_page_test.dart::BATCH-21c (F-W2B-012)` × 3 — markRead success / throws / skipped (already read) 三路径分别走 `MaterialApp.router(GoRouter(...))` push detail → tap leading back → 验 `Future<MarkReadResult?>` 落到对应枚举值
+- `rss_article_list_page_test.dart::BATCH-21c (F-W2B-012)` × 3 — 把 `/rss-articles-detail` 路由 stub 成 `_DetailStubPage` 在 postFrame 立刻 `context.pop(returns)`，验 list 端在 failed → setState rollback + SnackBar；success / null → 保留 optimistic 不弹 SnackBar
+
+
 ## Performance Notes
 
 - `cached_network_image` is the only blessed image cache. Don't add a parallel `Image.network` call site.
