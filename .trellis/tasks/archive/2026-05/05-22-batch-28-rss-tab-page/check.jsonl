@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "BATCH-28 是否新违反 Forbidden + 是否补 28 子节 + testing.md 覆盖度"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "testWidgets 覆盖度 + tearDown 清理 check"}
+{"file": ".trellis/spec/flutter-app/persistence.md", "reason": "settings.json key 命名空间合规（若持久化分组选择）"}

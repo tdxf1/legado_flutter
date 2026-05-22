@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "BATCH-27d-followup 横向 ChoiceChip 范本 + 测试钩子模式 + 凭据保险柜 + 27a 表 PopupMenu"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "Riverpod state + override 注入模式 + ref.invalidate(allBooksProvider) 范本"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "*Override 模式 + testWidgets fixture + tearDown 清理"}
+{"file": ".trellis/spec/flutter-app/persistence.md", "reason": "settings.json key 命名空间 + IO 路径 — 若需持久化分组选择"}
+{"file": ".trellis/tasks/archive/2026-05/05-22-batch-27d-followup-bookshelf-manage/prd.md", "reason": "27d-followup ChoiceChip 范本 + _filterGroupId state 设计依据"}
