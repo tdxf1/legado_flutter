@@ -23,6 +23,10 @@ class PageViewWidget extends StatefulWidget {
   /// 走 [onChapterBoundary]）。
   final ChapterBoundaryCallback? onCrossChapter;
 
+  /// Bug 3: MD3 isCompleted 门控 — 当前章排版完成前阻断 touch 事件。
+  /// 默认 true 保持向后兼容（非 reader_page 调用方不受影响）。
+  final bool isPageLayoutReady;
+
   /// Test-only sink. Whenever the internal [PageDelegate] is (re)created,
   /// this callback is invoked with the fresh instance so widget tests can
   /// observe `startTouch`, `isRunning`, etc. without exposing private state.
@@ -39,6 +43,7 @@ class PageViewWidget extends StatefulWidget {
     this.pageAnim = 0,
     this.onChapterBoundary,
     this.onCrossChapter,
+    this.isPageLayoutReady = true,
     this.debugDelegateSink,
   });
 
@@ -306,6 +311,16 @@ class _PageViewWidgetState extends State<PageViewWidget>
 
   @override
   Widget build(BuildContext context) {
+    // Bug 3: MD3 isCompleted 门控 — 排版完成前阻断所有触摸事件
+    if (!widget.isPageLayoutReady) {
+      return IgnorePointer(
+        child: _buildContent(context),
+      );
+    }
+    return _buildContent(context);
+  }
+
+  Widget _buildContent(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final size = Size(constraints.maxWidth, constraints.maxHeight);

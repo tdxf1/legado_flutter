@@ -185,6 +185,11 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
   final ValueNotifier<DateTime> _nowNotifier = ValueNotifier(DateTime.now());
   Timer? _clockTimer;
 
+  /// Bug 3: MD3 isCompleted 门控 — 当前章排版完成前阻断手势。
+  /// 在 [_openChapter] 内 loadChapter 后通过 postFrameCallback 翻为 true；
+  /// [PageViewWidget] 用此 flag 决定是否 IgnorePointer。
+  bool _isPageLayoutReady = false;
+
   /// 批次 14 (05-19): 阅读时长统计 ticker。每 60s 调
   /// [`rust_api.addReadTime`] 累加 60 秒。后台 / 前台切换通过
   /// [didChangeAppLifecycleState] 把 [_isReadTimePaused] 翻成 true / false
@@ -492,7 +497,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
         dbPath: dbPath,
         sourceId: sourceId,
         chapterUrl: chapterUrl,
-      );
+      ).timeout(const Duration(seconds: 10));
       if (json.isNotEmpty && json != 'null') {
         try {
           final data = jsonDecode(json);
@@ -711,6 +716,11 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
         } else {
           _pageViewController?.updateSettings(_settings);
           _pageViewController?.loadChapter(index, title, content);
+          // Bug 3: 排版完成后翻 flag 解除手势阻断
+          _isPageLayoutReady = false;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) safeSetState(() => _isPageLayoutReady = true);
+          });
         }
       });
       // T1 (05-18): page-mode 启动恢复链路最后一步 — measure 完后通过
@@ -726,8 +736,10 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       _fetchSourceInfo();
     } catch (e) {
       if (!mounted || requestId != _chapterRequestId) return;
+      // Bug 2: TimeoutException → show retryable error message
+      final errorMsg = e is TimeoutException ? '正文加载失败' : '加载失败: $e';
       setState(() {
-        _chapterContent = '加载失败: $e';
+        _chapterContent = errorMsg;
         _isLoadingContent = false;
       });
     }
@@ -2023,6 +2035,10 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
   }
 
   Widget _buildContinuousBody(ReaderSettings settings) {
+    // Bug 2: 超时/加载失败状态
+    if (_chapterContent == '正文加载失败') {
+      return _buildContentTimeoutView();
+    }
     final textStyle = TextStyle(
       fontSize: settings.fontSize,
       fontWeight:
@@ -2097,19 +2113,76 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     );
   }
 
+  /// Bug 2: 章节内容加载超时/失败的不可操作提示。点击触发重试。
+  Widget _buildContentTimeoutView() {
+    final bgColor = Color(_settings.effectiveBackgroundColor);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _refreshChapter,
+      child: Container(
+        color: bgColor,
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.error_outline,
+                  size: 48, color: Colors.grey.withValues(alpha: 0.6)),
+              const SizedBox(height: 12),
+              Text(
+                '正文加载失败',
+                style: TextStyle(
+                  color: Color(_settings.effectiveTextColor).withValues(alpha: 0.6),
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '点击重试',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.primary,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildPageBody(ReaderSettings settings) {
-    if (_chapterContent.isEmpty && _isLoadingContent) {
-      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+    // Bug 2: 超时/加载失败状态 — 显示重试界面
+    if (_chapterContent == '正文加载失败') {
+      return _buildContentTimeoutView();
     }
-    if (_pageViewController == null) {
-      return const Center(child: Text('加载中...'));
-    }
-    return PageViewWidget(
-      controller: _pageViewController!,
-      settings: settings,
-      pageAnim: settings.pageAnim,
-      onChapterBoundary: _onPageChapterBoundary,
-      onCrossChapter: _onCrossChapterCommit,
+    // Bug 1: 轻量修复 — spinner→内容过渡用 AnimatedOpacity 淡入
+    // AnimatedOpacity 常驻树内：首次加载时 opacity 0→1 动画；后续翻章
+    // （_chapterContent 已有旧内容）opacity 保持 1，旧内容不消失，无缝
+    // 切换到新内容。
+    final canShow = _chapterContent.isNotEmpty;
+    return Stack(
+      children: [
+        AnimatedOpacity(
+          opacity: canShow && _pageViewController != null ? 1.0 : 0.0,
+          duration: const Duration(milliseconds: 200),
+          child: _pageViewController != null
+              ? PageViewWidget(
+                  controller: _pageViewController!,
+                  settings: settings,
+                  pageAnim: settings.pageAnim,
+                  onChapterBoundary: _onPageChapterBoundary,
+                  onCrossChapter: _onCrossChapterCommit,
+                  isPageLayoutReady: _isPageLayoutReady,
+                )
+              : const SizedBox.shrink(),
+        ),
+        // Spinner overlay — only on first load (no previous content)
+        if (_chapterContent.isEmpty && _isLoadingContent)
+          const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        // No-controller fallback
+        if (_pageViewController == null && _chapterContent.isEmpty && !_isLoadingContent)
+          const Center(child: Text('加载中...')),
+      ],
     );
   }
 
@@ -2139,6 +2212,11 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       _pageViewController?.updateSettings(_settings);
       _pageViewController?.loadChapter(targetIndex, title, content,
           jumpToLast: isPrev);
+      // Bug 3: 翻章后重置门控，排版完成后解除手势阻断
+      _isPageLayoutReady = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) safeSetState(() => _isPageLayoutReady = true);
+      });
       _preloadAdjacentContent(targetIndex, chapters);
       _preCachePrevChapter(targetIndex, chapters);
       _measureAdjacentChapters(targetIndex);

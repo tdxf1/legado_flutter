@@ -87,11 +87,12 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
   Offset? _animTargetTouch;
   double _animStartProgress = 0.0;
 
-  // 颜色滤镜：背面页变暗（matrix 单位）
+  // Bug 4: 对齐 MD3 — 背面页 ColorFilter 改为 identity matrix（去掉 0.85 暗化）。
+  // MD3 `SimulationPageDelegate.kt` mColorMatrixFilter 是 identity，不做亮度衰减。
   static final ColorFilter _backFilter = const ColorFilter.matrix(<double>[
-    0.85, 0, 0, 0, 0,
-    0, 0.85, 0, 0, 0,
-    0, 0, 0.85, 0, 0,
+    1, 0, 0, 0, 0,
+    0, 1, 0, 0, 0,
+    0, 0, 1, 0, 0,
     0, 0, 0, 1, 0,
   ]);
 
@@ -111,6 +112,36 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
     // T2 (05-18) note: 此时 _direction == none，方向未定。corner 暂按 startTouch
     // 算（next 几何）。等 [onDragUpdate] 检测到 PREV 方向后再走
     // [_setDirectionMirrorCorner] 镜像，对齐 MD3 setDirection。
+  }
+
+  /// Bug 4: MD3 onTouch MOVE touchY override
+  ///
+  /// 对应 Legado MD3 `SimulationPageDelegate.onTouch` (L173-L185):
+  /// - 从屏幕中间 1/3 拖拽时，强制 touchY=pageHeight，折线锚定到底部
+  /// - PREV 方向总是强制 touchY=pageHeight
+  /// - NEXT 方向 + startY 在上中 1/3 → touchY=1（强制到顶）
+  ///
+  /// 只在 drag 路径应用（!isRunning），tap 动画路径已经有精确的虚拟起点。
+  @override
+  void recordTouchUpdate(Offset current) {
+    if (!isRunning) {
+      final h = pageSize.height;
+      final startY = startTouch.dy;
+      if (h > 0) {
+        if ((startY > h / 3 && startY < h * 2 / 3) ||
+            direction == PageDirection.prev) {
+          super.recordTouchUpdate(Offset(current.dx, h));
+          return;
+        }
+        if (startY > h / 3 &&
+            startY < h / 2 &&
+            direction == PageDirection.next) {
+          super.recordTouchUpdate(Offset(current.dx, 1));
+          return;
+        }
+      }
+    }
+    super.recordTouchUpdate(current);
   }
 
   /// T2 (05-18): drag 路径方向首次确定时（slop 越过、_direction 从 none 切到
@@ -361,48 +392,41 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
   ///
   /// Bug fix（Task 6）：如果 nextPicture 为 null（因任何原因未成功渲染），
   /// 跳过动画直接翻页，避免"动画期间画面静止，结束后内容跳变"。
+  /// Bug 3: 但有 boundaryNextPage 时（跨章边界），即使 nextPicture 为 null
+  /// 也继续走动画路径 — draw 方法会 fallback 到 drawStaticPage 填充帧，
+  /// 确保翻章动画始终播放（对齐 MD3）。
   @override
   void goToNext() {
     if (_animStartTouch == null) {
       _setupDragAnim(PageDirection.next);
     }
-    if (nextPicture == null) {
-      debugPrint('[SimulationDelegate] goToNext: nextPicture=null, skipping animation');
-      if (controller.hasNext) {
-        controller.goToNextPage();
-      } else if (controller.boundaryNextPage != null) {
-        controller.commitToNextChapter();
-        onCrossChapter?.call(PageDirection.next);
-      } else {
-        resetState();
-        onChapterBoundary?.call(PageDirection.next);
-        return;
-      }
+    if (nextPicture == null &&
+        !controller.hasNext &&
+        controller.boundaryNextPage == null) {
+      // Truly no content to animate to — fallback to static chapter switch
+      debugPrint(
+          '[SimulationDelegate] goToNext: no nextPicture + no boundaryNextPage, skipping animation');
       resetState();
+      onChapterBoundary?.call(PageDirection.next);
       return;
     }
     super.goToNext();
   }
 
-  /// 对称修复：prev 路径同样检查 prevPicture。
+  /// Bug 3: 对称修复 — prev 路径同样在有 boundaryPrevPage 时不跳过动画。
   @override
   void goToPrev() {
     if (_animStartTouch == null) {
       _setupDragAnim(PageDirection.prev);
     }
-    if (prevPicture == null) {
-      debugPrint('[SimulationDelegate] goToPrev: prevPicture=null, skipping animation');
-      if (controller.hasPrev) {
-        controller.goToPrevPage();
-      } else if (controller.boundaryPrevPage != null) {
-        controller.commitToPrevChapter();
-        onCrossChapter?.call(PageDirection.prev);
-      } else {
-        resetState();
-        onChapterBoundary?.call(PageDirection.prev);
-        return;
-      }
+    if (prevPicture == null &&
+        !controller.hasPrev &&
+        controller.boundaryPrevPage == null) {
+      // Truly no content to animate to
+      debugPrint(
+          '[SimulationDelegate] goToPrev: no prevPicture + no boundaryPrevPage, skipping animation');
       resetState();
+      onChapterBoundary?.call(PageDirection.prev);
       return;
     }
     super.goToPrev();

@@ -59,6 +59,10 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   bool _precisionMode = false;
   List<String> _searchHistory = [];
 
+  /// Bug 5: 本地书架搜索与在线书源搜索结果分开存储，UI 双 Section 展示。
+  List<Map<String, dynamic>> _localResults = [];
+  List<Map<String, dynamic>> _onlineResults = [];
+
   /// Task X3 (Bug A) — 记忆上一次搜索的 keyword。
   ///
   /// `_togglePrecisionMode` 在用户已经清空 TextField 的情况下也要能用上次
@@ -103,10 +107,17 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   void _togglePrecisionMode() {
     setState(() => _precisionMode = !_precisionMode);
     if (_precisionMode) {
-      final currentResults = _results.value;
-      if (currentResults.isNotEmpty && _lastSearchKeyword.isNotEmpty) {
-        _results.value = SearchPage.applyPrecisionFilter(currentResults, _lastSearchKeyword);
+      // Apply precision filter to existing results without re-searching
+      if (_localResults.isNotEmpty && _lastSearchKeyword.isNotEmpty) {
+        _localResults = SearchPage.applyPrecisionFilter(
+            List<Map<String, dynamic>>.from(_localResults), _lastSearchKeyword);
       }
+      if (_onlineResults.isNotEmpty && _lastSearchKeyword.isNotEmpty) {
+        _onlineResults = SearchPage.applyPrecisionFilter(
+            List<Map<String, dynamic>>.from(_onlineResults), _lastSearchKeyword);
+      }
+      _results.value = SearchPage.applyPrecisionFilter(
+          List<Map<String, dynamic>>.from(_results.value), _lastSearchKeyword);
     }
     unawaited(saveSearchPrecisionToDisk(_precisionMode));
     if (mounted) {
@@ -334,6 +345,62 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     super.dispose();
   }
 
+  /// Bug 5: 本地书架搜索（返回原始结果，precision 过滤由 [_doSearch] 统一处理）。
+  Future<List<Map<String, dynamic>>> _searchLocal(String keyword) async {
+    try {
+      final dbPath = await ref.read(dbPathProvider.future);
+      final offlineJson =
+          await rust_api.searchBooksOffline(dbPath: dbPath, keyword: keyword);
+      final List<dynamic> offlineList = jsonDecode(offlineJson);
+      return offlineList.cast<Map<String, dynamic>>();
+    } catch (e) {
+      debugPrint('[Search] local search failed: $e');
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+  /// Bug 5: 在线搜索使用现有书源搜索逻辑。
+  Future<List<Map<String, dynamic>>> _searchOnline(String keyword) async {
+    try {
+      final dbPath = await ref.read(dbPathProvider.future);
+      final sourcesJson = await rust_api.getEnabledSources(dbPath: dbPath);
+      final List<dynamic> sources = jsonDecode(sourcesJson);
+      if (sources.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('没有启用的书源，请先在书源管理中启用书源')),
+          );
+        }
+        return <Map<String, dynamic>>[];
+      }
+      final futures = <Future<List<Map<String, dynamic>>>>[];
+      for (final source in sources) {
+        if (source == null) continue;
+        futures.add(
+          _searchWithSource(dbPath, source, keyword)
+            .timeout(const Duration(seconds: 15), onTimeout: () {
+              debugPrint('书源 ${source['name']} 搜索超时');
+              return <Map<String, dynamic>>[];
+            }),
+        );
+      }
+      final allResults = await Future.wait(futures);
+      final flatResults = allResults.expand((r) => r).toList();
+      final seen = <String>{};
+      final deduped = <Map<String, dynamic>>[];
+      for (final r in flatResults) {
+        final key = '${r['name']}_${r['author']}';
+        if (seen.add(key)) {
+          deduped.add(r);
+        }
+      }
+      return deduped;
+    } catch (e) {
+      debugPrint('[Search] online search failed: $e');
+      return <Map<String, dynamic>>[];
+    }
+  }
+
   Future<void> _doSearch() async {
     final keyword = _searchCtrl.text.trim();
     if (keyword.isEmpty) return;
@@ -343,81 +410,64 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     final seq = ++_searchSeq;
     _lastSearchKeyword = keyword;
     setState(() => _loading = true);
+
+    // Bug 5: 本地搜索始终执行；_onlineMode 决定是否同时发起在线搜索
+    await ref.read(dbInitializedProvider.future);
+    if (!mounted || seq != _searchSeq) {
+      if (mounted) safeSetState(() => _loading = false);
+      return;
+    }
+
+    // Fire local search (always)
+    final localFuture = _searchLocal(keyword);
+
+    // Fire online search (if enabled)
+    Future<List<Map<String, dynamic>>>? onlineFuture;
+    if (_onlineMode) {
+      onlineFuture = _searchOnline(keyword);
+    }
+
+    // Await local first (typically faster), show partial results
+    int rawLocalCount = 0;
     try {
-      if (_onlineMode) {
-        final dbPath = await ref.read(dbPathProvider.future);
-        if (!mounted || seq != _searchSeq) return;
-        final sourcesJson = await rust_api.getEnabledSources(dbPath: dbPath);
-        if (!mounted || seq != _searchSeq) return;
-        final List<dynamic> sources = jsonDecode(sourcesJson);
-        if (sources.isEmpty) {
-          if (!mounted || seq != _searchSeq) return;
-          _results.value = [];
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('没有启用的书源，请先在书源管理中启用书源')),
-          );
-          return;
+      final rawLocal = await localFuture;
+      rawLocalCount = rawLocal.length;
+      if (mounted && seq == _searchSeq) {
+        final filteredLocal = _precisionMode
+            ? SearchPage.applyPrecisionFilter(rawLocal, keyword)
+            : rawLocal;
+        setState(() => _localResults = filteredLocal);
+      }
+    } catch (_) {}
+
+    // Await online (if running)
+    int rawOnlineCount = 0;
+    if (onlineFuture != null) {
+      try {
+        final rawOnline = await onlineFuture;
+        rawOnlineCount = rawOnline.length;
+        if (mounted && seq == _searchSeq) {
+          final filteredOnline = _precisionMode
+              ? SearchPage.applyPrecisionFilter(rawOnline, keyword)
+              : rawOnline;
+          setState(() => _onlineResults = filteredOnline);
         }
-        final futures = <Future<List<Map<String, dynamic>>>>[];
-        for (final source in sources) {
-          if (source == null) continue;
-          futures.add(
-            _searchWithSource(dbPath, source, keyword)
-              .timeout(const Duration(seconds: 15), onTimeout: () {
-                debugPrint('书源 ${source['name']} 搜索超时');
-                return <Map<String, dynamic>>[];
-              }),
-          );
-        }
-        final allResults = await Future.wait(futures);
-        if (!mounted || seq != _searchSeq) return;
-        final flatResults = allResults.expand((r) => r).toList();
-        final seen = <String>{};
-        final deduped = <Map<String, dynamic>>[];
-        for (final r in flatResults) {
-          final key = '${r['name']}_${r['author']}';
-          if (seen.add(key)) {
-            deduped.add(r);
+      } catch (_) {}
+    }
+
+    if (mounted && seq == _searchSeq) {
+      setState(() => _loading = false);
+      // Bug 5: precision-mode empty dialog — re-added after restoring
+      // filtering to _doSearch level so raw-unfiltered counts are known.
+      if (_precisionMode && _localResults.isEmpty && _onlineResults.isEmpty &&
+          (rawLocalCount > 0 || rawOnlineCount > 0)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && seq == _searchSeq) {
+            _showPrecisionEmptyDialog();
           }
-        }
-        final finalResults = _precisionMode
-            ? SearchPage.applyPrecisionFilter(deduped, keyword)
-            : deduped;
-        _results.value = finalResults;
-        if (_precisionMode && finalResults.isEmpty && deduped.isNotEmpty) {
-          _showPrecisionEmptyDialog();
-        }
-      } else {
-        await ref.read(dbInitializedProvider.future);
-        if (!mounted || seq != _searchSeq) return;
-        final dbPath = await ref.read(dbPathProvider.future);
-        if (!mounted || seq != _searchSeq) return;
-        final offlineJson =
-            await rust_api.searchBooksOffline(dbPath: dbPath, keyword: keyword);
-        if (!mounted || seq != _searchSeq) return;
-        final List<dynamic> offlineList = jsonDecode(offlineJson);
-        final offlineResults = offlineList.cast<Map<String, dynamic>>();
-        final finalOffline = _precisionMode
-            ? SearchPage.applyPrecisionFilter(offlineResults, keyword)
-            : offlineResults;
-        _results.value = finalOffline;
-        if (_precisionMode &&
-            finalOffline.isEmpty &&
-            offlineResults.isNotEmpty) {
-          _showPrecisionEmptyDialog();
-        }
+        });
       }
       _addToHistory(keyword);
-    } catch (e) {
-      if (!mounted || seq != _searchSeq) return;
-      _results.value = [];
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('搜索失败: $e')),
-      );
-    } finally {
-      if (mounted && seq == _searchSeq) {
-        setState(() => _loading = false);
-      }
     }
   }
 
@@ -511,116 +561,153 @@ class _SearchPageState extends ConsumerState<SearchPage> {
             ),
           ),
           Expanded(
-            child: ValueListenableBuilder<List<Map<String, dynamic>>>(
-              valueListenable: _results,
-              builder: (context, results, _) {
-                if (results.isEmpty && !_loading) {
-                  if (_loading) return const SizedBox.shrink();
-                  return _buildSearchHistory();
-                }
-                return ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  itemCount: results.length,
-                  itemBuilder: (context, index) {
-                    final book = results[index];
-                    final coverUrl = book['cover_url'] as String?;
-                    final name = book['name'] as String? ?? '未知';
-                    final author = book['author'] as String? ?? '';
-                    final kind = book['kind'] as String?;
-                    final intro = book['intro'] as String?;
-                    final sourceName = book['source_name'] as String?;
-                    final chapterCount = book['chapter_count'] as int?;
-                    final latestChapter = book['last_chapter'] as String? ??
-                        book['latest_chapter_title'] as String?;
-
-                    final subtitleParts = <String>[
-                      if (author.isNotEmpty) author,
-                      if (kind != null && kind.isNotEmpty) kind,
-                      if (chapterCount != null && chapterCount > 0)
-                        '目录 $chapterCount 章',
-                      if (latestChapter != null && latestChapter.isNotEmpty)
-                        latestChapter,
-                      if (sourceName != null && sourceName.isNotEmpty)
-                        '来源: $sourceName',
-                    ];
-
-                    return Card(
-                      margin: const EdgeInsets.symmetric(vertical: 4),
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(12),
-                        onTap: () => _showBookDetail(context, book),
-                        child: Padding(
-                          padding: const EdgeInsets.all(8),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _buildCover(coverUrl),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleSmall
-                                          ?.copyWith(
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                    ),
-                                    if (subtitleParts.isNotEmpty) ...[
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        subtitleParts.join(' · '),
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall
-                                            ?.copyWith(
-                                              color: Colors.grey[600],
-                                            ),
-                                      ),
-                                    ],
-                                    if (intro != null && intro.isNotEmpty) ...[
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        intro,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall
-                                            ?.copyWith(
-                                              color: Colors.grey[500],
-                                              fontSize: 11,
-                                            ),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 4),
-                              IconButton(
-                                icon: const Icon(Icons.add_circle_outline),
-                                color: Theme.of(context).colorScheme.primary,
-                                tooltip: '加入书架',
-                                onPressed: () => _saveResultToBookshelf(book),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
+            child: _loading && _localResults.isEmpty && _onlineResults.isEmpty
+                ? const Center(child: CircularProgressIndicator())
+                : _localResults.isEmpty && _onlineResults.isEmpty && !_loading
+                    ? _buildSearchHistory()
+                    : _buildResultsList(),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Bug 5: 双 Section 结果列表 — 本地书架 + 在线书源。
+  Widget _buildResultsList() {
+    final hasLocal = _localResults.isNotEmpty;
+    final hasOnline = _onlineResults.isNotEmpty && _onlineMode;
+    if (!hasLocal && !hasOnline) {
+      return const SizedBox.shrink();
+    }
+
+    // Section layout: [local header, local items..., online header, online items...]
+    final localSectionTotal = hasLocal ? 1 + _localResults.length : 0;
+    final totalCount =
+        localSectionTotal + (hasOnline ? 1 + _onlineResults.length : 0);
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      itemCount: totalCount,
+      itemBuilder: (context, index) {
+        if (index < localSectionTotal) {
+          if (index == 0) {
+            return _buildSectionHeader('本地书架', _localResults.length);
+          }
+          return _buildBookCard(_localResults[index - 1]);
+        }
+        final onlineIndex = index - localSectionTotal;
+        if (onlineIndex == 0) {
+          return _buildSectionHeader('书源搜索', _onlineResults.length);
+        }
+        return _buildBookCard(_onlineResults[onlineIndex - 1]);
+      },
+    );
+  }
+
+  Widget _buildSectionHeader(String title, int count) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 12, bottom: 4, left: 4),
+      child: Row(
+        children: [
+          Text(
+            title,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '$count 条',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Colors.grey,
+                ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBookCard(Map<String, dynamic> book) {
+    final coverUrl = book['cover_url'] as String?;
+    final name = book['name'] as String? ?? '未知';
+    final author = book['author'] as String? ?? '';
+    final kind = book['kind'] as String?;
+    final intro = book['intro'] as String?;
+    final sourceName = book['source_name'] as String?;
+    final chapterCount = book['chapter_count'] as int?;
+    final latestChapter = book['last_chapter'] as String? ??
+        book['latest_chapter_title'] as String?;
+
+    final subtitleParts = <String>[
+      if (author.isNotEmpty) author,
+      if (kind != null && kind.isNotEmpty) kind,
+      if (chapterCount != null && chapterCount > 0) '目录 $chapterCount 章',
+      if (latestChapter != null && latestChapter.isNotEmpty) latestChapter,
+      if (sourceName != null && sourceName.isNotEmpty) '来源: $sourceName',
+    ];
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _showBookDetail(context, book),
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildCover(coverUrl),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleSmall
+                          ?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    if (subtitleParts.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitleParts.join(' · '),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: Colors.grey[600]),
+                      ),
+                    ],
+                    if (intro != null && intro.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        intro,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: Colors.grey[500], fontSize: 11),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                icon: const Icon(Icons.add_circle_outline),
+                color: Theme.of(context).colorScheme.primary,
+                tooltip: '加入书架',
+                onPressed: () => _saveResultToBookshelf(book),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -629,7 +716,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     return GestureDetector(
       onTap: () => setState(() => _onlineMode = !_onlineMode),
       child: Tooltip(
-        message: _onlineMode ? '当前：在线搜索' : '当前：离线搜索',
+        message: _onlineMode ? '在线搜索已开启（同时搜索书源）' : '仅本地书架（点击开启在线搜索）',
         child: Container(
           width: 32,
           height: 32,
