@@ -135,6 +135,10 @@ const REQUIRED_WIRE_FN_FRAGMENTS: &[&str] = &[
     // BATCH-27c (webdav 通用 list_dir / download_file) — 2 个 wire fn (funcId 113-114)
     "wire__crate__api__webdav_list_dir_impl",
     "wire__crate__api__webdav_download_file_impl",
+    // BATCH-27d (书架批量编辑) — 2 个 wire fn (funcId 115, 117)；clear cache
+    // 复用 26a funcId 80 的 clear_book_cache。
+    "wire__crate__api__set_book_can_update_impl",
+    "wire__crate__api__delete_book_with_file_impl",
 ];
 
 const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
@@ -224,6 +228,9 @@ const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
     // BATCH-27c (webdav 通用 list_dir / download_file) 手动 dispatch 注册
     "        113 =>",
     "        114 =>",
+    // BATCH-27d (书架批量编辑) 手动 dispatch 注册（clear cache 复用 26a 80）
+    "        115 =>",
+    "        117 =>",
 ];
 
 /// R3: the dispatcher default arms must surface the unknown funcId

@@ -334,6 +334,26 @@ impl<'a> BookDao<'a> {
         Ok(())
     }
 
+    /// BATCH-27d: 切换书的「允许更新」状态（canUpdate）。canUpdate=false
+    /// 后批量目录刷新（27b update_toc）会跳过此本，对齐 27b spec
+    /// 「Dart 端 filter 契约」`!isLocal && canUpdate` 过滤。
+    pub fn set_can_update(&self, book_id: &str, can_update: bool) -> SqlResult<()> {
+        info!(
+            "切换书 canUpdate: book_id={}, can_update={}",
+            book_id, can_update
+        );
+        let now = Utc::now().timestamp();
+        self.conn.execute(
+            "UPDATE books SET can_update = ?, updated_at = ? WHERE id = ?",
+            params![can_update as i32, now, book_id],
+        )?;
+        Ok(())
+    }
+
+    // 注：清缓存语义复用 BATCH-26a `CacheStatsDao::clear_book_cache(book_id)
+    // -> Result<i64>`（cache_stats_dao.rs L98），不在 BookDao 重新加。
+    // 27d Dart 端走 `clearBookCache(dbPath, bookId)` FRB（funcId 80）。
+
     /// 创建新书籍（便捷函数）
     pub fn create(
         &self,
@@ -508,6 +528,37 @@ mod tests {
         dao.set_group("b1", 0).unwrap();
         let b2 = dao.get_by_id("b1").unwrap().unwrap();
         assert_eq!(b2.group_id, 0);
+    }
+
+    /// BATCH-27d: set_can_update 切换 canUpdate 字段（默认 true → false →
+    /// true round-trip）+ updated_at 也被刷新。
+    #[test]
+    fn test_set_can_update_toggles_flag() {
+        let (_dir, conn) = setup();
+        let dao = BookDao::new(&conn);
+        dao.upsert(&book_with_group("b1", 0, 1)).unwrap();
+        let initial = dao.get_by_id("b1").unwrap().unwrap();
+        assert_eq!(initial.can_update, true, "default canUpdate=true");
+
+        dao.set_can_update("b1", false).unwrap();
+        let after_false = dao.get_by_id("b1").unwrap().unwrap();
+        assert_eq!(after_false.can_update, false);
+        assert!(after_false.updated_at >= initial.updated_at);
+
+        dao.set_can_update("b1", true).unwrap();
+        let after_true = dao.get_by_id("b1").unwrap().unwrap();
+        assert_eq!(after_true.can_update, true);
+    }
+
+    /// BATCH-27d: set_can_update 对不存在的 book_id 返回 Ok（execute 影响 0
+    /// 行不算错误），与 set_group 同款行为约定。
+    #[test]
+    fn test_set_can_update_unknown_id_no_op() {
+        let (_dir, conn) = setup();
+        let dao = BookDao::new(&conn);
+        // 未 upsert 任何书
+        let r = dao.set_can_update("nonexistent", false);
+        assert!(r.is_ok());
     }
 
     // ==========================================================

@@ -1600,6 +1600,89 @@ pub async fn webdav_download_file(
 }
 
 // ============================================================
+// 书架批量编辑 (BATCH-27d) — funcId 115-117
+// ============================================================
+
+/// BATCH-27d: 切换书的「允许更新」状态（canUpdate）。
+/// can_update=false 后批量目录刷新（27b update_toc）会跳过此本，对齐
+/// 27b spec 「Dart 端 filter 契约」`!isLocal && canUpdate`。
+pub fn set_book_can_update(
+    db_path: String,
+    id: String,
+    can_update: bool,
+) -> Result<(), String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::book_dao::BookDao::new(&conn);
+    dao.set_can_update(&id, can_update)
+        .map_err(|e| format!("切换书 {} canUpdate 失败: {}", id, e))
+}
+
+// 注：清缓存 FRB 复用 BATCH-26a 已有的 `clear_book_cache(db_path, book_id)
+// -> Result<i64, String>` (funcId 80)，不在 27d 重新加 FRB。
+
+/// BATCH-27d: 删除书 + 可选删除本地源文件。
+///
+/// `delete_file=true` 时，对本地书（source_id='local'）删
+/// `<documents_dir>/local_books/<id>_*` 文件；对远程书（27c-1 下载到
+/// `<documents_dir>/remote_books/...`）按 `book.local_path` 删文件；非
+/// 本地非远程书（webdav 已上架但无本地缓存）忽略 file 删除。
+///
+/// 不破坏现有 `delete_book(funcId 47)` binary contract — 那个 FRB 仅
+/// 删 db 行 + 级联删 chapters / progress（schema ON DELETE CASCADE）。
+/// 27d 新加这个 FRB 让批量删除时可选「同时删本地源文件」语义对齐
+/// 原 legado `LocalBook.deleteBook(it, deleteOriginal)`。
+///
+/// `documents_dir` 由 caller 传，避免 Rust 端再调 `path_provider`。
+pub fn delete_book_with_file(
+    db_path: String,
+    id: String,
+    delete_file: bool,
+    documents_dir: String,
+) -> Result<(), String> {
+    // 先拿 book 拿到 source_id 和可能的 local_path —— 删了 row 后查不到
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::book_dao::BookDao::new(&conn);
+    let book = dao
+        .get_by_id(&id)
+        .map_err(|e| format!("查询书 {} 失败: {}", id, e))?
+        .ok_or_else(|| format!("书不存在: {}", id))?;
+
+    // 1. 删 db 行（chapters / progress 级联删）
+    dao.delete(&id)
+        .map_err(|e| format!("删除书 {} 失败: {}", id, e))?;
+
+    if !delete_file {
+        return Ok(());
+    }
+
+    // 2. 删本地文件（best-effort，失败不阻塞 db 删除已成功）
+    let docs = std::path::Path::new(&documents_dir);
+
+    // 本地书：book_url = "loc_book:<absolute_path>"，对齐
+    // `crate::local_book` LOC_BOOK_URL_PREFIX 约定。
+    if book.source_id == "local" {
+        if let Some(book_url) = book.book_url.as_ref() {
+            if let Some(local_path) = book_url.strip_prefix("loc_book:") {
+                let lp = std::path::Path::new(local_path);
+                // 仅当文件落在 documents_dir 子树内才删（防越界 rm 项目外
+                // 文件，例如用户从 Downloads 直接 import 的源文件）
+                if lp.starts_with(docs) && lp.is_file() {
+                    let _ = std::fs::remove_file(lp);
+                }
+            }
+        }
+    }
+
+    // 远程书：27c-1 下载到 `<documents_dir>/remote_books/<safe_name>`
+    // 后调 import_local_book 落库 → book.book_url 也被设为
+    // "loc_book:<remote_books_dir/safe_name>"，与本地书路径同款，
+    // 上面的 `book.source_id == "local"` 分支已经覆盖（因为 27c-1
+    // import_local_book 让所有进入书架的 file 都走 source_id='local'）。
+
+    Ok(())
+}
+
+// ============================================================
 // 备份密码持久化 (批次 12 / 05-19)
 // ============================================================
 //

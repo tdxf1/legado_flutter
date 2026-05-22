@@ -283,6 +283,9 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                     // BATCH-27c (05-22): 远程书浏览页（webdav 单 server
                     // 最小可用版）。灰显占位 → 真功能跳 /remote-books。
                     if (innerCtx.mounted) innerCtx.push('/remote-books');
+                  } else if (value == 'bookshelf_manage') {
+                    // BATCH-27d (05-22): 书架管理批量编辑页。
+                    if (innerCtx.mounted) innerCtx.push('/bookshelf-manage');
                   }
                 },
                 itemBuilder: (context) => const [
@@ -334,12 +337,10 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),
-                  // 7. 书架管理 — 灰显占位（27c 批量编辑页）
+                  // 7. 书架管理 — BATCH-27d 改可点
                   PopupMenuItem(
-                    enabled: false,
                     value: 'bookshelf_manage',
                     child: ListTile(
-                      enabled: false,
                       leading: Icon(Icons.edit_note),
                       title: Text('书架管理'),
                       contentPadding: EdgeInsets.zero,

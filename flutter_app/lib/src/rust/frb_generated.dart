@@ -502,6 +502,20 @@ abstract class RustLibApi extends BaseApi {
       required String password,
       required String remotePath,
       required String targetLocalPath});
+
+  Future<void> crateApiSetBookCanUpdate(
+      {required String dbPath,
+      required String id,
+      required bool canUpdate});
+
+  // 注：crateApiClearBookCache 复用 BATCH-26a 已有的 funcId 80 接口
+  // (PlatformInt64 返回 cleared count)，27d 不重新加 void 版接口。
+
+  Future<void> crateApiDeleteBookWithFile(
+      {required String dbPath,
+      required String id,
+      required bool deleteFile,
+      required String documentsDir});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -3677,6 +3691,73 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiWebdavDownloadFileConstMeta => const TaskConstMeta(
         debugName: "webdav_download_file",
         argNames: ["url", "user", "password", "remotePath", "targetLocalPath"],
+      );
+
+  // ============================================================
+  // BATCH-27d — 书架批量编辑（funcId 115-117）
+  // ============================================================
+
+  @override
+  Future<void> crateApiSetBookCanUpdate(
+      {required String dbPath,
+      required String id,
+      required bool canUpdate}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(id, serializer);
+        sse_encode_bool(canUpdate, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 115, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiSetBookCanUpdateConstMeta,
+      argValues: [dbPath, id, canUpdate],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSetBookCanUpdateConstMeta => const TaskConstMeta(
+        debugName: "set_book_can_update",
+        argNames: ["dbPath", "id", "canUpdate"],
+      );
+
+  // 注：crateApiClearBookCache Impl 复用 BATCH-26a funcId 80（line 2721）
+  // 返 PlatformInt64；27d 不重新加 void 版 Impl。
+
+  @override
+  Future<void> crateApiDeleteBookWithFile(
+      {required String dbPath,
+      required String id,
+      required bool deleteFile,
+      required String documentsDir}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(id, serializer);
+        sse_encode_bool(deleteFile, serializer);
+        sse_encode_String(documentsDir, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 117, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_unit,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiDeleteBookWithFileConstMeta,
+      argValues: [dbPath, id, deleteFile, documentsDir],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiDeleteBookWithFileConstMeta => const TaskConstMeta(
+        debugName: "delete_book_with_file",
+        argNames: ["dbPath", "id", "deleteFile", "documentsDir"],
       );
 
   @protected

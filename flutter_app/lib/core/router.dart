@@ -25,6 +25,7 @@ import '../features/rss/rss_tab_page.dart';
 import '../features/rule_sub/rule_sub_page.dart';
 import '../features/qr/qr_scan_page.dart';
 import '../features/remote_books/remote_books_page.dart';
+import '../features/bookshelf/bookshelf_manage_page.dart';
 
 final router = GoRouter(
   initialLocation: '/bookshelf',
@@ -181,6 +182,13 @@ final router = GoRouter(
     GoRoute(
       path: '/remote-books',
       builder: (_, __) => const RemoteBooksPage(),
+    ),
+    // BATCH-27d (05-22): 书架管理批量编辑页。bookshelf PopupMenu「书架
+    // 管理」入口（27a 灰显占位 → 27d 改可点）。长按多选 → 批量删除 /
+    // canUpdate toggle / 移分组 / 清缓存 actionbar。
+    GoRoute(
+      path: '/bookshelf-manage',
+      builder: (_, __) => const BookshelfManagePage(),
     ),
   ],
 );

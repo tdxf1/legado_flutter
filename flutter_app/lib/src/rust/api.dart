@@ -442,6 +442,32 @@ Future<PlatformInt64> webdavDownloadFile(
         remotePath: remotePath,
         targetLocalPath: targetLocalPath);
 
+/// BATCH-27d: 切换书的「允许更新」状态（canUpdate）。canUpdate=false 后
+/// 27b update_toc 批量目录刷新会跳过此本。
+Future<void> setBookCanUpdate(
+        {required String dbPath,
+        required String id,
+        required bool canUpdate}) =>
+    RustLib.instance.api.crateApiSetBookCanUpdate(
+        dbPath: dbPath, id: id, canUpdate: canUpdate);
+
+// 注：清缓存复用 BATCH-26a 已有的 [`clearBookCache(dbPath, bookId)`]
+// (funcId 80, line 688)，27d 不重新加 binding。
+
+/// BATCH-27d: 删除书 + 可选删本地源文件。`deleteFile=true` 时对本地书
+/// （book_url 'loc_book:<path>'）删 file（限定在 documentsDir 子树内）。
+/// 不破坏 [`deleteBook`]（funcId 47）binary contract。
+Future<void> deleteBookWithFile(
+        {required String dbPath,
+        required String id,
+        required bool deleteFile,
+        required String documentsDir}) =>
+    RustLib.instance.api.crateApiDeleteBookWithFile(
+        dbPath: dbPath,
+        id: id,
+        deleteFile: deleteFile,
+        documentsDir: documentsDir);
+
 /// 获取所有替换规则，返回 JSON 数组
 Future<String> getReplaceRules({required String dbPath}) =>
     RustLib.instance.api.crateApiGetReplaceRules(dbPath: dbPath);
