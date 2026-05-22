@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "check 27c-4 子节「待覆盖测试」段已收束 + 3-mode 互斥契约由 widget 测试守护"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "check testWidgets 命名 BATCH-27c-4 + buildPage helper 复用 + 不引新 mock 模式"}
