@@ -1,0 +1,4 @@
+{"role": "system", "content": "BATCH-05b check context"}
+{"file": ".trellis/tasks/05-22-batch-05b-webview-cleanup-and-ipv6/prd.md", "reason": "validation against acceptance criteria"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings.md", "reason": "BATCH-05 主题段加 BATCH-05b 收尾说明"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "spec WebView 边界段是否扩"}

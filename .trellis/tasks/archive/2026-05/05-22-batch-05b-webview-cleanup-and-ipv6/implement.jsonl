@@ -1,0 +1,8 @@
+{"role": "system", "content": "BATCH-05b implement context"}
+{"file": ".trellis/tasks/05-22-batch-05b-webview-cleanup-and-ipv6/prd.md", "reason": "本批 PRD"}
+{"file": "flutter_app/lib/features/rss/rss_article_detail_page.dart", "reason": "_RssArticleDetailPageState 加 dispose override（line 128 后或 350 前）"}
+{"file": "flutter_app/lib/core/platform_webview_executor.dart", "reason": "_WebViewExecutionPageState 加 dispose override（line 213 build 前）"}
+{"file": "flutter_app/lib/core/security/webview_safety.dart", "reason": "_classifyIpv4 加 CGNAT/multicast/0.0.0.0；classifyHost IPv6 加 ULA/multicast/IPv4-mapped 重分类"}
+{"file": "flutter_app/test/webview_safety_test.dart", "reason": "9 个新 IPv6/IPv4 case 加在 group 'classifyHost' 内（line 92 起）"}
+{"file": "core/core-source/src/legado/ssrf_guard.rs", "reason": "Rust 端参考实现：line 94-103 host 分类范围（不要改 Rust，只读取参考）"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "WebView 边界段加 BATCH-05b 小节（dispose 契约 + classifyHost 对齐 ssrf_guard）"}

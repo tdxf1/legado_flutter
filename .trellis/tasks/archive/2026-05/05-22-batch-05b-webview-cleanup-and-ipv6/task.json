@@ -1,0 +1,17 @@
+{
+  "id": "05-22-batch-05b-webview-cleanup-and-ipv6",
+  "title": "BATCH-05b WebView dispose 清理 + IPv6/IPv4 SSRF 分类完整化",
+  "createdAt": "2026-05-22",
+  "completedAt": "2026-05-22",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "depends_on": ["05-21-batch-05-webview-qr-boundaries"],
+  "context": {
+    "follow_up_of": "BATCH-05",
+    "scope": "WebView caller dispose override 清缓存 + classifyHost 对齐 Rust ssrf_guard",
+    "blockers_resolved": "webview_flutter 4.13 已统一 clearCache/clearLocalStorage 跨平台 API（原 BATCH-05 PRD 担心的 4.x 不一致已解决）"
+  }
+}
