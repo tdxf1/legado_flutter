@@ -870,6 +870,65 @@ funcId 111，手编 `frb_generated.rs` wire impl + 4153/4291 后续 dispatcher a
 - ❌ `export_bookshelf_json` FRB 改成返回 hardcoded fixture JSON 字符串绕过查 books 表 — 必须走 `BookDao::get_all` 真查，否则空书架与有书架行为不可分；测试假数据走 dart 端 `exportBookshelfJsonOverride`
 - ❌ 修改现有 PopupMenuItem value key 名（`manage_groups` / `import_local` / `cache_export` / `qr_scan` / `bookshelf_layout` / `export_bookshelf`）— 保持 backward compat，让 onSelected 分支与 widget test 不必跟 UI 文案重命名同步重写
 
+### 批量后台任务模式 (BATCH-27b)
+
+对齐原 legado `MainViewModel.kt:96-180 upToc/startUpTocJob/updateToc` + `BaseBookshelfFragment.kt:98 activityViewModel.upToc(books)`。BATCH-27b 把 `menu_update_toc`「更新目录」从 27a 灰显占位真正落地，并沉淀范本：「批量后台任务」类需求（download / update_toc / 未来 batch-edit 批量删 / 批量移分组）共享 singleton runner + queue + StreamController + Notification 模式。
+
+**架构契约**：
+
+- **Singleton runner** + 私有 ctor + factory 返同一实例（`DownloadRunner._instance` / `UpdateTocRunner._instance` 范本）。runner 横跨页面 lifecycle，page dispose 不应清 runner state；测试用 `@visibleForTesting void resetForTest()` 在 setUp 重置。
+- **Queue + Set in-flight 去重**：`Queue<JobT> _queue` + `Set<String> _inFlight`。enqueue 同 bookId 在 `_queue` 或 `_inFlight` 内已存在时跳过（不重复跑）。
+- **Worker pool with `Future.wait`**：`final futures = List.generate(_kConcurrency, (_) => _worker())` → `await Future.wait(futures)`。worker 内 `while (_queue.isNotEmpty)` 循环取 job + 跑 + 静默 catch + emit progress。`_kUpTocConcurrency = 4` 是 Dart 端控（不在 Rust 端 Semaphore），让原版 16 默认下调 4 — 与 reqwest 连接池 + 单源限速达成平衡。
+- **StreamController.broadcast()** 推 progress：`onProgress` Stream 让 page 端 `ref.listen` 或 `StreamSubscription` 监听，runner 完全不知 UI 结构。`isDone=true` 仅在批次末尾 emit 一次。
+- **静默 catch + log + 总结 SnackBar**：单本失败 `debugPrint('[Runner] book X failed: ...')` + 计数 fail++，不向上抛。整批完成 `isDone=true` 时弹一次「目录刷新完成：成 X / 失 Y」。**禁单本 SnackBar 弹** — 4 worker 并发失败会刷屏。
+- **AppBar transient badge**：仅 `progress.isRunning == true` 时渲染（`if (_isUpdatingToc) IconButton(child: Stack(CircularProgressIndicator + Badge('N/M')))`），跑完 `isDone` 时 setState `_isUpdatingToc = false` 自动消失。**点击不取消**（runner 当前不支持 cancel；UX 留 follow-up）。
+- **listener 在 initState 挂 + dispose cancel**：`_updateTocSub = UpdateTocRunner().onProgress.listen(...)` initState 挂；dispose `_updateTocSub?.cancel()` 避免 page unmount 后旧 setState 触发。
+- **关键：listener 内 invalidate providers + hideCurrentSnackBar + showSnackBar**：批次完成时 invalidate `allBooksProvider` / `booksByGroupProvider` 让 UI 重拉书；先 `hideCurrentSnackBar()` 清掉「已开始刷新」首条 SnackBar 让位给完成消息（默认 4s dismiss timer 仍在）。
+- **enqueue 立即 emit 一次 progress=0/total**：让 transient badge 在 worker 第一帧就显示，不要等首本 job FRB 抓 toc（>1s）才触发首个 emit — 用户看起来「点了菜单没反应」。
+
+**FRB 单本契约**：
+
+```rust
+pub async fn update_book_toc(db_path: String, book_id: String) -> Result<i32, String>
+```
+
+- **单本 FRB 而非批量 FRB**：批量会让事务原子性失真（一本失败时 rollback 整批 vs 提交部分）；单本独立失败语义更清晰。
+- 流程：`BookDao::get_by_id` → `SourceDao::get_by_id(book.source_id)` → `parser.get_chapters(&source, &toc_url)` → `with_transaction(|tx| { ChapterDao::replace_by_book_preserving_content_in_tx + BookDao::upsert_in_tx(updated last_check_time + chapter_count) })`。
+- 错误 context 走中文 `format!("书 {} 不存在", book_id)` / `format!("书源不存在: {}", source_id)` / `format!("书 {} 章节列表抓取失败: {}", book_id, e)`，对齐 `.trellis/spec/rust-core/error-handling.md`。
+- 必须用 `replace_by_book_preserving_content_in_tx`（保 content cache）而不是 `replace_by_book_in_tx`（drop content）— 用户已读过的章节正文不应因目录刷新丢失。
+
+**Dart 端 filter 契约**：
+
+`!isLocal && canUpdate`：
+
+- **isLocal 判断**：`source_id == null || source_id.isEmpty || source_id == 'local'`。`'local'` 是 import_local_book 落库时的 LOCAL_SOURCE_ID 字面量（`core/bridge/src/local_book.rs`），远程书 source_id 是真实 UUID 形态不会撞。
+- **canUpdate**：`book['can_update']` 字段（snake_case，对齐 storage::Book serde 输出）。`bool false` / `num 0` 都视为不可更新，缺失字段默认 true（`Book.can_update` 默认 true，仅本地书 / 用户手动关闭时 false）。
+- 空批 → 早返回 + SnackBar「当前 Tab 无可刷新的书」+ 不调 FRB。
+
+**测试钩子（BATCH-27b 范本）**：
+
+- `update_toc_runner_test.dart` × 8 — runner 单元测试（dedup / 4 worker concurrency / single failure does not block / progress sequence / total reset / empty list no-op / `UpdateTocProgress.isRunning` 三态 / debugPrint 不抛错）。setUp `runner.resetForTest()` 让 singleton state 测试隔离；TestWidgetsFlutterBinding.ensureInitialized() 抑制 NotificationService missing-binding 噪声。
+- `bookshelf_update_toc_test.dart` × 4 — widget 测试（menu enabled + onSelected 触发 enqueue / filter local books → SnackBar「当前 Tab 无可刷新的书」/ transient badge 进度中显示 + 跑完消失 / 完成 SnackBar 显示 success/fail counts）。fakeFn 加 50ms 延迟让 worker 不在同一 microtask 完成，给「已开始刷新」首条 SnackBar 留 frame 显示。
+- `bookshelf_menu_test.dart` BATCH-27a：update_toc 从 disabled list 移到 enabled list（27b 后只剩 5 项灰显占位）。
+- 测试用 `updateBookTocOverride` 测试钩子（`UpdateBookTocFn` typedef）注入假 FRB，runner 内部 `worker` 调用 `(overrideFn ?? rust_api.updateBookToc)(...)`。**不**用全局 mock RustLib（mock 全局会让 parallel 测试互污染）。
+
+**Forbidden 反向（BATCH-27b 新增 4 条）**：
+
+- ❌ 批量 FRB（`update_books_toc(book_ids: List<String>) -> Result<List<i32>, String>`）— 事务原子性失真；要么整批 commit-or-rollback（一本失败让前 N 本努力白费）要么 commit 部分（与 Result<List, String> 形态矛盾，Err 时无法回传 partial 结果）。坚持单本 FRB。
+- ❌ 全屏阻塞 `showDialog` 阻断 UI — 用户应能在跑批时切换 tab / 阅读其他书 / 看进度；阻塞 dialog 让 UX 退化为同步操作。AppBar transient badge + 后台 runner 是正确模式。
+- ❌ 失败时单本弹 SnackBar — 4 worker 同时失败会刷屏；只在批次完成时弹一次总结 SnackBar 即可。
+- ❌ 单 worker（`_kConcurrency = 1`）— 等于全串行，对齐原 legado 默认 16 应至少 4。Rust 端 `Semaphore` 控并发是另一条路，但项目当前选 Dart 端控（`Future.wait + List.generate(N)`）—— 简单、与 download_runner 串行模式形成对比、不需要改 FRB 签名。
+
+### 批量任务 + Notification 通道契约
+
+NotificationService 范本：每个批量任务一个固定 notificationId（download = 99000 / update_toc = 99001）。同 id 在 FlutterLocalNotifications `show()` 会替换，让单一任务的 progress notification 一直更新而不堆积；不同任务用不同 id 避免互相覆盖。
+
+新增批量任务时：
+- 选 unused notificationId（约定 99xxx，下一个 99002 / 99003 ...）+ 对应静态方法 `showXxxProgress(progress)` 仿 `showUpdateTocProgress`。
+- ongoing/autoCancel 二段：跑批中 `ongoing: true + autoCancel: false + showProgress: true`；isDone `ongoing: false + autoCancel: true + showProgress: false`。
+- iOS 跑批中 `presentSound: false`（不打扰）；isDone `presentSound: true`（提醒用户）。
+
+
 
 ## Performance Notes
 
