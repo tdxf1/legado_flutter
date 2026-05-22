@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/persistence/json_store.dart';
 import '../../core/providers.dart';
+import '../../core/remote_book_runner.dart';
 import '../../core/security/secure_storage.dart';
 import '../../core/util/platform_int64.dart';
 import '../../core/util/time_format.dart';
@@ -16,6 +17,7 @@ import '../../core/widgets/safe_setstate.dart';
 import '../../src/rust/api.dart' as rust_api;
 
 /// BATCH-27c-1: 远程书浏览页（最小可用版）。
+/// BATCH-27c-3: 加多选模式 + 批量下载（[`RemoteBookRunner`] singleton 范本）。
 ///
 /// 入口：bookshelf PopupMenu「添加远程书」（27a 灰显占位 → 27c 改可点）。
 /// 流程：复用 webdav_config_page 凭据（webdav.json url/user + secure_storage
@@ -24,11 +26,16 @@ import '../../src/rust/api.dart' as rust_api;
 /// `documents_dir/remote_books/<uuid_filename>` → 调
 /// [`rust_api.importLocalBook`] 入书架 → invalidate providers + SnackBar。
 ///
-/// 范围（PRD §Q1-Q7 锁定）：单 server / 单选 / 深度栈下钻；多选 / 排序
-/// / 搜索 / multi-server / 已上架状态包 / origin = `webdav://<path>` 标记
-/// 全部留 27c follow-up（PRD §Out of Scope O1-O9）。
+/// 多选模式（27c-3）：长按文件项进入选择模式 → AppBar 替换为「选择 N 项 /
+/// 全选 / 取消 / 下载选中」→ 点击 ListTile = toggle 勾选 → 「下载选中」
+/// → enqueue 全选项到 [`RemoteBookRunner`] singleton → 立即退出选择模式 →
+/// AppBar transient badge 显示进度 → 完成 SnackBar。
 ///
-/// 测试钩子（mirror BookshelfPage 27a/27b 同款）：6 个 *Override 字段
+/// 范围（PRD §Q1-Q5 锁定）：单 server / 多选仅当前目录（不跨目录递归）。
+/// multi-server / 排序 + 搜索 / 失败重试 / book.origin 标记 webDavTag 全部
+/// 留 27c follow-up（PRD §Out of Scope O1-O5）。
+///
+/// 测试钩子（mirror BookshelfPage 27a/27b 同款）：6 + 1 个 *Override 字段
 /// 让 widget test 不依赖 path_provider / secure_storage / FRB / 真 webdav。
 class RemoteBooksPage extends ConsumerStatefulWidget {
   /// 测试钩子：注入假 dbPath（不走 path_provider 解析）。
@@ -68,6 +75,12 @@ class RemoteBooksPage extends ConsumerStatefulWidget {
     required String documentsDir,
   })? importLocalBookOverride;
 
+  /// BATCH-27c-3: 测试钩子，注入 [`RemoteBookRunner`] 替身。生产路径走
+  /// `RemoteBookRunner()` 全局单例；测试每个用例 setUp 调
+  /// `RemoteBookRunner().resetForTest()` 即可，无需多个实例。该字段保留
+  /// 以便未来若 runner 改成可注入 ctor 时无缝切换。
+  final RemoteBookRunner? remoteBookRunnerOverride;
+
   const RemoteBooksPage({
     super.key,
     this.dbPathOverride,
@@ -76,6 +89,7 @@ class RemoteBooksPage extends ConsumerStatefulWidget {
     this.listDirOverride,
     this.downloadFileOverride,
     this.importLocalBookOverride,
+    this.remoteBookRunnerOverride,
   });
 
   @override
@@ -120,10 +134,62 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
   /// (F-W2B-019) 防"幽灵覆盖"模板。
   int _loadSeq = 0;
 
+  // BATCH-27c-3: 多选模式状态
+  /// 选择模式开关。长按文件 → true；下钻 / 「取消」/「下载选中」/ OS back
+  /// 都退出（false）。
+  bool _selectionMode = false;
+
+  /// 已选中的文件 remotePath 集合（含路径前缀，如 `books/小说/foo.epub`）。
+  /// 用 remotePath 而非 file name：跨目录概念上不可能（下钻 clear），但
+  /// remotePath 与 RemoteBookJob 的 dedup key 一致，enqueue 时不需重新组
+  /// 装。
+  final Set<String> _selectedPaths = <String>{};
+
+  /// runner 进度监听 + 最近一帧的 progress 快照。`_lastProgress` 用于
+  /// AppBar transient badge 渲染条件 + 文案。
+  StreamSubscription<RemoteBookProgress>? _progressSub;
+  RemoteBookProgress? _lastProgress;
+
+  RemoteBookRunner get _runner =>
+      widget.remoteBookRunnerOverride ?? RemoteBookRunner();
+
   @override
   void initState() {
     super.initState();
     _bootstrap();
+    // BATCH-27c-3: 挂 progress 监听。runner 是 singleton —— 即使其它入口
+    // （未来 batch-deep-cache 等）也能共享同一进度通道。dispose 时 cancel
+    // 避免旧 page 的 setState 在 unmount 后被触发。
+    _progressSub = _runner.onProgress.listen((p) {
+      if (!mounted) return;
+      safeSetState(() {
+        _lastProgress = p;
+      });
+      if (p.isDone) {
+        // invalidate 让书架重新拉书
+        ref.invalidate(allBooksProvider);
+        ref.invalidate(booksByGroupProvider);
+        if (mounted) {
+          final messenger = ScaffoldMessenger.of(context);
+          messenger.hideCurrentSnackBar();
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                '批量下载完成：成功 ${p.success} / 失败 ${p.fail}',
+              ),
+            ),
+          );
+          // done 后清掉 transient badge（下次 enqueue 会重新挂上）
+          safeSetState(() => _lastProgress = null);
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _progressSub?.cancel();
+    super.dispose();
   }
 
   /// 启动流程：先加载凭据，凭据齐则继续 [`_loadCurrentDir`]。
@@ -247,17 +313,87 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
 
   /// 上钻一层。栈非空时 pop + reload 返 true（表示已处理，OS 不再 pop 页面）；
   /// 栈空时返 false 让默认 pop 流程处理（关闭页面）。
+  ///
+  /// BATCH-27c-3: 下钻 / 上钻都清空 `_selectedPaths` + 退出选择模式（PRD
+  /// §Q1 1b 决策 — 跨目录的 selected 概念混乱）。
   bool _popPathOrPage() {
     if (_pathStack.isEmpty) return false;
     setState(() {
       _pathStack.removeLast();
+      _exitSelectionMode();
     });
     // 上钻后立即重 list
     _loadCurrentDir();
     return true;
   }
 
+  /// 当前路径下某 entry 对应的 remotePath（含目录前缀 + 文件名）。
+  String _remotePathFor(_RemoteEntry e) =>
+      [..._pathStack, e.name].join('/');
+
+  void _exitSelectionMode() {
+    _selectionMode = false;
+    _selectedPaths.clear();
+  }
+
+  void _toggleSelected(_RemoteEntry e) {
+    if (e.isDir) return; // 文件夹不可勾（PRD §Q1 1b）
+    final path = _remotePathFor(e);
+    setState(() {
+      if (_selectedPaths.contains(path)) {
+        _selectedPaths.remove(path);
+      } else {
+        _selectedPaths.add(path);
+      }
+      // 全部取消时退出选择模式
+      if (_selectedPaths.isEmpty) {
+        _selectionMode = false;
+      }
+    });
+  }
+
+  /// 长按 entry → 进入选择模式 + 勾上当前项（仅文件项）。
+  void _onLongPressEntry(_RemoteEntry e) {
+    if (e.isDir) return; // 文件夹长按忽略（PRD §Q1 1b）
+    final path = _remotePathFor(e);
+    setState(() {
+      _selectionMode = true;
+      _selectedPaths.add(path);
+    });
+  }
+
+  /// 全选：勾上当前目录所有文件项（跳过文件夹）。
+  void _selectAllFiles() {
+    setState(() {
+      for (final e in _entries) {
+        if (!e.isDir) {
+          _selectedPaths.add(_remotePathFor(e));
+        }
+      }
+    });
+  }
+
+  /// 取消所有勾选 + 退出选择模式。
+  void _cancelSelection() {
+    setState(_exitSelectionMode);
+  }
+
   Future<void> _onTapEntry(_RemoteEntry e) async {
+    // 选择模式下：点 ListTile = toggle 选中（文件夹仍下钻）
+    if (_selectionMode) {
+      if (e.isDir) {
+        // 下钻清空 selection（PRD §Q1 1b）
+        setState(() {
+          _pathStack.add(e.name);
+          _exitSelectionMode();
+        });
+        await _loadCurrentDir();
+        return;
+      }
+      _toggleSelected(e);
+      return;
+    }
+    // 非选择模式
     if (e.isDir) {
       setState(() {
         _pathStack.add(e.name);
@@ -288,7 +424,7 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
       }
       final safeName = _safeFileName(e.name);
       final localPath = '${remoteDir.path}/$safeName';
-      final remotePath = [..._pathStack, e.name].join('/');
+      final remotePath = _remotePathFor(e);
       final downloadFn = widget.downloadFileOverride ??
           ({
             required String url,
@@ -350,6 +486,73 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
     }
   }
 
+  /// BATCH-27c-3: 「下载选中」批量入口。把 `_selectedPaths` 中的文件项构
+  /// 成 [`RemoteBookJob`] 列表 → enqueue 到 [`RemoteBookRunner`] singleton
+  /// → 立即退出选择模式。runner 后台串行下载 + 入库；进度通过 progress
+  /// listener 写到 `_lastProgress` 触发 transient badge 渲染。
+  Future<void> _onDownloadSelected() async {
+    if (_selectedPaths.isEmpty) return;
+    if (_credentialsUrl == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final docsDir =
+          widget.documentsDirOverride ?? await resolvePersistenceDir();
+      if (!mounted) return;
+      final remoteDir = Directory('$docsDir/remote_books');
+      if (!remoteDir.existsSync()) {
+        remoteDir.createSync(recursive: true);
+      }
+      final String dbPath =
+          widget.dbPathOverride ?? await ref.read(dbPathProvider.future);
+      if (!mounted) return;
+
+      // 把 selected paths（remotePath 集合）映射到 _entries 的 file 项，
+      // 拿到原 name 用于 _safeFileName。entries 中不在的 path 跳过（理论
+      // 上不可能 — selectionMode 下只勾 _entries 里的文件）。
+      final pathToName = <String, String>{
+        for (final e in _entries)
+          if (!e.isDir) _remotePathFor(e): e.name,
+      };
+      final jobs = <RemoteBookJob>[];
+      for (final path in _selectedPaths) {
+        final name = pathToName[path];
+        if (name == null) continue;
+        final safeName = _safeFileName(name);
+        final localPath = '${remoteDir.path}/$safeName';
+        jobs.add(RemoteBookJob(
+          url: _credentialsUrl!,
+          user: _credentialsUser!,
+          password: _credentialsPassword!,
+          remotePath: path,
+          targetLocalPath: localPath,
+          dbPath: dbPath,
+          documentsDir: docsDir,
+        ));
+      }
+      if (jobs.isEmpty) return;
+
+      // ignore: discarded_futures — enqueue 内部 fire-and-forget 启 worker，
+      // 调用方靠 onProgress 监听完成；此处不能 await，否则 SnackBar 在跑
+      // 完前不会弹。
+      _runner.enqueue(
+        jobs,
+        downloadOverride: widget.downloadFileOverride,
+        importOverride: widget.importLocalBookOverride,
+      );
+      final count = jobs.length;
+      // 立即退出选择模式让 AppBar 复原 + transient badge 显现
+      setState(_exitSelectionMode);
+      messenger.showSnackBar(
+        SnackBar(content: Text('已开始下载 $count 本远程书')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('启动下载失败: $e')),
+      );
+    }
+  }
+
   /// 生成本地文件名：避免重名 + 防特殊字符。
   /// 项目无 uuid 包，用 millisecondsSinceEpoch + Random hex 拼短串
   /// （PRD §技术注意条注明）。原文件名经 sanitize 保留扩展名 + 中文字。
@@ -363,44 +566,123 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
 
   @override
   Widget build(BuildContext context) {
-    final pathDisplay =
-        _pathStack.isEmpty ? '/' : '/${_pathStack.join('/')}';
     return PopScope(
-      canPop: _pathStack.isEmpty,
+      // 选择模式非空 → 拦默认 pop（先退选择再退页面）
+      canPop: !_selectionMode && _pathStack.isEmpty,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        // _pathStack 非空 → 上钻一层（同 leading back 行为）
-        _popPathOrPage();
+        // 优先级：选择模式 → path 栈 → 页面（默认）
+        if (_selectionMode) {
+          _cancelSelection();
+          return;
+        }
+        if (_pathStack.isNotEmpty) {
+          _popPathOrPage();
+        }
       },
       child: Scaffold(
-        appBar: AppBar(
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () {
-              if (!_popPathOrPage()) {
-                if (context.canPop()) {
-                  context.pop();
-                } else {
-                  Navigator.of(context).pop();
-                }
-              }
-            },
-          ),
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('远程书'),
-              Text(
-                pathDisplay,
-                style: Theme.of(context).textTheme.bodySmall,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-          ),
-        ),
+        appBar: _buildAppBar(context),
         body: _buildBody(context),
       ),
+    );
+  }
+
+  PreferredSizeWidget _buildAppBar(BuildContext context) {
+    if (_selectionMode) {
+      return AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          tooltip: '取消',
+          onPressed: _cancelSelection,
+        ),
+        title: Text('选择 ${_selectedPaths.length} 项'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.select_all),
+            tooltip: '全选',
+            onPressed: _selectAllFiles,
+          ),
+          IconButton(
+            icon: const Icon(Icons.download_outlined),
+            tooltip: '下载选中',
+            onPressed:
+                _selectedPaths.isEmpty ? null : _onDownloadSelected,
+          ),
+        ],
+      );
+    }
+    final pathDisplay =
+        _pathStack.isEmpty ? '/' : '/${_pathStack.join('/')}';
+    return AppBar(
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back),
+        onPressed: () {
+          if (!_popPathOrPage()) {
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              Navigator.of(context).pop();
+            }
+          }
+        },
+      ),
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('远程书'),
+          Text(
+            pathDisplay,
+            style: Theme.of(context).textTheme.bodySmall,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+      actions: [
+        // BATCH-27c-3: 批量下载进度 transient badge —— 仅 isRunning 时
+        // 渲染，跑完自动消失。点击不取消（cancel UX 留 follow-up）。
+        if (_lastProgress != null && _lastProgress!.isRunning)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Tooltip(
+              message:
+                  '远程书下载中 ${_lastProgress!.processed}/${_lastProgress!.total}',
+              child: SizedBox(
+                width: 40,
+                child: Stack(
+                  alignment: Alignment.center,
+                  clipBehavior: Clip.none,
+                  children: [
+                    const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    Positioned(
+                      right: -8,
+                      top: -2,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 4, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.primary,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          '${_lastProgress!.processed}/${_lastProgress!.total}',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 
@@ -448,16 +730,29 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
       itemCount: _entries.length,
       itemBuilder: (context, index) {
         final e = _entries[index];
+        final selected =
+            !e.isDir && _selectedPaths.contains(_remotePathFor(e));
         return ListTile(
-          leading: Icon(
-            e.isDir ? Icons.folder_outlined : Icons.book_outlined,
-          ),
+          leading: _selectionMode && !e.isDir
+              ? Checkbox(
+                  value: selected,
+                  // ListTile.onTap 已 toggle；Checkbox 自身的 onChanged
+                  // 仅为视觉响应（点 checkbox 时也走 toggle）。
+                  onChanged: (_) => _toggleSelected(e),
+                )
+              : Icon(
+                  e.isDir ? Icons.folder_outlined : Icons.book_outlined,
+                ),
           title: Text(e.name),
           subtitle: e.isDir ? null : Text(_subtitleFor(e)),
-          trailing: Icon(
-            e.isDir ? Icons.chevron_right : Icons.download_outlined,
-          ),
+          trailing: _selectionMode
+              ? null
+              : Icon(
+                  e.isDir ? Icons.chevron_right : Icons.download_outlined,
+                ),
+          selected: selected,
           onTap: () => _onTapEntry(e),
+          onLongPress: () => _onLongPressEntry(e),
         );
       },
     );

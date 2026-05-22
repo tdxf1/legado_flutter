@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
+import 'remote_book_runner.dart' show RemoteBookProgress;
 import 'update_toc_runner.dart' show UpdateTocProgress;
 
 class NotificationService {
@@ -205,6 +206,76 @@ class NotificationService {
       );
     } catch (e) {
       debugPrint('[Notification] showUpdateTocProgress failed: $e');
+    }
+  }
+
+  /// BATCH-27c-3: 远程书批量下载进度通知。与 [showUpdateTocProgress] 同模式
+  /// （progress.isDone 决定 ongoing / autoCancel / 文案）。
+  ///
+  /// notificationId 99002（与 download 99000 / update_toc 99001 区分），
+  /// 让用户同时跑下载 + 刷目录 + 远程书入库时三个 notification 不互相覆盖。
+  static Future<void> showRemoteBookProgress(
+      RemoteBookProgress progress) async {
+    try {
+      if (!await hasPermission()) return;
+      if (progress.isDone) {
+        await _plugin.show(
+          99002,
+          '远程书入库完成',
+          progress.fail > 0
+              ? '完成 (成功: ${progress.success}, 失败: ${progress.fail})'
+              : '已入库 ${progress.success} 本',
+          NotificationDetails(
+            android: AndroidNotificationDetails(
+              _downloadChannelId,
+              _downloadChannelName,
+              channelDescription: '书架批量任务进度',
+              importance: Importance.defaultImportance,
+              priority: Priority.defaultPriority,
+              ongoing: false,
+              autoCancel: true,
+              icon: 'ic_notification',
+            ),
+            iOS: const DarwinNotificationDetails(
+              presentAlert: true,
+              presentBadge: true,
+              // BATCH-27b spec「批量任务 + Notification 通道契约」: isDone
+              // 阶段 presentSound: true 提醒用户。
+              presentSound: true,
+            ),
+          ),
+        );
+        return;
+      }
+      if (progress.total <= 0) return; // 空批不显示通知
+      await _plugin.show(
+        99002,
+        '远程书下载中',
+        '${progress.processed}/${progress.total}'
+        '${progress.fail > 0 ? '  (失败: ${progress.fail})' : ''}',
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            _downloadChannelId,
+            _downloadChannelName,
+            channelDescription: '书架批量任务进度',
+            importance: Importance.low,
+            priority: Priority.low,
+            ongoing: true,
+            onlyAlertOnce: true,
+            showProgress: true,
+            maxProgress: progress.total,
+            progress: progress.processed,
+            icon: 'ic_notification',
+          ),
+          iOS: const DarwinNotificationDetails(
+            presentAlert: false,
+            presentBadge: true,
+            presentSound: false,
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('[Notification] showRemoteBookProgress failed: $e');
     }
   }
 
