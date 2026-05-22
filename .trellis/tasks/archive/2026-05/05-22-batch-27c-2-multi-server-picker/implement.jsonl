@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/flutter-app/persistence.md", "reason": "servers.json 走 file-based readJsonFile/writeJsonFile + 敏感字段 secure_storage `webdav_password_<id>` key 命名空间必读"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "BATCH-27c 远程书浏览模式段（27c-1/27c-3/27c-4）+ 凭据保险柜 (BATCH-03) + Forbidden 反向必查"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "Riverpod state + override 注入模式 — selectedRemoteServerIdProvider / remoteServersProvider 设计参考"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "*Override 模式 + setSecureStorageOverrideForTest top-level helper — testWidgets 必读"}
+{"file": ".trellis/tasks/archive/2026-05/05-22-batch-27c-menu-remote-webdav/prd.md", "reason": "27c-1 单 server 实现细节 + _bootstrap 凭据加载流程 + 测试钩子设计依据"}
