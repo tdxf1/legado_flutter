@@ -13,7 +13,11 @@ class DownloadPage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('下载管理'),
+        // BATCH-26a (05-22): 文案对齐原 legado `main_bookshelf.xml:46
+        // menu_download @string/cache_export`。原 tab 撤离后入口走 bookshelf
+        // PopupMenu「缓存/导出」项 → context.push('/downloads')。业务逻辑
+        // 不变。
+        title: const Text('缓存/导出'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),

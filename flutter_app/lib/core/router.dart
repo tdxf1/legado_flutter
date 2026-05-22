@@ -3,6 +3,8 @@ import 'package:go_router/go_router.dart';
 
 import '../features/bookshelf/bookshelf_page.dart';
 import '../features/bookshelf/book_info_edit_page.dart';
+import '../features/explore/explore_page.dart';
+import '../features/my/my_hub_page.dart';
 import '../features/reader/reader_page.dart';
 import '../features/search/search_page.dart';
 import '../features/settings/backup_page.dart';
@@ -17,14 +19,21 @@ import '../features/rss/rss_article_list_page.dart';
 import '../features/rss/rss_article_detail_page.dart';
 import '../features/rss/rss_favorites_page.dart';
 import '../features/rss/rss_source_manage_page.dart';
+import '../features/rss/rss_tab_page.dart';
 import '../features/rule_sub/rule_sub_page.dart';
 import '../features/qr/qr_scan_page.dart';
 
 final router = GoRouter(
   initialLocation: '/bookshelf',
   routes: [
+    // BATCH-26a (05-22): 顶层 5 tab → 4 tab 重构。对齐原 legado
+    // `main_bnv.xml`（书架 / 发现 / 订阅 / 我的）。
+    // /search /sources /downloads /settings 退出 ShellBranch，下移到顶级
+    // GoRoute；从 bookshelf AppBar IconButton / hub ListTile / PopupMenu
+    // 入。
     StatefulShellRoute.indexedStack(
-      builder: (context, state, navigationShell) => _AppShell(navigationShell: navigationShell),
+      builder: (context, state, navigationShell) =>
+          _AppShell(navigationShell: navigationShell),
       branches: [
         StatefulShellBranch(
           routes: [
@@ -37,36 +46,48 @@ final router = GoRouter(
         StatefulShellBranch(
           routes: [
             GoRoute(
-              path: '/search',
-              builder: (context, state) => const SearchPage(),
+              path: '/explore',
+              builder: (context, state) => const ExplorePage(),
             ),
           ],
         ),
         StatefulShellBranch(
           routes: [
             GoRoute(
-              path: '/sources',
-              builder: (context, state) => const SourcePage(),
+              path: '/rss',
+              builder: (context, state) => const RssTabPage(),
             ),
           ],
         ),
         StatefulShellBranch(
           routes: [
             GoRoute(
-              path: '/downloads',
-              builder: (context, state) => const DownloadPage(),
-            ),
-          ],
-        ),
-        StatefulShellBranch(
-          routes: [
-            GoRoute(
-              path: '/settings',
-              builder: (context, state) => const SettingsPage(),
+              path: '/my',
+              builder: (context, state) => const MyHubPage(),
             ),
           ],
         ),
       ],
+    ),
+    // BATCH-26a (05-22): 原 ShellBranch 的 4 个路由全部下移为顶级
+    // GoRoute，path / builder 不变。/search 由 bookshelf AppBar search
+    // IconButton 入；/sources /settings 走 hub（BATCH-26b 填）；
+    // /downloads 由 bookshelf PopupMenu「缓存/导出」入。
+    GoRoute(
+      path: '/search',
+      builder: (context, state) => const SearchPage(),
+    ),
+    GoRoute(
+      path: '/sources',
+      builder: (context, state) => const SourcePage(),
+    ),
+    GoRoute(
+      path: '/downloads',
+      builder: (context, state) => const DownloadPage(),
+    ),
+    GoRoute(
+      path: '/settings',
+      builder: (context, state) => const SettingsPage(),
     ),
     GoRoute(
       path: '/reader',
@@ -110,7 +131,8 @@ final router = GoRouter(
       path: '/cache-management',
       builder: (context, state) => const CacheManagementPage(),
     ),
-    // 批次 16 (05-19): RSS 源管理页。bookshelf_page PopupMenu 入口。
+    // 批次 16 (05-19): RSS 源管理页。BATCH-26a 后入口改由 RSS tab AppBar
+    // 「RSS 源设置」IconButton 进入（原 bookshelf PopupMenu 入口已撤）。
     GoRoute(
       path: '/rss-source-manage',
       builder: (context, state) => const RssSourceManagePage(),
@@ -132,7 +154,8 @@ final router = GoRouter(
         return RssArticleDetailPage(sourceUrl: sourceUrl, link: link);
       },
     ),
-    // 批次 18 (05-19): RSS 收藏页。bookshelf_page PopupMenu 入口。
+    // 批次 18 (05-19): RSS 收藏页。BATCH-26a 后入口改由 RSS tab AppBar
+    // 「收藏」IconButton 进入（原 bookshelf PopupMenu 入口已撤）。
     GoRoute(
       path: '/rss-favorites',
       builder: (context, state) => const RssFavoritesPage(),
@@ -161,6 +184,8 @@ class _AppShell extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       body: navigationShell,
+      // BATCH-26a (05-22): 4 NavigationDestination 对齐原 legado
+      // `main_bnv.xml` 0-3 槽位（书架 / 发现 / 订阅 / 我的）。
       bottomNavigationBar: NavigationBar(
         selectedIndex: navigationShell.currentIndex,
         onDestinationSelected: (index) => navigationShell.goBranch(
@@ -174,28 +199,22 @@ class _AppShell extends StatelessWidget {
             label: '书架',
           ),
           NavigationDestination(
-            icon: Icon(Icons.search_outlined),
-            selectedIcon: Icon(Icons.search),
-            label: '搜索',
+            icon: Icon(Icons.explore_outlined),
+            selectedIcon: Icon(Icons.explore),
+            label: '发现',
           ),
           NavigationDestination(
-            icon: Icon(Icons.source_outlined),
-            selectedIcon: Icon(Icons.source),
-            label: '书源',
+            icon: Icon(Icons.rss_feed_outlined),
+            selectedIcon: Icon(Icons.rss_feed),
+            label: '订阅',
           ),
           NavigationDestination(
-            icon: Icon(Icons.download_outlined),
-            selectedIcon: Icon(Icons.download),
-            label: '下载',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
-            label: '设置',
+            icon: Icon(Icons.person_outline),
+            selectedIcon: Icon(Icons.person),
+            label: '我的',
           ),
         ],
       ),
     );
   }
 }
-

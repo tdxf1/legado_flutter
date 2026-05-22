@@ -105,6 +105,14 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
         appBar: AppBar(
           title: const Text('书架'),
           actions: [
+            // BATCH-26a (05-22): 对齐原 legado `main_bookshelf.xml`
+            // `menu_search` always icon。/search 退出 ShellBranch 后
+            // 由此 push 进入。放在 actions 第一位让 search 始终可见。
+            IconButton(
+              icon: const Icon(Icons.search),
+              tooltip: '搜索',
+              onPressed: () => context.push('/search'),
+            ),
             IconButton(
               icon: Icon(_isGridView ? Icons.view_list : Icons.grid_view),
               tooltip: _isGridView ? '列表视图' : '网格视图',
@@ -126,8 +134,11 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
               onSelected: (value) async {
                 // BATCH-18f (F-W2B-016)：bookshelf AppBar 仅保留书架场景高频
                 // 4 项；backup / read_stats / cache_management / rss_favorites
-                // / rule_subs 5 项已移到 settings_page 工具段。router.dart 路
-                // 由表 0 改动（入口位置变更，路径不变）。
+                // / rule_subs 5 项已移到 settings_page 工具段。
+                // BATCH-26a (05-22)：rss_source_manage 项已撤（迁去 RSS tab
+                // AppBar「RSS 源设置」icon）；新增 cache_export 入「缓存/导出」
+                // → /downloads，对齐 `main_bookshelf.xml:43-47 menu_download
+                // @string/cache_export`。
                 if (value == 'manage_groups') {
                   await showDialog(
                     context: context,
@@ -136,9 +147,9 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                 } else if (value == 'import_local') {
                   // 批次 13 (05-19): 导入本地书。
                   await _onImportLocalBook(context);
-                } else if (value == 'rss_source_manage') {
-                  // 批次 16 (05-19): RSS 源管理页。
-                  if (context.mounted) context.push('/rss-source-manage');
+                } else if (value == 'cache_export') {
+                  // BATCH-26a (05-22): /downloads 退 tab 后入口移到此。
+                  if (context.mounted) context.push('/downloads');
                 } else if (value == 'qr_scan') {
                   // 批次 20 (05-19): QR 扫码导入。扫描结果由 qr_scan_page
                   // 自己处理 + pop 后回到原页。
@@ -163,10 +174,10 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                   ),
                 ),
                 PopupMenuItem(
-                  value: 'rss_source_manage',
+                  value: 'cache_export',
                   child: ListTile(
-                    leading: Icon(Icons.rss_feed),
-                    title: Text('RSS 源管理'),
+                    leading: Icon(Icons.download_outlined),
+                    title: Text('缓存/导出'),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),
