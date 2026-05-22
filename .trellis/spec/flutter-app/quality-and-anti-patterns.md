@@ -171,7 +171,7 @@ This is acceptable because the extension is a thin syntactic wrapper. New `// ig
 | Using `print` / `debugPrint` for production logs | Use `core/perf_monitor.dart` or `tracing` (via FRB) for telemetry. `debugPrint` is fine for dev-time hints. | n/a |
 | `setState` after `await` without a mounted check | See [async-and-mounted](./async-and-mounted.md). | BATCH-25 |
 | Two providers exposing the same conceptual value | Derive one from the other. | BATCH-18d (`fontSizeProvider`) |
-| Writing passwords / API tokens / WebDAV credentials to `settings.json` or any per-feature `*.json` | Use `core/security/secure_storage.dart` (`writeSecret/readSecret/deleteSecret`). See "凭据保险柜 (Credential Vault, BATCH-03)" below. | BATCH-03 |
+| Writing passwords / API tokens / WebDAV credentials / 备份密码 to `settings.json` / `legado_local.json` / 任何 per-feature `*.json` | Use `core/security/secure_storage.dart` (`writeSecret/readSecret/deleteSecret`). See "凭据保险柜 (Credential Vault, BATCH-03 / BATCH-03b)" below. | BATCH-03 / BATCH-03b |
 | `Map<String, String>!` accessor pattern (`cfg['url']!`) for known-shape config | Use a file-private data class with `final` fields. The config "shape" should be encoded in the type, not implied via `!`. | BATCH-03 (`_WebDavCredentials`) |
 | `Uri.parse(remoteUrl)` 不经 `enforceWebViewScheme` 直接走 `loadRequest` / `dio.get` | 让 `file://` / `javascript:` / `data:` 越界 scheme 进 webview 是 SSRF / 任意代码执行入口。任何远端 URL 必经 scheme 白名单。 | BATCH-05 (`webview_safety.dart`) |
 | New webview caller uses `JavaScriptMode.unrestricted` without ADR | reader is the only business-justified case; new callers default to `disabled` and must document the necessity. | BATCH-05 |
@@ -180,14 +180,23 @@ This is acceptable because the extension is a thin syntactic wrapper. New `// ig
 | 多 future 调用入口缺 seq token | 用户连续触发同一 async action（搜索、刷新）时旧 future 后完成会"幽灵"覆盖新结果；加 `int _xxxSeq` 自增 token + 每个 await 后 `seq == _xxxSeq` 校验 + finally 内同样校验。 | BATCH-21 (F-W2B-019) |
 | TabBarView children 直接 `[for t in _tabs _buildXxx(...)]` method 返回 | 父 setState 让所有 tab 同时 rebuild + 切走的 tab 丢 scroll position；抽 `_XxxTabView` `StatefulWidget` + `AutomaticKeepAliveClientMixin`，build 内调 `super.build(context)`。 | BATCH-21 (F-W2B-013) |
 
-## 凭据保险柜 (Credential Vault, BATCH-03)
+## 凭据保险柜 (Credential Vault, BATCH-03 / BATCH-03b)
 
-**敏感字段必须走 `core/security/secure_storage.dart`，不允许进 `settings.json` / per-feature `*.json` / FRB string payload**。canonical 例子：WebDAV password。
+**敏感字段必须走 `core/security/secure_storage.dart`，不允许进 `settings.json` / per-feature `*.json` / FRB string payload**。canonical 例子：WebDAV password（BATCH-03）+ Legado 备份密码（BATCH-03b）。
+
+凭据存储主题已闭环：F-W2B-001（webdav password）+ F-W1A-020（backup password）全部 Resolved。
 
 ### 何为「敏感字段」
 
-- 用户密码、API token、设备私钥、OAuth refresh token、HTTP basic auth credential、WebDAV password。
+- 用户密码、API token、设备私钥、OAuth refresh token、HTTP basic auth credential、WebDAV password、Legado 备份密码。
 - 反例（**非敏感**，仍可走 `json_store`）：URL / username / device-name / preference flags / cache keys / search history。
+
+### key 命名空间
+
+| key | 引入批次 | 旧路径 |
+|---|---|---|
+| `webdav_password` | BATCH-03 (F-W2B-001) | webdav.json `password` 字段 |
+| `backup_password` | BATCH-03b (F-W1A-020) | legado_local.json `password` 字段（FRB `set/get_backup_password`） |
 
 ### IO 路径
 
@@ -232,7 +241,9 @@ tearDown(() {
 
 ### 迁移路径模板
 
-旧版本可能把敏感字段写在普通 JSON 里（典型：webdav.json 含 password）。迁移逻辑放对应 page 的 `_loadConfig`（页面入口）：
+旧版本可能把敏感字段写在普通 JSON 里（典型：webdav.json 含 password）或通过 FRB 写入 Rust 端管理的 JSON 文件（典型：legado_local.json 中 backup password 由 `set/get_backup_password` 操作）。迁移逻辑放对应 page 的 `_loadConfig`（页面入口），首次访问触发一次性搬迁，幂等。
+
+#### 模板 A：旧字段在 dart 直读 JSON（webdav.json 模式 / BATCH-03）
 
 ```dart
 final map = await readJsonFile<Map<String, dynamic>>(...);
@@ -249,13 +260,45 @@ if (legacyPwd.isNotEmpty && securePwd == null) {
 }
 ```
 
-幂等：第二次启动 `securePwd != null`，迁移路径自动跳过。`writeJsonFile` 永不再带敏感字段，旧字段会被下一次正常 save 自然清掉。
+#### 模板 B：旧字段在 Rust 端 FRB 管理（legado_local.json 模式 / BATCH-03b）
+
+旧路径无法 dart 直接读 JSON（字段由 Rust 端 helper 管理 + 文件可能有损坏 .bak 兜底机制）；走 FRB read → secure_storage write → FRB write 空串清理的三步迁移。
+
+```dart
+final securePwd = await readSecret('backup_password');
+if (securePwd != null) {
+  _backupPwdCtl.text = securePwd; // 命中直接用
+} else {
+  try {
+    final legacyPwd = await rust_api.getBackupPassword(documentsDir: dir);
+    if (legacyPwd.isNotEmpty) {
+      await writeSecret('backup_password', legacyPwd);
+      try {
+        await rust_api.setBackupPassword(documentsDir: dir, password: '');
+      } catch (_) {
+        // 清理失败不阻塞迁移；下次启动 secure_storage 命中即可
+      }
+      _backupPwdCtl.text = legacyPwd;
+    } else {
+      _backupPwdCtl.text = '';
+    }
+  } catch (_) {
+    _backupPwdCtl.text = ''; // 桥未初始化等异常退回
+  }
+}
+```
+
+Rust 端 FRB（`set/get_backup_password`）保留 binary contract（funcId 71/72）以备未来 backup zip 加密复用，doc 标 deprecated 注释（**不**加 `#[deprecated]` attr —— Dart 端迁移路径仍要调）。新代码读写备份密码请走 `readSecret / writeSecret('backup_password')`，不要重新调 FRB。
+
+#### 幂等保证
+
+第二次启动 `securePwd != null` 命中 secure_storage 短路返回；模板 A 的 `writeJsonFile` 永不再带敏感字段；模板 B 的 FRB read 拿到空串后不再触发清理路径。三种状态机均收敛到稳态。
 
 ### Forbidden 反向
 
 - ❌ `await writeJsonFile('webdav.json', { 'password': pwd, ... })` — 把密码混进普通 JSON
 - ❌ `await writeJsonKey('webdav_password', pwd)` — 写 settings.json 也不允许
-- ❌ FRB API 把 password 当 String 透传 + Rust 端写普通文件（F-W1A-020 备份密码即此问题，留 BATCH-03b 处理）
+- ❌ FRB API 把 password 当 String 透传 + Rust 端写普通文件（F-W1A-020 备份密码即此问题，BATCH-03b 已闭环；新增凭据字段不要再走这条路）
 - ❌ 在 widget test 直接构造 `FlutterSecureStorage()` 跑——会触发 platform channel `MissingPluginException`；用 `setSecureStorageOverrideForTest(InMemorySecureStorage())`
 
 

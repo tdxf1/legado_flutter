@@ -321,6 +321,8 @@
 
 **建议**: 用 Android Keystore 包裹一次（FRB 提供 native side hook 即可），iOS 用 Keychain；至少在文件名前缀加 `.protected_` 让用户感知到敏感性。
 
+**Resolution**: BATCH-03b (2026-05-22) — 选 Dart 端 secure_storage 方案：复用 BATCH-03 已为 webdav_password 建好的 `flutter_secure_storage` 基础设施（Android Keystore-backed EncryptedSharedPreferences / iOS Keychain）。`webdav_config_page.dart` load 路径优先 `readSecret('backup_password')`，miss 时回退 `rust_api.getBackupPassword(...)` 读旧 `legado_local.json` 字段，有值则迁到 secure_storage + 调 `set_backup_password` 传空串清理（保留 .json 文件其他字段）。save 路径单行 `writeSecret('backup_password', _backupPwdCtl.text)`。Rust 端 `set_backup_password` (line 1452) + `get_backup_password` (line 1510) 加 deprecate doc 注释——**不**加 `#[deprecated]` attr（dart 端迁移路径仍要调）+ FRB funcId 71/72 binary contract 保留以备未来 backup zip 加密功能（如真接入）复用，避免 binding regen 风险。新增 `flutter_app/test/backup_password_secure_test.dart` 4 case 覆盖 secure_storage 命中 / 迁移路径 / 双空 / save 写入；改 `webdav_config_page_test.dart` 第三 case 断言从 setBackupPassword override 调用 → secure_storage fake debugStore 命中。凭据存储主题（F-W1A-020 + F-W2B-001 + F-W1A-023 等）整体闭环。task: 05-22-batch-03b-backup-password-secure。
+
 ---
 
 ### F-W1A-021 [P1 主要][B-正确性][bridge/api]
