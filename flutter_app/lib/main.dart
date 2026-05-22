@@ -57,6 +57,11 @@ Future<void> main() async {
   // false 再 listen 异步刷新」的视觉抖动）。
   final bookshelfManageOpenReader =
       await loadBookshelfManageOpenReaderFromDisk();
+  // BATCH-27c-2 (05-22): 启动加载 selectedRemoteServerId，让
+  // RemoteBooksPage 第一帧就走选中 server 凭据路径，避免先渲染 -1
+  // fallback 再 listen 切换造成的请求浪费。
+  final selectedRemoteServerId =
+      await loadSelectedRemoteServerIdFromDisk();
   runApp(ProviderScope(
     overrides: [
       themeModeProvider.overrideWith((ref) => themeMode),
@@ -67,6 +72,8 @@ Future<void> main() async {
       defaultHomePageProvider.overrideWith((ref) => defaultHomePage),
       bookshelfManageOpenReaderProvider
           .overrideWith((ref) => bookshelfManageOpenReader),
+      selectedRemoteServerIdProvider
+          .overrideWith((ref) => selectedRemoteServerId),
     ],
     child: const LegadoApp(),
   ));

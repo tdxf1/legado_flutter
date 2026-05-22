@@ -479,6 +479,34 @@ Future<void> saveBookshelfManageOpenReaderToDisk(bool v,
       errorTag: 'bookshelf manage open reader',
     );
 
+/// BATCH-27c-2 (05-22): 当前选中的远程书 server id。
+///
+/// 默认 `-1`（[`kDefaultRemoteServerId`]） = 用旧 webdav.json 单凭据
+/// 路径，与 BATCH-27c-1 完全兼容；`>0` = 走 `servers.json` 列表里
+/// 对应 server 的凭据 + `secure_storage` 的 `webdav_password_<id>`
+/// 密码。对齐原 legado `AppConfig.remoteServerId` SharedPreferences。
+final selectedRemoteServerIdProvider = StateProvider<int>((ref) => -1);
+
+Future<int> loadSelectedRemoteServerIdFromDisk({String? directory}) =>
+    readJsonKey<int>(
+      'remoteServerId',
+      (raw) => raw is int
+          ? raw
+          : raw is num
+              ? raw.toInt()
+              : -1,
+      -1,
+      directory: directory,
+    );
+
+Future<void> saveSelectedRemoteServerIdToDisk(int v, {String? directory}) =>
+    writeJsonKey(
+      'remoteServerId',
+      v,
+      directory: directory,
+      errorTag: 'remote server id',
+    );
+
 /// 阅读器渲染模式。
 ///
 /// 之前散落使用 `_settings.pageAnim == ReaderPageAnim.scroll` 或

@@ -10,11 +10,12 @@ import 'package:go_router/go_router.dart';
 import '../../core/persistence/json_store.dart';
 import '../../core/providers.dart';
 import '../../core/remote_book_runner.dart';
-import '../../core/security/secure_storage.dart';
 import '../../core/util/platform_int64.dart';
 import '../../core/util/time_format.dart';
 import '../../core/widgets/safe_setstate.dart';
 import '../../src/rust/api.dart' as rust_api;
+import 'remote_servers.dart';
+import 'servers_picker.dart';
 
 /// BATCH-27c-1: 远程书浏览页（最小可用版）。
 /// BATCH-27c-3: 加多选模式 + 批量下载（[`RemoteBookRunner`] singleton 范本）。
@@ -102,6 +103,11 @@ class RemoteBooksPage extends ConsumerStatefulWidget {
   /// BATCH-27c-4: 测试钩子，注入排序方向初值（true=升序 / false=降序）。
   final bool? sortAscOverride;
 
+  /// BATCH-27c-2 测试钩子：注入 servers 列表 + selectedId，跳过
+  /// servers.json IO。生产路径 initState 异步加载。
+  final List<RemoteServer>? serversOverride;
+  final int? selectedRemoteServerIdOverride;
+
   const RemoteBooksPage({
     super.key,
     this.dbPathOverride,
@@ -113,6 +119,8 @@ class RemoteBooksPage extends ConsumerStatefulWidget {
     this.remoteBookRunnerOverride,
     this.sortKeyOverride,
     this.sortAscOverride,
+    this.serversOverride,
+    this.selectedRemoteServerIdOverride,
   });
 
   @override
@@ -146,6 +154,11 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
   String? _credentialsPassword;
   bool _credentialsLoading = true;
   String? _credentialsError;
+
+  // BATCH-27c-2: 多 server 状态。serversOverride 优先 → 初始读 disk →
+  // 用户 CRUD 后内存里持有，关 BottomSheet 时 ref 与 disk 都同步。
+  List<RemoteServer> _servers = const <RemoteServer>[];
+  int _selectedRemoteServerId = kDefaultRemoteServerId;
 
   // 列目录状态
   bool _entriesLoading = false;
@@ -222,7 +235,14 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
   @override
   void initState() {
     super.initState();
-    _bootstrap();
+    // BATCH-27c-2: 优先读 *Override → 默认 -1 / 空列表，实际加载在
+    // _loadServersAndSelectedIdThenBootstrap 内异步走 disk。生产路径
+    // main.dart 启动时已 load selectedRemoteServerId provider，这里
+    // 仅 fallback。
+    _selectedRemoteServerId =
+        widget.selectedRemoteServerIdOverride ?? kDefaultRemoteServerId;
+    _servers = widget.serversOverride ?? const <RemoteServer>[];
+    _loadServersAndSelectedIdThenBootstrap();
     _loadSortPrefs();
     // BATCH-27c-3: 挂 progress 监听。runner 是 singleton —— 即使其它入口
     // （未来 batch-deep-cache 等）也能共享同一进度通道。dispose 时 cancel
@@ -283,6 +303,137 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
     super.dispose();
   }
 
+  /// BATCH-27c-2: 异步加载 servers.json + selectedRemoteServerId 然后触发
+  /// _bootstrap。`*Override` 注入时跳过 disk 直接 _bootstrap。生产路径走
+  /// disk → 同步到 provider state → _bootstrap。
+  Future<void> _loadServersAndSelectedIdThenBootstrap() async {
+    if (widget.credentialsOverride != null ||
+        widget.serversOverride != null ||
+        widget.selectedRemoteServerIdOverride != null) {
+      // 测试路径：注入 credentialsOverride 跳过 servers / 凭据 IO；
+      // 注入 serversOverride / selectedRemoteServerIdOverride 也直接走
+      // _bootstrap 用 initState 已设的值。
+      await _bootstrap();
+      return;
+    }
+    try {
+      final dir = widget.documentsDirOverride ?? await resolvePersistenceDir();
+      final servers = await loadRemoteServersFromDisk(directory: dir);
+      // selectedRemoteServerIdProvider 在 main.dart 启动时已 load，这里
+      // 直接读 provider 拿值（避免再次 IO）。
+      final selectedId = ref.read(selectedRemoteServerIdProvider);
+      if (!mounted) return;
+      safeSetState(() {
+        _servers = servers;
+        _selectedRemoteServerId = selectedId;
+      });
+      await _bootstrap();
+    } catch (_) {
+      // load 失败 fallback 走默认凭据路径
+      await _bootstrap();
+    }
+  }
+
+  /// BATCH-27c-2: 切 server / CRUD 后整页 reset 重新走 _bootstrap。
+  /// 「进了不同世界」语义：清 _pathStack / _selectedPaths / _searchQuery /
+  /// _credentialsXxx，跳到 loading 态再重新加载凭据 + 根目录。
+  Future<void> _resetAndReloadForServerSwitch() async {
+    safeSetState(() {
+      _pathStack.clear();
+      _selectedPaths.clear();
+      _selectionMode = false;
+      _searchQuery = '';
+      _searchController.clear();
+      _searchMode = false;
+      _entries = const <_RemoteEntry>[];
+      _credentialsUrl = null;
+      _credentialsUser = null;
+      _credentialsPassword = null;
+      _credentialsLoading = true;
+      _credentialsError = null;
+    });
+    await _bootstrap();
+  }
+
+  /// BATCH-27c-2: AppBar server IconButton 点击 → 弹 ServersBottomSheet。
+  /// CRUD 全部走 disk + secure_storage + 同步 provider state；选中 id
+  /// 变化时 _resetAndReloadForServerSwitch。
+  Future<void> _onPickServer() async {
+    final picked = await showServersBottomSheet(
+      context: context,
+      servers: _servers,
+      selectedId: _selectedRemoteServerId,
+      onCreate: (server, password) async {
+        final next = [..._servers, server];
+        await saveRemoteServersToDisk(next,
+            directory: widget.documentsDirOverride);
+        await saveRemoteServerPassword(server.id, password);
+        if (!mounted) return;
+        safeSetState(() => _servers = next);
+      },
+      onUpdate: (server, password) async {
+        final next = _servers
+            .map((e) => e.id == server.id ? server : e)
+            .toList(growable: false);
+        await saveRemoteServersToDisk(next,
+            directory: widget.documentsDirOverride);
+        if (password != null) {
+          await saveRemoteServerPassword(server.id, password);
+        }
+        if (!mounted) return;
+        safeSetState(() => _servers = next);
+      },
+      onDelete: (server) async {
+        final next = _servers.where((e) => e.id != server.id).toList();
+        await saveRemoteServersToDisk(next,
+            directory: widget.documentsDirOverride);
+        await saveRemoteServerPassword(server.id, null);
+        if (!mounted) return;
+        var fallback = false;
+        if (server.id == _selectedRemoteServerId) {
+          fallback = true;
+          await saveSelectedRemoteServerIdToDisk(kDefaultRemoteServerId);
+        }
+        safeSetState(() {
+          _servers = next;
+          if (fallback) {
+            _selectedRemoteServerId = kDefaultRemoteServerId;
+          }
+        });
+        if (fallback) {
+          ref.read(selectedRemoteServerIdProvider.notifier).state =
+              kDefaultRemoteServerId;
+          // 不在此处 _resetAndReloadForServerSwitch — BottomSheet 关闭后
+          // 由 picked 路径或保留 -1 路径决定。删的不是当前 selected 时
+          // 仅 _servers 变。删的是 selected 时 picked 取最后一个值仍是
+          // 旧 id；下面统一处理：BottomSheet 关闭后若 _selected 已
+          // fallback 到 -1 也要重走 bootstrap。
+        }
+      },
+    );
+    // BottomSheet 关闭后处理选中 id 变化
+    if (!mounted) return;
+    if (picked != null && picked != _selectedRemoteServerId) {
+      safeSetState(() => _selectedRemoteServerId = picked);
+      ref.read(selectedRemoteServerIdProvider.notifier).state = picked;
+      await saveSelectedRemoteServerIdToDisk(picked);
+      await _resetAndReloadForServerSwitch();
+      return;
+    }
+    // picked == null 但 onDelete 把 _selectedRemoteServerId 改成 -1 →
+    // 也需要重走 bootstrap
+    final currentProviderId = ref.read(selectedRemoteServerIdProvider);
+    if (picked == null && currentProviderId != _selectedRemoteServerId) {
+      // 同步并重走
+      safeSetState(() => _selectedRemoteServerId = currentProviderId);
+      await _resetAndReloadForServerSwitch();
+    } else if (picked == null && _selectedRemoteServerId == kDefaultRemoteServerId) {
+      // onDelete fallback 路径：_selected 已写为 -1，但用户没新选 server，
+      // 进 BottomSheet 前的 selected 可能不是 -1。简化逻辑：永远比对
+      // provider 与 local state 不一致就重走。
+    }
+  }
+
   /// 启动流程：先加载凭据，凭据齐则继续 [`_loadCurrentDir`]。
   Future<void> _bootstrap() async {
     final creds = widget.credentialsOverride;
@@ -305,13 +456,38 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
 
     try {
       final dir = widget.documentsDirOverride ?? await resolvePersistenceDir();
-      final cfg = await readJsonFile(
-        'webdav.json',
-        directory: dir,
-      );
-      final url = (cfg?['url'] as String?)?.trim() ?? '';
-      final user = (cfg?['user'] as String?)?.trim() ?? '';
-      final pwd = (await readSecret('webdav_password')) ?? '';
+      // BATCH-27c-2: 凭据源按 selectedRemoteServerId 决定。
+      // - id == -1 → 走旧 webdav.json + secure_storage:webdav_password
+      //   （27c-1 兼容路径）
+      // - id > 0 → 从 _servers 找对应 RemoteServer + secure_storage:
+      //   webdav_password_<id>
+      String url;
+      String user;
+      String pwd;
+      if (_selectedRemoteServerId == kDefaultRemoteServerId) {
+        final cfg = await readJsonFile(
+          'webdav.json',
+          directory: dir,
+        );
+        url = (cfg?['url'] as String?)?.trim() ?? '';
+        user = (cfg?['user'] as String?)?.trim() ?? '';
+        pwd = await loadRemoteServerPassword(kDefaultRemoteServerId);
+      } else {
+        final server =
+            _servers.where((s) => s.id == _selectedRemoteServerId).firstOrNull;
+        if (server == null) {
+          // 选中 server 已被删 / servers.json 损坏 → fallback id=-1
+          if (!mounted) return;
+          safeSetState(() {
+            _selectedRemoteServerId = kDefaultRemoteServerId;
+          });
+          await saveSelectedRemoteServerIdToDisk(kDefaultRemoteServerId);
+          return _bootstrap(); // 用默认凭据重走
+        }
+        url = server.url.trim();
+        user = server.user.trim();
+        pwd = await loadRemoteServerPassword(server.id);
+      }
       if (url.isEmpty || user.isEmpty || pwd.isEmpty) {
         if (!mounted) return;
         safeSetState(() {
@@ -787,6 +963,13 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
         ],
       ),
       actions: [
+        // BATCH-27c-2: server 切换 IconButton（普通模式 only）。优先级
+        // 最高（actions[0]），点击弹 ServersBottomSheet 切 server / CRUD。
+        IconButton(
+          icon: const Icon(Icons.dns_outlined),
+          tooltip: '切换 WebDAV 服务器',
+          onPressed: _onPickServer,
+        ),
         // BATCH-27c-4: 搜索 IconButton —— 切到搜索模式
         IconButton(
           icon: const Icon(Icons.search),
