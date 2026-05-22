@@ -1269,6 +1269,79 @@ PreferredSizeWidget _buildAppBar(BuildContext context) {
 - Rust `database.rs` × 2 unit test：`find_for_book_url` baseUrl 匹配 / book_url_pattern regex 兜底（含 regex 损坏静默跳过）。
 
 
+
+### RSS 订阅源网格 (BATCH-28)
+
+对齐原 legado `RssFragment.kt` (RssAdapter 4 列网格 + 分组筛选)。将
+`RssTabPage` 从 BATCH-26a 占位页改造为 `ConsumerStatefulWidget`，显示
+enabled RSS sources 的 GridView + 未读 badge + 分组 ChoiceChip +
+pull-to-refresh。
+
+**源网格 GridView**：
+
+- `RssTabPage`：StatelessWidget → ConsumerStatefulWidget + `dbPathOverride`
+  注入 + `sourcesOverride / groupsOverride / unreadCountsOverride` 测试
+  钩子。
+- `initState._loadAll()`：并行加载 `rssSourceListEnabled` +
+  `rssSourceListGroups` + 串行 `rssCountUnread` 逐源取未读数。
+- body：`RefreshIndicator` 包 `GridView.builder`。
+- 列数：`SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 4)`
+  — 固定 4 列对齐 legado RssAdapter。
+- item：`Card(clipBehavior.antiAlias)` + Column：
+  - Stack：`CachedNetworkImage` 源图标（50dp 圆角，fallback
+    `Icon(Icons.rss_feed)`）+ 右上角红色数字 badge（`rssCountUnread
+    > 0`， >99 显示「99+」）
+  - `Text(source_name, maxLines: 2, textAlign: center)`
+- 空态：centered「暂无订阅源」+ FilledButton「去添加」→ push
+  `/rss-source-manage`。
+- 点 source → push `/rss-articles?sourceUrl=<encoded>`（已有路由）。
+
+**全局 pull-to-refresh**：
+
+- RefreshIndicator 下拉 → `_refreshAll()`：逐源 `rssGetArticles`
+  拉最新文章，单源失败静默跳过，完成后 `_loadUnreadCounts` 刷新 badge。
+- 不逐源显示进度（与 import_bookshelf 同款策略：总结即可）。
+
+**分组 ChoiceChip**：
+
+- AppBar bottom 加 horizontal `SingleChildScrollView` + ChoiceChip：
+  「全部」+ 各 `group` 名（调 `rssSourceListGroups` 获取）。
+- 单选：点 chip 切换 `_filterGroup: String?`（null=全部，非 null =
+  `source_group` 包含该组名的源）。
+- **不持久化**（与 27d-followup group chips 同款：每次进页 = 全部）。
+- 「分组」AppBar action 从 26a 的 disabled 改 enabled（点选备选方案：
+  `_showGroupPicker` SimpleDialog）。
+
+**AppBar actions 保持 3 项**（与 26a 占位页相同）：
+
+- `star_outline` → push `/rss-favorites`
+- `folder_outlined` → enabled → `_showGroupPicker` SimpleDialog 或
+  chips 已满足
+- `settings_outlined` → push `/rss-source-manage`
+
+**Forbidden 反向（BATCH-28 新增 3 条）**：
+
+- ❌ 源图标加载用 `Image.network` — 必须用 `CachedNetworkImage`
+  （与 `cached_network_image` 是唯一 blessed image cache 规则一致）。
+- ❌ 未读 badge 用 `NotificationListener` / `ValueListenableBuilder`
+  — 直接用 `_unreadCounts[sourceUrl]` state map + setState（与现有
+  RSS pages 同款 setState 管理，不引入 ViewModel / Provider）。
+- ❌ 分组选择持久化到 settings.json — group filter 是临时视图态，与
+  27d-followup group chips 同决策（每次进页 = 全部）。
+
+**测试钩子（BATCH-28 范本）**：
+
+- 4 个 *Override 注入点：`dbPathOverride / sourcesOverride /
+  groupsOverride / unreadCountsOverride`。与 `RssSourceManagePage`
+  同模式（ProviderScope wrapping + MaterialApp + Widget）。
+- `rss_tab_page_test.dart` × 4 testWidgets：空态「暂无订阅源」+
+  「去添加」 / GridView 渲染源名 + badge / 分组 ChoiceChip 筛选（选
+  「科技」仅科技源可见 + 选「全部」恢复全部） / AppBar 3 actions 可见。
+- `_loadAll` 内 `dbPath` 必须加显式 `final String dbPath` 类型注解
+  （否则 Dart analyzer 将 `widget.dbPathOverride ?? await` 推断为
+  `String?`，与 `rss_source_manage_page` 同款决策）。
+
+
 ## Performance Notes
 
 - `cached_network_image` is the only blessed image cache. Don't add a parallel `Image.network` call site.
