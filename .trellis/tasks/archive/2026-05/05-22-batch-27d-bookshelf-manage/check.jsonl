@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "check 27d spec compliance：选择模式范本套 27c-3（PopScope 优先级 / Set<String> _selectedIds / AppBar 三态 close + title + select_all + 删除 + overflow）+ 27a 表 add_remote 行同步状态 + Forbidden 反向（不引 batch FRB / 不引 Runner / overflow 不平铺 6 IconButton）"}
+{"file": ".trellis/spec/flutter-app/async-and-mounted.md", "reason": "check 每个 await 后 mounted check + safeSetState；批量 forEach 静默 catch + done 总结 SnackBar"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "check invalidate 时机：批量完成后**1 次** invalidate 而非每本 invalidate；3 provider 全部 invalidate（allBooks/booksByGroup/bookChapters）"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "check testWidgets 命名 BATCH-27d + *Override 注入不触 path_provider/secure_storage；fixture 注入 allBooksOverride（List<Map>）跳过 FRB 真查"}
+{"file": ".trellis/spec/rust-core/error-handling.md", "reason": "check 新 FRB Result<(), String> + 中文 format! 错误 context + 不 panic"}
