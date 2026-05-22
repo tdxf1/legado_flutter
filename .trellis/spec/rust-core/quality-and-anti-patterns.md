@@ -42,6 +42,38 @@ Each sub-crate inherits via `[lints] workspace = true`. Do not add `#[allow(...)
 - **Cloning `Arc<Vec<T>>`**: cheap, do not shy away. The cache returns `Arc<Vec<ReplaceRule>>` precisely so callers can clone-and-detach for iteration without keeping the lock.
 - **`thread_local` micro-cache keyed by `&str` `(ptr, len)` MUST be cleared at every entry point**: `core-source/legado/rule.rs::LAST_PARSED_HTML` is the canonical example (BATCH-14, F-W1B-029). The pattern caches `Rc<scraper::Html>` so the 5 search fields + every `||` combinator branch share one parsed DOM. The `(ptr_addr, len)` key is collision-free **within a single parser entry-point call** (the html `String` keeps a stable address for the call's lifetime), but the allocator may reuse the same address across calls — so any new rule-evaluation entry-point function in `core-source` MUST call `clear_html_parse_cache()` (or its equivalent) up front. Today the 7 entry points are `parser::search` / `explore` / `get_book_info` / `get_chapters` / `get_chapter_content` and `rss::get_articles` / `rss::fetch_article_content_full`; if you add an 8th, add the clear there too.
 
+### RuleContext clone 复用模式（BATCH-13b）
+
+`parse_chapters_from_page` 4 个串行 closure（`is_vip` / `is_volume` / `is_pay` / `update_time`）共享 1 个 outer-mutable `RuleContext`，每个 closure 内只重写 `result` 字段。原实现每章 4 次 `RuleContext::clone`（含整页 HTML `String` + 多个 String 字段 + `HashMap<String, LegadoValue>`），重构后整批 1 次 clone（4N → 1）。
+
+```rust
+// 适用：4 个 closure 串行不重入；inner 仅写 ctx.result
+let mut shared_ctx = context.clone();
+let vips = rules.is_vip.as_deref().map(|rule| {
+    item_contexts.iter().map(|item| {
+        shared_ctx.result = vec![LegadoValue::String(item.clone())];
+        self.run_rule_first(rule, item, &shared_ctx).map(...)
+    }).collect()
+}).unwrap_or_else(|| vec![None; len]);
+let is_volumes = rules.is_volume.as_deref().map(|rule| { /* 用 shared_ctx */ });
+// is_pay / update_time 同上
+```
+
+适用条件：
+
+- 多个 closure 串行不重入（每个 `Option::map` 立刻 evaluate 后释放借用，下一个再借）
+- inner closure 只对 ctx 写一个字段（如 `result`），不依赖前一个 closure 的写入
+- caller `run_rule_first(rule, html=item, &ctx)` 用 html 参数为源；`ctx.src` 在 `legado/js_runtime.rs::build_runtime_vars` 中 `if context.src.is_empty() { html } else { &context.src }` fallback——无论 `ctx.src` 是空（`for_search`）还是被 `for_toc(&url, &html)` 设为整页 html，都不被这 4 个 closure 写入，行为完全等价
+
+不适用：
+
+- closure 间有数据依赖（前一个 closure 写入需要后一个读取）
+- closure 涉及异步跨 await（borrow lifetime 跨 await 边界不安全）
+- 写入字段非"局部覆盖"（如 append 到 `Vec` 而不是替换）
+
+Borrow checker 通过点：rust 把每个 `Option::map` 的 closure body 当 expression 立刻 evaluate，闭包内 `shared_ctx.result = ...`（mutable 借用）+ `&shared_ctx`（shared 借用）在调用 `run_rule_first` 后即 drop，下一个 `Option::map` 再次借用即可。canonical 实现：`core-source/parser.rs::parse_chapters_from_page`（line ~1369）。
+
+
 ## Resolved-by-Design Findings
 
 When a `findings-*.md` entry has been substantively addressed by an earlier change but the original code still matches the literal "problem" description, document the mitigation in **two** places rather than touching code:

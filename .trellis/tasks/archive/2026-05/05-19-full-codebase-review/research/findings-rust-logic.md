@@ -382,6 +382,8 @@
 
 **Resolution**: BATCH-13 (2026-05-21, 部分) — 5000 次 QuickJS Runtime 创建的部分通过 thread_local 池化（F-W1B-023）已消解：每个 worker 线程仅一次 Runtime + register_bridge，5000 次 eval 现在只付 PREAMBLE re-eval + var injection 的廉价开销。**未做** RuleContext clone batch / `&mut ctx` 重构（影响面较大且与 Runtime 池化解耦），留 BATCH-13b。task: 05-21-batch-13-quickjs-runtime-pool。
 
+**Resolution (BATCH-13b, 2026-05-22)**: 完整收尾。`parse_chapters_from_page` 4 个 `Option::map` closure（is_vip / is_volume / is_pay / update_time）改为共享 1 个 `let mut shared_ctx = context.clone()`，每个 closure 内只重写 `shared_ctx.result = vec![LegadoValue::String(item.clone())]`。clone 数从 4N（N 章节）降到 1。行为等价证明：4 closure 串行不重入；`run_rule_first(rule, html=item, &ctx)` 用 html 参数为源，`ctx.src` 不参与该 path（验证：`build_runtime_vars` 在 `ctx.src.is_empty` 时 fallback 到 html 参数，line 281-285）。Rust NLL borrow checker 一次过通过（每个 `Option::map` 立刻 evaluate，闭包 body 完成时 `&shared_ctx` 借用 drop，下一个 closure 重新 mutable 借用安全）。新增 1 sanity test `test_parse_chapters_4_closures_share_ctx_equivalence` 覆盖全 4 closure + 多章节验证。spec `.trellis/spec/rust-core/quality-and-anti-patterns.md` Performance Traps 段后新增「RuleContext clone 复用模式（BATCH-13b）」小节（适用条件 + 不适用边界）。task: 05-22-batch-13b-rulecontext-clone-perf。
+
 ---
 
 ### F-W1B-026 [P1 主要][C-性能][core-source/legado/url]
