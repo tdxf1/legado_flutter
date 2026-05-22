@@ -1,0 +1,10 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "BATCH-26/27a 系列页面布局 + 27a Forbidden 反向"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "Provider invalidate 与 ProviderScope.overrides 测试模式"}
+{"file": ".trellis/spec/flutter-app/async-and-mounted.md", "reason": "await 后 mounted check / safeSetState"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "测试模式 + ProviderScope.overrides + createTempSync"}
+{"file": ".trellis/spec/cross-language/frb-bridge.md", "reason": "FRB 函数签名 + funcId 双 guard"}
+{"file": ".trellis/spec/rust-core/error-handling.md", "reason": "Rust Result<_, String> + 中文错误 context"}
+{"file": "flutter_app/lib/core/download_runner.dart", "reason": "Singleton runner + queue + StreamController 范本"}
+{"file": "flutter_app/lib/core/notification_service.dart", "reason": "showDownloadProgress 范本"}
+{"file": "flutter_app/lib/features/bookshelf/bookshelf_page.dart", "reason": "PopupMenu「更新目录」灰显改可点 + AppBar badge"}
