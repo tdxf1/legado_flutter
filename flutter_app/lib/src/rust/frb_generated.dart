@@ -481,6 +481,9 @@ abstract class RustLibApi extends BaseApi {
       {required String dbPath,
       required String sourceId,
       required String keyword});
+
+  Future<String> crateApiRssArticleGetByOriginLink(
+      {required String dbPath, required String origin, required String link});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -3510,6 +3513,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(
         debugName: "validate_source_live",
         argNames: ["dbPath", "sourceId", "keyword"],
+      );
+
+  @override
+  Future<String> crateApiRssArticleGetByOriginLink(
+      {required String dbPath, required String origin, required String link}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(origin, serializer);
+        sse_encode_String(link, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 110, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiRssArticleGetByOriginLinkConstMeta,
+      argValues: [dbPath, origin, link],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRssArticleGetByOriginLinkConstMeta =>
+      const TaskConstMeta(
+        debugName: "rss_article_get_by_origin_link",
+        argNames: ["dbPath", "origin", "link"],
       );
 
   @protected

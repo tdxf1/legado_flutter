@@ -1992,6 +1992,23 @@ pub fn rss_list_articles(
     serde_json::to_string(&articles).map_err(|e| format!("序列化失败: {}", e))
 }
 
+/// 按 (origin, link) 取单条 RSS 文章，返回 JSON 或 "null"。
+pub fn rss_article_get_by_origin_link(
+    db_path: String,
+    origin: String,
+    link: String,
+) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::rss_article_dao::RssArticleDao::new(&conn);
+    let article = dao
+        .get_by_origin_link(&origin, &link)
+        .map_err(|e| format!("查询 RSS 文章失败: {}", e))?;
+    match article {
+        Some(a) => serde_json::to_string(&a).map_err(|e| format!("序列化失败: {}", e)),
+        None => Ok("null".into()),
+    }
+}
+
 /// 标记文章已读：双写 rss_articles + rss_read_records，返回受影响行数。
 pub fn rss_mark_read(db_path: String, link: String, ts: i64) -> Result<i64, String> {
     let conn = open_db(&db_path)?;

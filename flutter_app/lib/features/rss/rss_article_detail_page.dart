@@ -142,8 +142,7 @@ class _RssArticleDetailPageState extends ConsumerState<RssArticleDetailPage> {
       // BATCH-21 (F-W2B-009): 并行化 source / article / is_starred 三个独立
       // FRB 调用，消除原本顺序 await 累积的网络/IO latency。fetchHtml 单独
       // 走串行（保留原有错误分支语义：fetch 失败时仍能展示 source/article
-      // 元数据 + 错误占位）。article 仍用 list 全量遍历找（FRB 桥
-      // `rss_article_get_by_origin_link` 留 BATCH-21b 加）。
+      // 元数据 + 错误占位）。
       final sourceFuture = widget.sourceOverride != null
           ? Future<Map<String, dynamic>?>.value(widget.sourceOverride)
           : (() async {
@@ -158,16 +157,10 @@ class _RssArticleDetailPageState extends ConsumerState<RssArticleDetailPage> {
       final articleFuture = widget.articleOverride != null
           ? Future<Map<String, dynamic>?>.value(widget.articleOverride)
           : (() async {
-              final json = await rust_api.rssListArticles(
-                  dbPath: dbPath, sourceUrl: widget.sourceUrl);
-              final List<dynamic> arr = jsonDecode(json);
-              for (final e in arr) {
-                final m = e as Map<String, dynamic>;
-                if (m['link'] == widget.link) {
-                  return m;
-                }
-              }
-              return null;
+              final raw = await rust_api.rssArticleGetByOriginLink(
+                  dbPath: dbPath, origin: widget.sourceUrl, link: widget.link);
+              if (raw.isEmpty || raw == 'null') return null;
+              return jsonDecode(raw) as Map<String, dynamic>?;
             })();
 
       final starredFuture = (widget.isStarredOverride != null

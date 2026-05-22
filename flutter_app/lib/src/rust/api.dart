@@ -701,6 +701,13 @@ Future<String> rssListArticles(
     RustLib.instance.api.crateApiRssListArticles(
         dbPath: dbPath, sourceUrl: sourceUrl, sort: sort);
 
+/// 按 (origin, link) 单条查询 RSS 文章，返回 JSON 或 "null"。
+/// detail 页打开走这个，避免全数组遍历。
+Future<String> rssArticleGetByOriginLink(
+        {required String dbPath, required String origin, required String link}) =>
+    RustLib.instance.api.crateApiRssArticleGetByOriginLink(
+        dbPath: dbPath, origin: origin, link: link);
+
 /// 标记文章已读（双写 rss_articles + rss_read_records），返回受影响行数。
 Future<PlatformInt64> rssMarkRead(
         {required String dbPath,

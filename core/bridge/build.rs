@@ -126,6 +126,8 @@ const REQUIRED_WIRE_FN_FRAGMENTS: &[&str] = &[
     "wire__crate__api__rule_sub_get_impl",
     // 批次 21 (书源实跑验证 LiveTest) — 1 个 wire fn (funcId 109)
     "wire__crate__api__validate_source_live_impl",
+    // 批次 22 (RSS detail FRB 桥) — 1 个 wire fn (funcId 110)
+    "wire__crate__api__rss_article_get_by_origin_link_impl",
 ];
 
 const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
@@ -206,6 +208,8 @@ const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
     "        108 =>",
     // 批次 21 (书源实跑验证 LiveTest) 手动 dispatch 注册
     "        109 =>",
+    // 批次 22 (RSS detail FRB 桥) 手动 dispatch 注册
+    "        110 =>",
 ];
 
 /// R3: the dispatcher default arms must surface the unknown funcId
