@@ -681,4 +681,352 @@ void main() {
       findsOneWidget,
     );
   });
+
+  // ==========================================================================
+  // BATCH-27c-4: 排序 + 搜索（widget 测试 7 项，followup 补齐 27c-4 验收）
+  // ==========================================================================
+
+  group('BATCH-27c-4: 排序 + 搜索', () {
+    /// fixture: 4 项混排（1 文件夹 + 3 文件），lastModified 不同让时间排序
+    /// 可观察。`folderA` 时间最早（100），`fileC.txt` 时间最新（300）。
+    Future<String> mixedListDir({
+      required String url,
+      required String user,
+      required String password,
+      required String path,
+    }) async {
+      return '['
+          '{"name":"folderA","isDir":true,"size":0,"lastModified":100},'
+          '{"name":"fileC.txt","isDir":false,"size":300,"lastModified":300},'
+          '{"name":"fileA.txt","isDir":false,"size":100,"lastModified":100},'
+          '{"name":"fileB.txt","isDir":false,"size":200,"lastModified":200}'
+          ']';
+    }
+
+    final fakeCreds = (
+      url: 'https://x',
+      user: 'u',
+      password: 'p',
+    );
+
+    /// R1：默认 sortKey='time' / sortAsc=true → PopupMenu「按时间（升）」
+    /// trailing Icons.check，其它 3 项 trailing 无 check icon。
+    testWidgets(
+      'BATCH-27c-4: 默认 sort PopupMenu trailing check 在「按时间（升）」',
+      (tester) async {
+        final tmp = Directory.systemTemp.createTempSync(
+            'legado_flutter_test_27c4_default_');
+        addTearDown(() {
+          if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+        });
+        await tester.pumpWidget(buildPage(
+          dbPath: '${tmp.path}/x.db',
+          docsDir: tmp.path,
+          credentials: fakeCreds,
+          listDirFn: mixedListDir,
+        ));
+        await tester.pumpAndSettle();
+
+        // 开 sort PopupMenu
+        await tester.tap(find.byIcon(Icons.sort));
+        await tester.pumpAndSettle();
+
+        // 4 项中文 label 都可见
+        expect(find.text('按名称（升）'), findsOneWidget);
+        expect(find.text('按名称（降）'), findsOneWidget);
+        expect(find.text('按时间（升）'), findsOneWidget);
+        expect(find.text('按时间（降）'), findsOneWidget);
+
+        // 默认选「按时间（升）」trailing Icon(Icons.check) 在该 PopupMenuItem 里
+        final timeAscRow = find.ancestor(
+          of: find.text('按时间（升）'),
+          matching: find.byType(Row),
+        );
+        expect(
+          find.descendant(of: timeAscRow, matching: find.byIcon(Icons.check)),
+          findsOneWidget,
+        );
+
+        // 其它 3 项不应有 check icon
+        for (final label in ['按名称（升）', '按名称（降）', '按时间（降）']) {
+          final row = find.ancestor(
+            of: find.text(label),
+            matching: find.byType(Row),
+          );
+          expect(
+            find.descendant(of: row, matching: find.byIcon(Icons.check)),
+            findsNothing,
+            reason: '$label 不应显示 check icon（默认未选中）',
+          );
+        }
+      },
+    );
+
+    /// R2：选「按名称（降）」→ ListView 第 0 项 = folderA（**文件夹永远
+    /// 在前**），第 1-3 项 fileC > fileB > fileA 字母倒序。
+    testWidgets(
+      'BATCH-27c-4: 选「按名称（降）」→ entries 顺序变（文件夹永远在前 + 名称倒序）',
+      (tester) async {
+        final tmp = Directory.systemTemp.createTempSync(
+            'legado_flutter_test_27c4_namedesc_');
+        addTearDown(() {
+          if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+        });
+        await tester.pumpWidget(buildPage(
+          dbPath: '${tmp.path}/x.db',
+          docsDir: tmp.path,
+          credentials: fakeCreds,
+          listDirFn: mixedListDir,
+        ));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byIcon(Icons.sort));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('按名称（降）'));
+        await tester.pumpAndSettle();
+
+        // 4 项依次顺序：folderA（文件夹永远在前）→ fileC > fileB > fileA
+        final tiles = tester.widgetList<ListTile>(find.byType(ListTile)).toList();
+        expect(tiles.length, 4);
+        expect((tiles[0].title as Text).data, 'folderA');
+        expect((tiles[1].title as Text).data, 'fileC.txt');
+        expect((tiles[2].title as Text).data, 'fileB.txt');
+        expect((tiles[3].title as Text).data, 'fileA.txt');
+      },
+    );
+
+    /// R3：搜索 IconButton → AppBar 切搜索模式（title 变 TextField + leading
+    /// 变 close + 不再有 sort PopupMenu actions）。
+    testWidgets(
+      'BATCH-27c-4: 搜索 IconButton → AppBar 切搜索模式',
+      (tester) async {
+        final tmp = Directory.systemTemp.createTempSync(
+            'legado_flutter_test_27c4_searchmode_');
+        addTearDown(() {
+          if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+        });
+        await tester.pumpWidget(buildPage(
+          dbPath: '${tmp.path}/x.db',
+          docsDir: tmp.path,
+          credentials: fakeCreds,
+          listDirFn: mixedListDir,
+        ));
+        await tester.pumpAndSettle();
+
+        // 普通模式：search + sort 两 IconButton 都可见
+        expect(find.byIcon(Icons.search), findsOneWidget);
+        expect(find.byIcon(Icons.sort), findsOneWidget);
+
+        await tester.tap(find.byIcon(Icons.search));
+        await tester.pumpAndSettle();
+
+        // 搜索模式：title 是 TextField + leading 是 close + 不再有 sort
+        expect(find.byType(TextField), findsOneWidget);
+        expect(find.byIcon(Icons.close), findsOneWidget);
+        expect(find.byIcon(Icons.sort), findsNothing);
+        expect(find.byIcon(Icons.search), findsNothing);
+      },
+    );
+
+    /// R4：debounce 300ms + 空 query 立即清 filter。
+    testWidgets(
+      'BATCH-27c-4: 搜索 debounce 300ms + 空 query 立即清',
+      (tester) async {
+        final tmp = Directory.systemTemp.createTempSync(
+            'legado_flutter_test_27c4_debounce_');
+        addTearDown(() {
+          if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+        });
+        await tester.pumpWidget(buildPage(
+          dbPath: '${tmp.path}/x.db',
+          docsDir: tmp.path,
+          credentials: fakeCreds,
+          listDirFn: mixedListDir,
+        ));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byIcon(Icons.search));
+        await tester.pumpAndSettle();
+
+        // 输入 'fil' → debounce 未触发前所有 entries 仍可见
+        await tester.enterText(find.byType(TextField), 'fil');
+        await tester.pump(const Duration(milliseconds: 100));
+        // _searchQuery 未写入 → folderA 仍可见
+        expect(find.text('folderA'), findsOneWidget);
+        expect(find.text('fileA.txt'), findsOneWidget);
+
+        // 累计 350ms → debounce 触发，filter 生效
+        await tester.pump(const Duration(milliseconds: 250));
+        // folderA 不含 'fil' 应消失
+        expect(find.text('folderA'), findsNothing);
+        // 三个 fileX.txt 都含 'fil' 仍可见
+        expect(find.text('fileA.txt'), findsOneWidget);
+        expect(find.text('fileB.txt'), findsOneWidget);
+        expect(find.text('fileC.txt'), findsOneWidget);
+
+        // 清空 TextField → 立即清 filter（不走 debounce）
+        await tester.enterText(find.byType(TextField), '');
+        await tester.pump(); // 一帧
+        // folderA 立即可见
+        expect(find.text('folderA'), findsOneWidget);
+      },
+    );
+
+    /// R5：搜索模式下长按文件 → 不进选择模式（_onLongPressEntry 内
+    /// `if (_searchMode) return;` 拦截）。AppBar 仍是搜索模式。
+    testWidgets(
+      'BATCH-27c-4: mode 互斥 — 搜索模式下长按文件被忽略',
+      (tester) async {
+        final tmp = Directory.systemTemp.createTempSync(
+            'legado_flutter_test_27c4_mutex_search_');
+        addTearDown(() {
+          if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+        });
+        await tester.pumpWidget(buildPage(
+          dbPath: '${tmp.path}/x.db',
+          docsDir: tmp.path,
+          credentials: fakeCreds,
+          listDirFn: mixedListDir,
+        ));
+        await tester.pumpAndSettle();
+
+        // 进搜索模式
+        await tester.tap(find.byIcon(Icons.search));
+        await tester.pumpAndSettle();
+        expect(find.byType(TextField), findsOneWidget);
+
+        // 长按一文件 → 应被忽略（onLongPress 直接 return）
+        await tester.longPress(find.text('fileA.txt'));
+        await tester.pumpAndSettle();
+
+        // AppBar 仍是搜索模式（TextField + close 在；select_all/download 不在）
+        // 注：ListView 里 file 项 trailing 是 Icons.download_outlined（27c-1
+        // 单本下载提示 icon），不是 AppBar action — 所以 download_outlined
+        // 必须限定在 AppBar scope 内查找。
+        expect(find.byType(TextField), findsOneWidget);
+        final appBar = find.byType(AppBar);
+        expect(
+          find.descendant(of: appBar, matching: find.byIcon(Icons.close)),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: appBar, matching: find.byIcon(Icons.select_all)),
+          findsNothing,
+        );
+        expect(
+          find.descendant(
+              of: appBar, matching: find.byIcon(Icons.download_outlined)),
+          findsNothing,
+        );
+      },
+    );
+
+    /// R6：选择模式下搜索 IconButton 不可见（AppBar actions 是
+    /// close/select_all/download，27c-3 模式）。
+    testWidgets(
+      'BATCH-27c-4: mode 互斥 — 选择模式下搜索 IconButton 不可见',
+      (tester) async {
+        final tmp = Directory.systemTemp.createTempSync(
+            'legado_flutter_test_27c4_mutex_select_');
+        addTearDown(() {
+          if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+        });
+        await tester.pumpWidget(buildPage(
+          dbPath: '${tmp.path}/x.db',
+          docsDir: tmp.path,
+          credentials: fakeCreds,
+          listDirFn: mixedListDir,
+        ));
+        await tester.pumpAndSettle();
+
+        // 普通模式：search + sort 都可见
+        expect(find.byIcon(Icons.search), findsOneWidget);
+        expect(find.byIcon(Icons.sort), findsOneWidget);
+
+        // 长按文件进选择模式
+        await tester.longPress(find.text('fileA.txt'));
+        await tester.pumpAndSettle();
+
+        // 选择模式：select_all + download 在，search + sort 不在
+        expect(find.byIcon(Icons.select_all), findsOneWidget);
+        expect(find.byIcon(Icons.download_outlined), findsOneWidget);
+        expect(find.byIcon(Icons.search), findsNothing);
+        expect(find.byIcon(Icons.sort), findsNothing);
+      },
+    );
+
+    /// R7：选 sort name desc + 进搜索模式 + 输入 'fold' filter 留
+    /// [folderA] → 点击 folderA 下钻 → 验 _searchMode=false（AppBar 复原
+    /// 普通模式 + TextField 不见）+ 排序 'name|desc' 保留（PopupMenu 仍
+    /// 「按名称（降）」trailing check）。
+    testWidgets(
+      'BATCH-27c-4: 下钻文件夹 → 清搜索 + 保留排序',
+      (tester) async {
+        final tmp = Directory.systemTemp.createTempSync(
+            'legado_flutter_test_27c4_drilldown_');
+        addTearDown(() {
+          if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+        });
+
+        // listDirFn 区分：根目录返 mixed list；/folderA 返子目录单文件
+        Future<String> listDir({
+          required String url,
+          required String user,
+          required String password,
+          required String path,
+        }) async {
+          if (path == 'folderA') {
+            return '[{"name":"sub.txt","isDir":false,"size":50,'
+                '"lastModified":150}]';
+          }
+          return mixedListDir(
+              url: url, user: user, password: password, path: path);
+        }
+
+        await tester.pumpWidget(buildPage(
+          dbPath: '${tmp.path}/x.db',
+          docsDir: tmp.path,
+          credentials: fakeCreds,
+          listDirFn: listDir,
+        ));
+        await tester.pumpAndSettle();
+
+        // 1. 选「按名称（降）」
+        await tester.tap(find.byIcon(Icons.sort));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('按名称（降）'));
+        await tester.pumpAndSettle();
+
+        // 2. 进搜索模式 + 输入 'fold' → debounce 后仅 folderA 可见
+        await tester.tap(find.byIcon(Icons.search));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextField), 'fold');
+        await tester.pump(const Duration(milliseconds: 350)); // 推 debounce
+        expect(find.text('folderA'), findsOneWidget);
+        expect(find.text('fileA.txt'), findsNothing);
+
+        // 3. 点击 folderA 下钻
+        await tester.tap(find.text('folderA'));
+        await tester.pumpAndSettle();
+
+        // 4. 验：搜索模式退出（无 TextField + 无 close icon）
+        expect(find.byType(TextField), findsNothing);
+        expect(find.byIcon(Icons.close), findsNothing);
+        // 5. 子目录内容 sub.txt 可见（搜索 query 已清 — 不被 'fold' 过滤掉）
+        expect(find.text('sub.txt'), findsOneWidget);
+        // 6. 排序保留：开 PopupMenu 验「按名称（降）」trailing check
+        await tester.tap(find.byIcon(Icons.sort));
+        await tester.pumpAndSettle();
+        final nameDescRow = find.ancestor(
+          of: find.text('按名称（降）'),
+          matching: find.byType(Row),
+        );
+        expect(
+          find.descendant(
+              of: nameDescRow, matching: find.byIcon(Icons.check)),
+          findsOneWidget,
+        );
+      },
+    );
+  });
 }
