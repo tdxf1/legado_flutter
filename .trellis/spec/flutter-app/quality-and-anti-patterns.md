@@ -1387,7 +1387,23 @@ pull-to-refresh。
   → 仅科技源可见 + 清空恢复全部 / 长按 → BottomSheet 3 项可见。
 
 
-## Performance Notes
+
+### easy-win 零星收尾 (BATCH-29)
+
+**R1 RSS responsive 列数**：`SliverGridDelegateWithMaxCrossAxisExtent(maxCrossAxisExtent: 120)` — 单行替换，自适应屏幕宽度。手机 ~3列、平板 ~5列。
+
+**R2 RSS 搜索 `group:` prefix**：`_searchQuery.startsWith('group:')` → 去前缀 → 仅匹配 `source_group`。其余 query 走原逻辑（name+URL+group）。
+
+**R3 add_url 多行批量**：`_AddUrlDialog` `maxLines: 5` / `InputBorder.outlineBorder` + `_onAddUrl` `\n` split → 逐行 add（findSource + getBookInfo + saveBook） → 总结 SnackBar「成功 X / 失败 Y」。
+
+**R4 import_bookshelf URL 导入**：SimpleDialog 加第 3 选项「从 URL 导入」→ `_UrlImportDialog` → `HttpClient.getUrl` → `response.transform(utf8.decoder).join()` → 现有 parse 流程。
+
+**Forbidden 反向（BATCH-29 新增 2 条）**：
+
+- ❌ add_url 多行仍逐行独立找源 — 每行 URL 走独立的 `findBookSourceForUrl`，不要假设相邻行同源（不同 URL 可能不同域名需要不同书源）。
+- ❌ import URL 导入不做超时 / redirect limit — `HttpClient` 默认 30s connect timeout，不额外设置。L2 5xx → 外层 try-catch 扔 SnackBar。
+
+
 
 - `cached_network_image` is the only blessed image cache. Don't add a parallel `Image.network` call site.
 - `ListView` should be `ListView.builder` for any list whose length depends on user data. Eager `ListView(children: [...])` is allowed only for short fixed menus (settings rows, etc.).
