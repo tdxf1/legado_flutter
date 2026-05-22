@@ -1,0 +1,8 @@
+{"role": "system", "content": "BATCH-26c show discovery/rss tab toggles implement context"}
+{"file": "flutter_app/lib/core/router.dart", "reason": "_AppShell 改为 ConsumerWidget + 动态 NavigationBar destinations"}
+{"file": "flutter_app/lib/core/providers.dart", "reason": "加 showDiscovery/showRss StateProvider + load/save，参考 themeMode 模式"}
+{"file": "flutter_app/lib/main.dart", "reason": "启动 await load + ProviderScope.overrides wire"}
+{"file": "flutter_app/lib/features/settings/settings_page.dart", "reason": "加「主页」分组 2 SwitchListTile"}
+{"file": ".trellis/tasks/05-22-batch-26c-show-discovery-rss-toggles/prd.md", "reason": "本批需求 + 验收"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "BATCH-26 段加新小节「底栏 tab 显隐 toggle」"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "StateProvider + JSON 持久化模式参考"}
