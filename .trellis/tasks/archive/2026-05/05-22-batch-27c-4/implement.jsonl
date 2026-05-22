@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "「页面布局对齐 (BATCH-26)」+「远程书浏览模式 (BATCH-27c)」段，27c-4 在此范段加排序 + 搜索子节；Forbidden 反向新增；27a 表 add_remote 行同步状态"}
+{"file": ".trellis/spec/flutter-app/async-and-mounted.md", "reason": "搜索 debounce Timer 必 dispose cancel；safeSetState 守 mounted；setState after await 早返"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "新增持久化 key remoteBookSortKey / remoteBookSortAsc 走 readJsonKey/writeJsonKey 模式；不重起新文件；clamp parse 防损坏"}
+{"file": ".trellis/spec/flutter-app/persistence.md", "reason": "settings.json 加新 key 必经 json_store + clamp + 默认值；与 26c showDiscovery / 27a _isGridView 同款 readJsonKey<bool> / writeJsonKey 模式"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "testWidgets 覆盖 sort PopupMenu / search debounce / 三态 mode 互斥 / 跨启动持久化 round-trip；不全局 mock rust_api"}
+{"file": ".trellis/spec/flutter-app/directory-structure.md", "reason": "无新建文件，但 RemoteBooksPage 内排序 + 搜索 helper（_applyView / _onSortPicked / _onSearchChanged）在 features/remote_books/ 内定义，不外溢"}

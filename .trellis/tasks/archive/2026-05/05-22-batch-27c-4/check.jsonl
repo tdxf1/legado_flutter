@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "check 27c-4 spec compliance：3-mode 互斥 / debounce 300ms / 持久化跨启动 / Forbidden 反向（不重发 list_dir / 文本框立即跟手 / mode 互斥清对方 state）+ 27a 表 add_remote 行同步状态"}
+{"file": ".trellis/spec/flutter-app/async-and-mounted.md", "reason": "check Timer dispose cancel；setState after await 必经 mounted check；safeSetState；StreamSubscription 同款"}
+{"file": ".trellis/spec/flutter-app/persistence.md", "reason": "check settings.json 新 key 走 readJsonKey/writeJsonKey + 默认值 clamp + 损坏兜底；不引入新顶层 JSON 文件"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "check testWidgets 覆盖 PopupMenu 4 项 + check trailing / debounce 300ms 后才 setState / mode 互斥（进选择清 search、进搜索清 selection）/ 持久化 round-trip"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "check load*FromDisk / save*ToDisk 配对 + parse 不抛 + 默认值；新 key 不引入 Provider（Page 内 plain field 即可，对齐 _isGridView 模式）"}
