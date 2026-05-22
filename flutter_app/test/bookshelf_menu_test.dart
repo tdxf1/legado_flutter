@@ -99,11 +99,9 @@ void main() {
     await tester.tap(find.byTooltip('更多'));
     await tester.pumpAndSettle();
 
-    // 期望灰显的 3 项 value（27b 后 update_toc / 27c 后 add_remote /
-    // 27d 后 bookshelf_manage 已改可点）
+    // 期望灰显的 1 项 value（27b 后 update_toc / 27c 后 add_remote /
+    // 27d 后 bookshelf_manage / 27e 后 add_url + import_bookshelf 已改可点）
     const disabledValues = <String>[
-      'add_url',
-      'import_bookshelf',
       'log',
     ];
 
@@ -117,13 +115,15 @@ void main() {
     }
 
     // 期望 enabled 的项也校验对应（对照组），27b 加 update_toc / 27c 加
-    // add_remote / 27d 加 bookshelf_manage
+    // add_remote / 27d 加 bookshelf_manage / 27e 加 add_url + import_bookshelf
     const enabledValues = <String>[
       'update_toc',
       'import_local',
       'add_remote',
       'qr_scan',
       'bookshelf_manage',
+      'add_url',
+      'import_bookshelf',
       'cache_export',
       'manage_groups',
       'bookshelf_layout',

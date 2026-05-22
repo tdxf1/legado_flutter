@@ -32,6 +32,9 @@ aes = { workspace = true }
 # API 不兼容），合并后再考虑把 md-5 收入 workspace.dependencies。
 md-5 = "0.10"
 base64 = { workspace = true }
+# BATCH-27e: book_url_pattern 匹配（add_url 流程）。复用 workspace pinned
+# regex 1.11，与 core-source / core-parser 同版本。
+regex = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

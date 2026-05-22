@@ -516,6 +516,11 @@ abstract class RustLibApi extends BaseApi {
       required String id,
       required bool deleteFile,
       required String documentsDir});
+
+  /// BATCH-27e (funcId 118): 按书籍 URL 找匹配的启用书源。
+  /// 返回 `null` = 找不到 / 没启用书源；非 null = 匹配书源 JSON 字符串。
+  Future<String?> crateApiFindBookSourceForUrl(
+      {required String dbPath, required String bookUrl});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -3758,6 +3763,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiDeleteBookWithFileConstMeta => const TaskConstMeta(
         debugName: "delete_book_with_file",
         argNames: ["dbPath", "id", "deleteFile", "documentsDir"],
+      );
+
+  @override
+  Future<String?> crateApiFindBookSourceForUrl(
+      {required String dbPath, required String bookUrl}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        sse_encode_String(bookUrl, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 118, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_opt_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiFindBookSourceForUrlConstMeta,
+      argValues: [dbPath, bookUrl],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiFindBookSourceForUrlConstMeta =>
+      const TaskConstMeta(
+        debugName: "find_book_source_for_url",
+        argNames: ["dbPath", "bookUrl"],
       );
 
   @protected

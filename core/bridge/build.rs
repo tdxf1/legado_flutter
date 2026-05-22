@@ -139,6 +139,8 @@ const REQUIRED_WIRE_FN_FRAGMENTS: &[&str] = &[
     // 复用 26a funcId 80 的 clear_book_cache。
     "wire__crate__api__set_book_can_update_impl",
     "wire__crate__api__delete_book_with_file_impl",
+    // BATCH-27e (add_url URL→源 pattern matching) — 1 个 wire fn (funcId 118)
+    "wire__crate__api__find_book_source_for_url_impl",
 ];
 
 const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
@@ -231,6 +233,7 @@ const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
     // BATCH-27d (书架批量编辑) 手动 dispatch 注册（clear cache 复用 26a 80）
     "        115 =>",
     "        117 =>",
+    "        118 =>",
 ];
 
 /// R3: the dispatcher default arms must surface the unknown funcId

@@ -975,6 +975,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "md-5",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

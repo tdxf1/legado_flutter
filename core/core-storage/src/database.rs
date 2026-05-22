@@ -1666,6 +1666,72 @@ mod tests {
         assert_eq!(fetched.cover_decode_js.as_deref(), Some("cover v2"));
     }
 
+    /// BATCH-27e: SourceDao::find_for_book_url - baseUrl 前缀匹配。
+    #[test]
+    fn test_source_dao_find_for_book_url_base_url_match() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir
+            .path()
+            .join("test_find_base.db")
+            .to_string_lossy()
+            .to_string();
+        let mut conn = init_database(&db_path).unwrap();
+        let dao = crate::source_dao::SourceDao::new(&mut conn);
+
+        let s1 = dao.create("Site A", "https://a.example.com/").unwrap();
+        let _s2 = dao.create("Site B", "https://b.example.com/").unwrap();
+
+        let m = dao
+            .find_for_book_url("https://a.example.com/book/123")
+            .unwrap();
+        assert!(m.is_some());
+        assert_eq!(m.unwrap().id, s1.id);
+
+        // 不匹配任何源
+        let none = dao.find_for_book_url("https://other.com/x").unwrap();
+        assert!(none.is_none());
+
+        // 空 url 返回 None
+        let none2 = dao.find_for_book_url("   ").unwrap();
+        assert!(none2.is_none());
+    }
+
+    /// BATCH-27e: SourceDao::find_for_book_url - book_url_pattern regex 兜底。
+    #[test]
+    fn test_source_dao_find_for_book_url_pattern_match() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir
+            .path()
+            .join("test_find_pattern.db")
+            .to_string_lossy()
+            .to_string();
+        let mut conn = init_database(&db_path).unwrap();
+        let dao = crate::source_dao::SourceDao::new(&mut conn);
+
+        // s1: 没 pattern，baseUrl https://x/ — 不匹配 https://y/abc
+        let _s1 = dao.create("Site X", "https://x.example.com/").unwrap();
+        // s2: 有 pattern，baseUrl https://y/ + book_url_pattern 匹配 /abc 系列
+        let mut s2 = dao.create("Site Y", "https://y.example.com/").unwrap();
+        s2.book_url_pattern = Some(r"^https://y\.example\.com/book/\d+$".to_string());
+        dao.upsert(&s2).unwrap();
+        // s3: regex 损坏，应静默跳过（不抛 error）
+        let mut s3 = dao.create("Broken", "https://broken.example.com/").unwrap();
+        s3.book_url_pattern = Some("[invalid(regex".to_string());
+        dao.upsert(&s3).unwrap();
+
+        let m = dao
+            .find_for_book_url("https://y.example.com/book/42")
+            .unwrap();
+        assert!(m.is_some(), "regex pattern should match");
+        assert_eq!(m.unwrap().id, s2.id);
+
+        // 不匹配任何 baseUrl 也不匹配任何 pattern → None
+        let none = dao
+            .find_for_book_url("https://nowhere.com/book/1")
+            .unwrap();
+        assert!(none.is_none());
+    }
+
     /// R24: v10 migration rebuilds replace_rules with `scope TEXT` (was
     /// `scope INTEGER`) and adds scope_title / scope_content /
     /// exclude_scope columns. Old scope=1/2 enum values are dropped to

@@ -5,6 +5,7 @@
 
 use super::models::BookSource;
 use chrono::Utc;
+use regex::Regex;
 use rusqlite::{params, Connection, Result as SqlResult};
 use serde::Deserialize;
 use tracing::{debug, info};
@@ -374,6 +375,60 @@ impl<'a> SourceDao<'a> {
             self.get_by_id(&effective_id)
                 .map(|opt| opt.expect("source not found after dedup upsert"))
         }
+    }
+
+    /// BATCH-27e: 按一条「书籍 URL」找匹配的启用书源。对齐原 Legado
+    /// `BookSourceDao.getBookSourceAddBook(baseUrl)` + 遍历
+    /// `hasBookUrlPattern` regex 兜底（[`BookshelfViewModel.addBookByUrl`]
+    /// 53-65 双路径）。
+    ///
+    /// 匹配优先级（首个匹配返回）：
+    /// 1. 启用书源中 `book_url` 以 `source.url` 开头（baseUrl 等价匹配）
+    /// 2. 启用书源中 `book_url_pattern` regex 匹配
+    ///
+    /// 失败 / 没启用书源 / 都不匹配返回 `Ok(None)`。
+    /// `Err` 仅在 SQL 层异常时抛。
+    ///
+    /// 注：legado 对 invalid regex 的态度是 `try { ... } catch (_: Exception)`
+    /// 静默跳过，本实现同（regex compile 失败 = 该源不参与 pattern 匹配）。
+    pub fn find_for_book_url(&self, book_url: &str) -> SqlResult<Option<BookSource>> {
+        if book_url.trim().is_empty() {
+            return Ok(None);
+        }
+        let enabled = self.get_enabled()?;
+        // 第 1 路：baseUrl 前缀匹配
+        for s in &enabled {
+            if !s.url.is_empty() && book_url.starts_with(&s.url) {
+                debug!("[source.find_for_book_url] baseUrl match: {}", s.id);
+                return Ok(Some(s.clone()));
+            }
+        }
+        // 第 2 路：book_url_pattern regex 兜底
+        for s in &enabled {
+            let Some(pat) = s.book_url_pattern.as_ref() else {
+                continue;
+            };
+            if pat.trim().is_empty() {
+                continue;
+            }
+            match Regex::new(pat) {
+                Ok(re) if re.is_match(book_url) => {
+                    debug!(
+                        "[source.find_for_book_url] regex match: id={} pat={}",
+                        s.id, pat
+                    );
+                    return Ok(Some(s.clone()));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    debug!(
+                        "[source.find_for_book_url] regex compile failed: id={} pat={} err={}",
+                        s.id, pat, e
+                    );
+                }
+            }
+        }
+        Ok(None)
     }
 }
 

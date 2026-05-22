@@ -2081,6 +2081,44 @@ fn wire__crate__api__delete_book_with_file_impl(
         },
     )
 }
+// BATCH-27e (funcId 118) — find_book_source_for_url(db_path, book_url) -> Result<Option<String>, String>
+fn wire__crate__api__find_book_source_for_url_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "find_book_source_for_url",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_db_path = <String>::sse_decode(&mut deserializer);
+            let api_book_url = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::find_book_source_for_url(
+                        api_db_path,
+                        api_book_url,
+                    )?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 // funcId 93 — rss_mark_read(db_path, link, ts) -> Result<i64, String>
 fn wire__crate__api__rss_mark_read_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
@@ -4549,6 +4587,7 @@ fn pde_ffi_dispatcher_primary_impl(
         // BATCH-27d (书架批量编辑) — 手动 wire fn 注册（clear cache 复用 26a 80）
         115 => wire__crate__api__set_book_can_update_impl(port, ptr, rust_vec_len, data_len),
         117 => wire__crate__api__delete_book_with_file_impl(port, ptr, rust_vec_len, data_len),
+        118 => wire__crate__api__find_book_source_for_url_impl(port, ptr, rust_vec_len, data_len),
         // R3: codegen default branch hit at runtime means Rust and Dart
         // have inconsistent funcId tables. build.rs catches this at
         // compile time when both sides are visible (R3 cross-check),

@@ -1682,6 +1682,35 @@ pub fn delete_book_with_file(
     Ok(())
 }
 
+/// BATCH-27e: 按一条「书籍 URL」找匹配的启用书源（funcId 118）。
+///
+/// 对齐原 Legado `BookSourceDao.getBookSourceAddBook(baseUrl)` + 遍历
+/// `hasBookUrlPattern` regex 兜底（`BookshelfViewModel.addBookByUrl:53-65`
+/// 双路径）。caller 拿到 source_json 后调用 `get_book_info_online`
+/// + `get_chapter_list_online` 完成 add_url 流程。
+///
+/// 返回：
+/// - 找到 → `Some(source_json_string)`，shape 与 `get_all_sources` 单
+///   元素一致
+/// - 找不到 / 没启用书源 / book_url 空 → `None`
+/// - SQL 异常 / 序列化失败 → `Err(String)`
+pub fn find_book_source_for_url(
+    db_path: String,
+    book_url: String,
+) -> Result<Option<String>, String> {
+    let mut conn = open_db(&db_path)?;
+    let dao = core_storage::source_dao::SourceDao::new(&mut conn);
+    let matched = dao
+        .find_for_book_url(&book_url)
+        .map_err(|e| format!("查找书源失败: {}", e))?;
+    match matched {
+        None => Ok(None),
+        Some(s) => serde_json::to_string(&s)
+            .map(Some)
+            .map_err(|e| format!("序列化书源失败: {}", e)),
+    }
+}
+
 // ============================================================
 // 备份密码持久化 (批次 12 / 05-19)
 // ============================================================

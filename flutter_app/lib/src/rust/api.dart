@@ -468,6 +468,15 @@ Future<void> deleteBookWithFile(
         deleteFile: deleteFile,
         documentsDir: documentsDir);
 
+/// BATCH-27e: 按书籍 URL 找匹配的启用书源。
+///
+/// 返回 `null` = 找不到 / 没启用书源 / URL 为空；非 null = 匹配书源
+/// JSON 字符串（shape 与 `getAllSources` 单元素一致）。
+Future<String?> findBookSourceForUrl(
+        {required String dbPath, required String bookUrl}) =>
+    RustLib.instance.api
+        .crateApiFindBookSourceForUrl(dbPath: dbPath, bookUrl: bookUrl);
+
 /// 获取所有替换规则，返回 JSON 数组
 Future<String> getReplaceRules({required String dbPath}) =>
     RustLib.instance.api.crateApiGetReplaceRules(dbPath: dbPath);
