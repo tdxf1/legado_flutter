@@ -25,6 +25,11 @@ import '_secure_storage_fake.dart';
 /// 注入 [InMemorySecureStorage] 避免 platform channel 抛 MissingPluginException。
 /// 第三个 test 验证旧 webdav.json 中的 password 字段会迁移到 secure_storage
 /// 并从 json 文件移除。
+///
+/// BATCH-03b (F-W1A-020) 补充：备份密码 save 路径也改 secure_storage（不再
+/// 调 setBackupPassword override）；第二个 test 改测 `secureStorageFake.debugStore`
+/// 中 `backup_password` 命中 + override 不被调。load 路径下 secure_storage
+/// miss 时会回退 FRB getBackupPassword override（迁移触发口），保留向后兼容。
 void main() {
   late InMemorySecureStorage secureStorageFake;
 
@@ -200,14 +205,15 @@ void main() {
   );
 
   testWidgets(
-    'WebDavConfigPage 备份密码字段渲染 + 保存调 setBackupPassword 一次',
+    'WebDavConfigPage 备份密码字段渲染 + 保存写 secure_storage',
     (WidgetTester tester) async {
+      // BATCH-03b (F-W1A-020)：备份密码 save 路径改 secure_storage，
+      // 不再调 setBackupPassword override。load 路径优先 secure_storage，
+      // 未命中时回退 FRB getBackupPassword（迁移触发口），保留 override。
       final tmp = Directory.systemTemp.createTempSync('webdav-cfg-bpw-');
 
       int setCalls = 0;
       int getCalls = 0;
-      String? capturedDocsDir;
-      String? capturedPassword;
 
       await tester.pumpWidget(
         ProviderScope(
@@ -223,13 +229,11 @@ void main() {
               }) async {},
               getBackupPasswordOverride: ({required String documentsDir}) async {
                 getCalls++;
-                return ''; // 模拟首次配置:legado_local.json 不存在,空串
+                return ''; // 模拟首次配置：legado_local.json 不存在 / 空，无迁移
               },
               setBackupPasswordOverride: (
                   {required String documentsDir, required String password}) async {
                 setCalls++;
-                capturedDocsDir = documentsDir;
-                capturedPassword = password;
               },
             ),
           ),
@@ -252,8 +256,12 @@ void main() {
         findsOneWidget,
       );
 
-      // load 时已调 getBackupPassword 一次
-      expect(getCalls, 1, reason: 'initState 应调 getBackupPassword 填回');
+      // load 时 secure_storage miss → 走 FRB fallback 调 getBackupPassword 一次
+      expect(getCalls, 1,
+          reason: 'secure_storage miss 时 initState 应调 getBackupPassword fallback');
+      // 旧 password 为空，不触发迁移路径，setBackupPassword override 不应被调
+      expect(setCalls, 0,
+          reason: 'legacyPwd 为空时不应触发清理路径');
 
       // 填 URL（保存校验要求非空）+ 备份密码
       await tester.enterText(find.byType(TextField).at(0),
@@ -262,10 +270,10 @@ void main() {
       await tester.enterText(find.byType(TextField).at(4), 'mybackup-pwd');
       await tester.pump();
 
-      // 点保存 → 走 _onSave: 写 webdav.json (真实文件 IO) + 调
-      // setBackupPassword override 一次。
+      // 点保存 → 走 _onSave: 写 webdav.json (真实文件 IO) + writeSecret
+      // 写 secure_storage（不再调 setBackupPassword override）。
       await tester.tap(find.text('保存'));
-      // 让真实文件 IO 跑完 — 文件 IO + override 的 async 链需要多次
+      // 让真实文件 IO 跑完 — 文件 IO + secure_storage 写的 async 链需要多次
       // pump + runAsync 才能完整执行（不能 pumpAndSettle 因为
       // LinearProgressIndicator）。
       for (var i = 0; i < 5; i++) {
@@ -276,9 +284,11 @@ void main() {
         await tester.pump(const Duration(milliseconds: 50));
       }
 
-      expect(setCalls, 1, reason: '保存应调 setBackupPassword 一次');
-      expect(capturedDocsDir, tmp.path);
-      expect(capturedPassword, 'mybackup-pwd');
+      // BATCH-03b：save 写 secure_storage，FRB setBackupPassword 不再被调
+      expect(setCalls, 0,
+          reason: 'BATCH-03b 后 save 不再调 setBackupPassword');
+      expect(secureStorageFake.debugStore['backup_password'], 'mybackup-pwd',
+          reason: '保存应把备份密码写到 secure_storage');
 
       // 清理
       try {

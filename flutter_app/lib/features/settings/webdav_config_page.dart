@@ -32,7 +32,13 @@ import '../../src/rust/api.dart' as rust_api;
 /// [`setBackupPassword`] / [`getBackupPassword`] 持久化到
 /// `<documentsDir>/legado_local.json`，对齐原 Legado `LocalConfig.password`。
 /// 留空 = 不加密备份；设密码后 zip 内 servers.json + webDavPassword 走
-/// AES，与原 Legado 兼容。备份密码迁移到 secure_storage 留独立 BATCH-03b。
+/// AES，与原 Legado 兼容。
+///
+/// BATCH-03b (F-W1A-020)：备份密码也迁移到 secure_storage（key
+/// `backup_password`），与 webdav_password 同模式：load 优先 secure_storage，
+/// miss 时回退 FRB 旧路径并触发一次性迁移 + 清理 legado_local.json；save
+/// 直接走 writeSecret。Rust 端 set/get_backup_password FRB 契约保留以备
+/// 未来 backup zip 加密功能复用。
 ///
 /// **测试钩子**：
 /// - WebDAV password / FRB / path_provider 走 *Override 构造参数 +
@@ -139,12 +145,39 @@ class _WebDavConfigPageState extends ConsumerState<WebDavConfigPage> {
         // 或仅设了密码的边角场景）。
         _pwdCtl.text = (await readSecret('webdav_password')) ?? '';
       }
-      // 批次 12: 备份密码独立持久化（legado_local.json），通过 FRB 拉取。
+      // BATCH-03b (F-W1A-020)：备份密码迁移到 secure_storage。
+      // 旧版本 set_backup_password 把字符串写到 legado_local.json 的
+      // password 字段；首次打开本页时一次性迁到 Keystore-backed 存储
+      // 并从 legado_local.json 移除该字段（保留 .json 文件本身——其它
+      // 字段未来扩展可能用，BATCH-23 已加损坏文件 .bak 备份机制）。
       try {
-        final fn = widget.getBackupPasswordOverride ??
-            ({required String documentsDir}) =>
-                rust_api.getBackupPassword(documentsDir: documentsDir);
-        _backupPwdCtl.text = await fn(documentsDir: dir);
+        final securePwd = await readSecret('backup_password');
+        if (securePwd != null) {
+          _backupPwdCtl.text = securePwd;
+        } else {
+          // 走旧 FRB 路径读 legado_local.json，如有值则迁移
+          final fn = widget.getBackupPasswordOverride ??
+              ({required String documentsDir}) =>
+                  rust_api.getBackupPassword(documentsDir: documentsDir);
+          final legacyPwd = await fn(documentsDir: dir);
+          if (legacyPwd.isNotEmpty) {
+            await writeSecret('backup_password', legacyPwd);
+            // 清理 legado_local.json 中的 password 字段（传空串复用
+            // set_backup_password 写路径，BATCH-23 .bak 机制顺带兜底）。
+            try {
+              final clearFn = widget.setBackupPasswordOverride ??
+                  ({required String documentsDir, required String password}) =>
+                      rust_api.setBackupPassword(
+                          documentsDir: documentsDir, password: password);
+              await clearFn(documentsDir: dir, password: '');
+            } catch (_) {
+              // 清理失败不阻塞迁移；下次启动 secure_storage 命中即可
+            }
+            _backupPwdCtl.text = legacyPwd;
+          } else {
+            _backupPwdCtl.text = '';
+          }
+        }
       } catch (_) {
         // FRB 调用失败（如桥未初始化的测试场景）退回空串。
         _backupPwdCtl.text = '';
@@ -210,20 +243,8 @@ class _WebDavConfigPageState extends ConsumerState<WebDavConfigPage> {
         'deviceName': _deviceCtl.text.trim(),
       }, directory: dir);
       await writeSecret('webdav_password', _pwdCtl.text);
-      // 批次 12: 备份密码独立保存（legado_local.json）。失败不影响 webdav.json。
-      try {
-        final fn = widget.setBackupPasswordOverride ??
-            ({required String documentsDir, required String password}) =>
-                rust_api.setBackupPassword(
-                    documentsDir: documentsDir, password: password);
-        await fn(documentsDir: dir, password: _backupPwdCtl.text);
-      } catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('备份密码保存失败: $e')),
-        );
-        return;
-      }
+      // BATCH-03b (F-W1A-020)：备份密码改 secure_storage。
+      await writeSecret('backup_password', _backupPwdCtl.text);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('已保存')),

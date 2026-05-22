@@ -1444,6 +1444,17 @@ pub async fn webdav_delete_backup(
 
 const LEGADO_LOCAL_FILE: &str = "legado_local.json";
 
+/// **DEPRECATED (BATCH-03b / F-W1A-020)**: backup 密码已迁移到 Dart 端
+/// secure_storage（key `backup_password`，Android Keystore-backed
+/// EncryptedSharedPreferences / iOS Keychain）。本 fn 仅保留以支持
+/// 启动期一次性迁移：webdav_config_page 首次打开时若 secure_storage
+/// 命中失败但 legado_local.json 仍含旧 password，会读出 → 写
+/// secure_storage → 调本 fn 传空串清理。新代码不要调用。
+///
+/// FRB funcId 71/72 保留契约不删，方便未来 backup zip 加密功能（如真接入）
+/// 直接复用；同时避免 binding regen 风险。**不**加 `#[deprecated]` attr —— Dart
+/// 端迁移路径仍要调本 fn，attr 会污染编译输出。
+///
 /// 设置备份密码（持久化到 `<documents_dir>/legado_local.json` 的
 /// `"password"` 字段）。
 ///
@@ -1506,6 +1517,10 @@ fn _backup_corrupt_legado_local(path: &std::path::Path, content: &str, reason: &
     }
 }
 
+/// **DEPRECATED (BATCH-03b / F-W1A-020)**: 见 [`set_backup_password`] 顶部
+/// 注释。本 fn 仅保留供启动期一次性迁移路径读旧 legado_local.json 的
+/// password 字段；新代码读备份密码请走 Dart 端 `readSecret('backup_password')`。
+///
 /// 读取当前备份密码；不存在或 JSON 解析失败时返回空串（等价"未设密码"）。
 pub fn get_backup_password(documents_dir: String) -> Result<String, String> {
     let path = std::path::Path::new(&documents_dir).join(LEGADO_LOCAL_FILE);

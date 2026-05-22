@@ -16,7 +16,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 /// ## key 命名空间
 ///
 /// - `webdav_password` — WebDAV 凭据中的密码字段（BATCH-03 引入）。
-/// - 后续扩展（如 `backup_password`）按相同 snake_case 命名追加。
+/// - `backup_password` — Legado 备份密码字段（BATCH-03b 引入；旧版本写在
+///   legado_local.json，启动期一次性迁移）。
 ///
 /// ## 行为约定
 ///
