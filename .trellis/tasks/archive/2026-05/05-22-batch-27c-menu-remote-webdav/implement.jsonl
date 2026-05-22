@@ -1,0 +1,10 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "BATCH-26/27a/b 系列 + Forbidden 反向"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "Provider invalidate / ProviderScope.overrides"}
+{"file": ".trellis/spec/flutter-app/async-and-mounted.md", "reason": "await 后 mounted check"}
+{"file": ".trellis/spec/cross-language/frb-bridge.md", "reason": "FRB 函数签名 + funcId 双 guard"}
+{"file": ".trellis/spec/rust-core/error-handling.md", "reason": "Rust Result<_, String> + 中文 context"}
+{"file": "core/core-net/src/webdav.rs", "reason": "WebDavClient 现有 list_files / download / mkcol 范本"}
+{"file": "flutter_app/lib/features/settings/webdav_config_page.dart", "reason": "webdav 凭据配置 UI + secure_storage 路径"}
+{"file": "flutter_app/lib/features/bookshelf/bookshelf_page.dart", "reason": "PopupMenu add_remote 灰显改可点 + _onImportLocalBook 范本"}
+{"file": "flutter_app/lib/core/router.dart", "reason": "GoRoute 注册位置参考"}
