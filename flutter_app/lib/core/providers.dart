@@ -1107,6 +1107,46 @@ Future<void> saveBookshelfGridViewToDisk(bool isGridView) =>
       errorTag: 'bookshelf grid view',
     );
 
+/// BATCH-27c-4: 远程书页排序键（'name' / 'time'）。Default 'time' 对齐原
+/// legado `RemoteBookSort.Default`（按时间）。损坏 JSON / 非法字符串均 fallback
+/// 到 'time'，保证 UI 不卡死。
+Future<String> loadRemoteBookSortKeyFromDisk({String? directory}) =>
+    readJsonKey<String>(
+      'remoteBookSortKey',
+      (raw) {
+        if (raw is String && (raw == 'name' || raw == 'time')) return raw;
+        return 'time';
+      },
+      'time',
+      directory: directory,
+    );
+
+Future<void> saveRemoteBookSortKeyToDisk(String key, {String? directory}) =>
+    writeJsonKey(
+      'remoteBookSortKey',
+      // 防御：非法值落库时直接 fallback 'time'，避免下次 load 兜底链路依赖
+      (key == 'name' || key == 'time') ? key : 'time',
+      directory: directory,
+      errorTag: 'remote book sort key',
+    );
+
+/// BATCH-27c-4: 远程书页排序方向（true=升序 / false=降序）。Default true。
+Future<bool> loadRemoteBookSortAscFromDisk({String? directory}) =>
+    readJsonKey<bool>(
+      'remoteBookSortAsc',
+      (raw) => raw is bool ? raw : true,
+      true,
+      directory: directory,
+    );
+
+Future<void> saveRemoteBookSortAscToDisk(bool asc, {String? directory}) =>
+    writeJsonKey(
+      'remoteBookSortAsc',
+      asc,
+      directory: directory,
+      errorTag: 'remote book sort asc',
+    );
+
 Future<RefreshRateMode> loadRefreshRateModeFromDisk() =>
     readJsonKey<RefreshRateMode>(
       'refreshRateMode',

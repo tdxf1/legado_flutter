@@ -18,6 +18,8 @@ import '../../src/rust/api.dart' as rust_api;
 
 /// BATCH-27c-1: 远程书浏览页（最小可用版）。
 /// BATCH-27c-3: 加多选模式 + 批量下载（[`RemoteBookRunner`] singleton 范本）。
+/// BATCH-27c-4: 加排序（名称/时间 × 升/降）+ 搜索（debounce 300ms + 文件名
+/// case-insensitive contains 过滤）。AppBar 三态切换：普通 / 选择 / 搜索。
 ///
 /// 入口：bookshelf PopupMenu「添加远程书」（27a 灰显占位 → 27c 改可点）。
 /// 流程：复用 webdav_config_page 凭据（webdav.json url/user + secure_storage
@@ -31,11 +33,23 @@ import '../../src/rust/api.dart' as rust_api;
 /// → enqueue 全选项到 [`RemoteBookRunner`] singleton → 立即退出选择模式 →
 /// AppBar transient badge 显示进度 → 完成 SnackBar。
 ///
-/// 范围（PRD §Q1-Q5 锁定）：单 server / 多选仅当前目录（不跨目录递归）。
-/// multi-server / 排序 + 搜索 / 失败重试 / book.origin 标记 webDavTag 全部
-/// 留 27c follow-up（PRD §Out of Scope O1-O5）。
+/// 排序 + 搜索（27c-4）：
+/// - 普通模式 AppBar actions 顺序：搜索 IconButton + 排序 PopupMenu 4 项
+///   ((名称/时间)×(升/降)) + transient badge。
+/// - 排序键 + 升降序持久化到 settings.json（key `remoteBookSortKey` /
+///   `remoteBookSortAsc`），跨启动保留用户偏好；与 27a `_isGridView` 同款。
+/// - 搜索模式：title 改 TextField + leading 改 close + actions 全清；输入
+///   debounce 300ms 后过滤 `_visibleEntries`；空 query 立即清 filter。
+/// - 三 mode 互斥（普通/选择/搜索）：进选择模式自动清搜索；进搜索模式自
+///   动清选择。
+/// - 下钻文件夹：保留排序偏好；清空搜索 query + 退搜索模式（每个目录独
+///   立搜索语境，对齐 PRD §R7）。
 ///
-/// 测试钩子（mirror BookshelfPage 27a/27b 同款）：6 + 1 个 *Override 字段
+/// 范围（PRD §Q1-Q5 锁定）：单 server / 多选仅当前目录（不跨目录递归）。
+/// multi-server / 失败重试 / book.origin 标记 webDavTag 全部留 27c
+/// follow-up（PRD §Out of Scope）。
+///
+/// 测试钩子（mirror BookshelfPage 27a/27b 同款）：8 个 *Override 字段
 /// 让 widget test 不依赖 path_provider / secure_storage / FRB / 真 webdav。
 class RemoteBooksPage extends ConsumerStatefulWidget {
   /// 测试钩子：注入假 dbPath（不走 path_provider 解析）。
@@ -81,6 +95,13 @@ class RemoteBooksPage extends ConsumerStatefulWidget {
   /// 以便未来若 runner 改成可注入 ctor 时无缝切换。
   final RemoteBookRunner? remoteBookRunnerOverride;
 
+  /// BATCH-27c-4: 测试钩子，注入排序键初值（'name' / 'time'）。生产路径
+  /// initState 异步从 settings.json 读取；测试注入避免触 path_provider。
+  final String? sortKeyOverride;
+
+  /// BATCH-27c-4: 测试钩子，注入排序方向初值（true=升序 / false=降序）。
+  final bool? sortAscOverride;
+
   const RemoteBooksPage({
     super.key,
     this.dbPathOverride,
@@ -90,6 +111,8 @@ class RemoteBooksPage extends ConsumerStatefulWidget {
     this.downloadFileOverride,
     this.importLocalBookOverride,
     this.remoteBookRunnerOverride,
+    this.sortKeyOverride,
+    this.sortAscOverride,
   });
 
   @override
@@ -150,13 +173,57 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
   StreamSubscription<RemoteBookProgress>? _progressSub;
   RemoteBookProgress? _lastProgress;
 
+  // BATCH-27c-4: 排序 state（持久化到 settings.json `remoteBookSortKey` /
+  // `remoteBookSortAsc`）。'time' / 'name'，default 'time' 对齐原 legado
+  // RemoteBookSort.Default。下钻时**保留**（跨目录持久），跨启动从 disk
+  // 加载用户偏好。
+  String _sortKey = 'time';
+  bool _sortAsc = true;
+
+  // BATCH-27c-4: 搜索 state。三 mode 互斥（普通/选择/搜索）；进搜索 = 清
+  // selection；进选择 = 清搜索。下钻 = 清搜索 query + 退搜索模式（每个目
+  // 录独立搜索语境，PRD §R7）。
+  bool _searchMode = false;
+  String _searchQuery = '';
+  Timer? _searchDebounce;
+  final TextEditingController _searchController = TextEditingController();
+
   RemoteBookRunner get _runner =>
       widget.remoteBookRunnerOverride ?? RemoteBookRunner();
+
+  /// BATCH-27c-4: 派生 visible entries —— 排序 + 搜索过滤后的视图。
+  /// 不缓存（每帧 build 重算）：N 通常 ≤ 数百，sort + filter 开销 µs 级；
+  /// 缓存反而要在每个 set state 路径维护一致性，得不偿失。
+  /// 文件夹永远在前（对齐原 legado `compareBy { !it.isDir }` 优先级）。
+  List<_RemoteEntry> get _visibleEntries {
+    // 先 sort 一份完整副本（不动 _entries 自身）
+    final sorted = List<_RemoteEntry>.of(_entries);
+    sorted.sort((a, b) {
+      // 1. 文件夹永远在前
+      if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
+      // 2. 按 sortKey + sortAsc
+      int cmp;
+      if (_sortKey == 'name') {
+        cmp = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      } else {
+        // 'time'：lastModified 缺时按 0 比，缺的项排到前/后由升降决定
+        final at = a.lastModified ?? 0;
+        final bt = b.lastModified ?? 0;
+        cmp = at.compareTo(bt);
+      }
+      return _sortAsc ? cmp : -cmp;
+    });
+    // 再 filter（query 空时跳过）
+    if (_searchQuery.isEmpty) return sorted;
+    final q = _searchQuery.toLowerCase();
+    return sorted.where((e) => e.name.toLowerCase().contains(q)).toList();
+  }
 
   @override
   void initState() {
     super.initState();
     _bootstrap();
+    _loadSortPrefs();
     // BATCH-27c-3: 挂 progress 监听。runner 是 singleton —— 即使其它入口
     // （未来 batch-deep-cache 等）也能共享同一进度通道。dispose 时 cancel
     // 避免旧 page 的 setState 在 unmount 后被触发。
@@ -186,9 +253,33 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
     });
   }
 
+  /// BATCH-27c-4: initState 异步加载排序偏好。测试钩子优先级最高：传了
+  /// override 直接写 plain field，跳过 disk IO。
+  Future<void> _loadSortPrefs() async {
+    if (widget.sortKeyOverride != null || widget.sortAscOverride != null) {
+      _sortKey = widget.sortKeyOverride ?? 'time';
+      _sortAsc = widget.sortAscOverride ?? true;
+      return;
+    }
+    try {
+      final dir = widget.documentsDirOverride;
+      final key = await loadRemoteBookSortKeyFromDisk(directory: dir);
+      final asc = await loadRemoteBookSortAscFromDisk(directory: dir);
+      if (!mounted) return;
+      safeSetState(() {
+        _sortKey = key;
+        _sortAsc = asc;
+      });
+    } catch (_) {
+      // 损坏文件已被 helper 兜底为 default；catch 仅防极端 IO 异常
+    }
+  }
+
   @override
   void dispose() {
     _progressSub?.cancel();
+    _searchDebounce?.cancel();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -293,11 +384,9 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
           lastModified: lastModified,
         ));
       }
-      // 文件夹排前面，再按 name 排
-      list.sort((a, b) {
-        if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
-        return a.name.compareTo(b.name);
-      });
+      // BATCH-27c-4: 不再在此处 sort —— 排序由 [_visibleEntries] getter
+      // 按 _sortKey / _sortAsc 派生。保留 _entries 为加载顺序原样，让
+      // 排序切换无需 reload。
       safeSetState(() {
         _entries = list;
         _entriesLoading = false;
@@ -316,11 +405,14 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
   ///
   /// BATCH-27c-3: 下钻 / 上钻都清空 `_selectedPaths` + 退出选择模式（PRD
   /// §Q1 1b 决策 — 跨目录的 selected 概念混乱）。
+  /// BATCH-27c-4: 同步清空 `_searchQuery` + 退出搜索模式（PRD §R7 — 每个
+  /// 目录独立搜索语境）；保留排序偏好。
   bool _popPathOrPage() {
     if (_pathStack.isEmpty) return false;
     setState(() {
       _pathStack.removeLast();
       _exitSelectionMode();
+      _exitSearchMode();
     });
     // 上钻后立即重 list
     _loadCurrentDir();
@@ -334,6 +426,32 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
   void _exitSelectionMode() {
     _selectionMode = false;
     _selectedPaths.clear();
+  }
+
+  /// BATCH-27c-4: 退搜索模式 + 清 query + cancel debounce + 清空 controller。
+  /// 不调 setState（caller 用 setState 包），允许多 path 复合（_popPathOrPage
+  /// 一次 setState 同时 reset selection + search）。
+  void _exitSearchMode() {
+    _searchMode = false;
+    _searchQuery = '';
+    _searchDebounce?.cancel();
+    _searchDebounce = null;
+    _searchController.clear();
+  }
+
+  /// BATCH-27c-4: 进搜索模式（mode 互斥 — 自动清 selection）。
+  void _enterSearchMode() {
+    setState(() {
+      _exitSelectionMode();
+      _searchMode = true;
+    });
+  }
+
+  /// BATCH-27c-4: 进选择模式（mode 互斥 — 自动清 search）。caller 在 setState
+  /// 内自己加入 _selectedPaths 项。
+  void _enterSelectionMode() {
+    _exitSearchMode();
+    _selectionMode = true;
   }
 
   void _toggleSelected(_RemoteEntry e) {
@@ -353,11 +471,13 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
   }
 
   /// 长按 entry → 进入选择模式 + 勾上当前项（仅文件项）。
+  /// BATCH-27c-4: 搜索模式下长按忽略（mode 互斥；用户先关搜索再多选）。
   void _onLongPressEntry(_RemoteEntry e) {
     if (e.isDir) return; // 文件夹长按忽略（PRD §Q1 1b）
+    if (_searchMode) return; // BATCH-27c-4: 搜索模式不支持长按选择
     final path = _remotePathFor(e);
     setState(() {
-      _selectionMode = true;
+      _enterSelectionMode();
       _selectedPaths.add(path);
     });
   }
@@ -382,10 +502,11 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
     // 选择模式下：点 ListTile = toggle 选中（文件夹仍下钻）
     if (_selectionMode) {
       if (e.isDir) {
-        // 下钻清空 selection（PRD §Q1 1b）
+        // 下钻清空 selection + 清搜索（PRD §Q1 1b + R7）
         setState(() {
           _pathStack.add(e.name);
           _exitSelectionMode();
+          _exitSearchMode();
         });
         await _loadCurrentDir();
         return;
@@ -395,8 +516,10 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
     }
     // 非选择模式
     if (e.isDir) {
+      // BATCH-27c-4: 下钻保留排序偏好；清空搜索 query + 退搜索模式（PRD §R7）
       setState(() {
         _pathStack.add(e.name);
+        _exitSearchMode();
       });
       await _loadCurrentDir();
       return;
@@ -567,13 +690,18 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      // 选择模式非空 → 拦默认 pop（先退选择再退页面）
-      canPop: !_selectionMode && _pathStack.isEmpty,
+      // 选择模式 / 搜索模式 / 路径栈非空 → 拦默认 pop
+      canPop:
+          !_selectionMode && !_searchMode && _pathStack.isEmpty,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        // 优先级：选择模式 → path 栈 → 页面（默认）
+        // 优先级：选择模式 → 搜索模式 → path 栈 → 页面（默认）
         if (_selectionMode) {
           _cancelSelection();
+          return;
+        }
+        if (_searchMode) {
+          setState(_exitSearchMode);
           return;
         }
         if (_pathStack.isNotEmpty) {
@@ -611,6 +739,26 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
         ],
       );
     }
+    if (_searchMode) {
+      // BATCH-27c-4: 搜索模式 AppBar — title 改 TextField + close leading +
+      // actions 全清（避免 AppBar 拥挤；transient badge 让位）。
+      return AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          tooltip: '关闭搜索',
+          onPressed: () => setState(_exitSearchMode),
+        ),
+        title: TextField(
+          controller: _searchController,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: '搜索文件名',
+            border: InputBorder.none,
+          ),
+          onChanged: _onSearchChanged,
+        ),
+      );
+    }
     final pathDisplay =
         _pathStack.isEmpty ? '/' : '/${_pathStack.join('/')}';
     return AppBar(
@@ -639,6 +787,20 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
         ],
       ),
       actions: [
+        // BATCH-27c-4: 搜索 IconButton —— 切到搜索模式
+        IconButton(
+          icon: const Icon(Icons.search),
+          tooltip: '搜索',
+          onPressed: _enterSearchMode,
+        ),
+        // BATCH-27c-4: 排序 PopupMenu —— 4 项（名称/时间 × 升/降），trailing
+        // check 标当前选中。对齐原 legado `menu_sort` 子菜单 + isChecked。
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.sort),
+          tooltip: '排序',
+          onSelected: _onSortSelected,
+          itemBuilder: (_) => _buildSortMenuItems(),
+        ),
         // BATCH-27c-3: 批量下载进度 transient badge —— 仅 isRunning 时
         // 渲染，跑完自动消失。点击不取消（cancel UX 留 follow-up）。
         if (_lastProgress != null && _lastProgress!.isRunning)
@@ -686,6 +848,62 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
     );
   }
 
+  /// BATCH-27c-4: 排序 PopupMenu 4 项 + trailing check 标当前选中。值用
+  /// `key|asc` 复合 String（'name|true' / 'name|false' / 'time|true' /
+  /// 'time|false'），onSelected 反解。
+  List<PopupMenuEntry<String>> _buildSortMenuItems() {
+    PopupMenuItem<String> item(String label, String key, bool asc) {
+      final selected = _sortKey == key && _sortAsc == asc;
+      return PopupMenuItem<String>(
+        value: '$key|$asc',
+        child: Row(
+          children: [
+            Expanded(child: Text(label)),
+            if (selected) const Icon(Icons.check, size: 18),
+          ],
+        ),
+      );
+    }
+
+    return [
+      item('按名称（升）', 'name', true),
+      item('按名称（降）', 'name', false),
+      item('按时间（升）', 'time', true),
+      item('按时间（降）', 'time', false),
+    ];
+  }
+
+  void _onSortSelected(String value) {
+    final parts = value.split('|');
+    if (parts.length != 2) return;
+    final key = parts[0];
+    final asc = parts[1] == 'true';
+    if (_sortKey == key && _sortAsc == asc) return;
+    setState(() {
+      _sortKey = key;
+      _sortAsc = asc;
+    });
+    // fire-and-forget 持久化；失败 helper 静默处理（errorTag debugPrint）
+    final dir = widget.documentsDirOverride;
+    saveRemoteBookSortKeyToDisk(key, directory: dir);
+    saveRemoteBookSortAscToDisk(asc, directory: dir);
+  }
+
+  /// BATCH-27c-4: 搜索 onChanged —— TextField 立即视觉反馈（controller 自
+  /// 带），debounce 300ms 后才写 _searchQuery + setState 重排 ListView。
+  /// 空 query 立即清 filter（不走 debounce），避免清空时还要等 300ms。
+  void _onSearchChanged(String text) {
+    _searchDebounce?.cancel();
+    if (text.isEmpty) {
+      setState(() => _searchQuery = '');
+      return;
+    }
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
+      setState(() => _searchQuery = text);
+    });
+  }
+
   Widget _buildBody(BuildContext context) {
     if (_credentialsLoading) {
       return const Center(child: CircularProgressIndicator());
@@ -726,10 +944,19 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
     if (_entries.isEmpty) {
       return const Center(child: Text('此目录为空'));
     }
+    // BATCH-27c-4: 渲染 _visibleEntries（排序 + 搜索过滤后的派生视图）。
+    // 当 _entries 非空但搜索 query 过滤光时，_visibleEntries 可能为空 —
+    // 单独提示「无匹配项」让用户知道是搜索没命中而非目录空。
+    final view = _visibleEntries;
+    if (view.isEmpty) {
+      return Center(
+        child: Text(_searchQuery.isEmpty ? '此目录为空' : '无匹配项'),
+      );
+    }
     return ListView.builder(
-      itemCount: _entries.length,
+      itemCount: view.length,
       itemBuilder: (context, index) {
-        final e = _entries[index];
+        final e = view[index];
         final selected =
             !e.isDir && _selectedPaths.contains(_remotePathFor(e));
         return ListTile(

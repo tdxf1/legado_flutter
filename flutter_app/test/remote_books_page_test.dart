@@ -54,6 +54,8 @@ void main() {
       required String filePath,
       required String documentsDir,
     })? importFn,
+    String? sortKey,
+    bool? sortAsc,
   }) {
     final router = GoRouter(
       initialLocation: '/remote-books',
@@ -67,6 +69,8 @@ void main() {
             listDirOverride: listDirFn,
             downloadFileOverride: downloadFn,
             importLocalBookOverride: importFn,
+            sortKeyOverride: sortKey,
+            sortAscOverride: sortAsc,
           ),
         ),
         // /webdav-config 路由 stub —— 仅注册防 ContextNotFound；测试不
