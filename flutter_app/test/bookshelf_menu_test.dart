@@ -90,6 +90,7 @@ void main() {
 
   /// 2. 灰显占位 enabled: false。
   /// BATCH-27b: update_toc 从灰显改可点 → 灰显 6 → 5。enabled 项 6 → 7。
+  /// BATCH-27c: add_remote 从灰显改可点 → 灰显 5 → 4。enabled 项 7 → 8。
   testWidgets('BATCH-27a: disabled placeholder items have enabled=false',
       (WidgetTester tester) async {
     await tester.pumpWidget(buildPage(exportFn: null));
@@ -98,9 +99,8 @@ void main() {
     await tester.tap(find.byTooltip('更多'));
     await tester.pumpAndSettle();
 
-    // 期望灰显的 5 项 value（27b 后 update_toc 已改可点）
+    // 期望灰显的 4 项 value（27b 后 update_toc / 27c 后 add_remote 已改可点）
     const disabledValues = <String>[
-      'add_remote',
       'add_url',
       'bookshelf_manage',
       'import_bookshelf',
@@ -116,10 +116,11 @@ void main() {
       expect(widget.enabled, isFalse, reason: '$v 应 enabled: false');
     }
 
-    // 期望 enabled 的项也校验对应（对照组），27b 加 update_toc
+    // 期望 enabled 的项也校验对应（对照组），27b 加 update_toc / 27c 加 add_remote
     const enabledValues = <String>[
       'update_toc',
       'import_local',
+      'add_remote',
       'qr_scan',
       'cache_export',
       'manage_groups',

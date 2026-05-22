@@ -489,6 +489,19 @@ abstract class RustLibApi extends BaseApi {
 
   Future<int> crateApiUpdateBookToc(
       {required String dbPath, required String bookId});
+
+  Future<String> crateApiWebdavListDir(
+      {required String url,
+      required String user,
+      required String password,
+      required String path});
+
+  Future<PlatformInt64> crateApiWebdavDownloadFile(
+      {required String url,
+      required String user,
+      required String password,
+      required String remotePath,
+      required String targetLocalPath});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -3596,6 +3609,74 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiUpdateBookTocConstMeta => const TaskConstMeta(
         debugName: "update_book_toc",
         argNames: ["dbPath", "bookId"],
+      );
+
+  // ============================================================
+  // BATCH-27c — 通用 WebDAV 列目录 / 下载
+  // ============================================================
+
+  @override
+  Future<String> crateApiWebdavListDir(
+      {required String url,
+      required String user,
+      required String password,
+      required String path}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(url, serializer);
+        sse_encode_String(user, serializer);
+        sse_encode_String(password, serializer);
+        sse_encode_String(path, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 113, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiWebdavListDirConstMeta,
+      argValues: [url, user, password, path],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiWebdavListDirConstMeta => const TaskConstMeta(
+        debugName: "webdav_list_dir",
+        argNames: ["url", "user", "password", "path"],
+      );
+
+  @override
+  Future<PlatformInt64> crateApiWebdavDownloadFile(
+      {required String url,
+      required String user,
+      required String password,
+      required String remotePath,
+      required String targetLocalPath}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(url, serializer);
+        sse_encode_String(user, serializer);
+        sse_encode_String(password, serializer);
+        sse_encode_String(remotePath, serializer);
+        sse_encode_String(targetLocalPath, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 114, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_i_64,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiWebdavDownloadFileConstMeta,
+      argValues: [url, user, password, remotePath, targetLocalPath],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiWebdavDownloadFileConstMeta => const TaskConstMeta(
+        debugName: "webdav_download_file",
+        argNames: ["url", "user", "password", "remotePath", "targetLocalPath"],
       );
 
   @protected

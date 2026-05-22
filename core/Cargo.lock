@@ -895,6 +895,7 @@ name = "core-net"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "cookie_store 0.21.1",
  "encoding_rs",
  "httpmock",
@@ -902,6 +903,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-retry",
  "tracing",

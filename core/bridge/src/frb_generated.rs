@@ -1904,6 +1904,100 @@ fn wire__crate__api__update_book_toc_impl(
         },
     )
 }
+// BATCH-27c (funcId 113) — webdav_list_dir(url, user, password, path) -> Result<String, String>
+fn wire__crate__api__webdav_list_dir_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "webdav_list_dir",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_url = <String>::sse_decode(&mut deserializer);
+            let api_user = <String>::sse_decode(&mut deserializer);
+            let api_password = <String>::sse_decode(&mut deserializer);
+            let api_path = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok = crate::api::webdav_list_dir(
+                            api_url,
+                            api_user,
+                            api_password,
+                            api_path,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+// BATCH-27c (funcId 114) — webdav_download_file(url, user, password, remote_path, target_local_path) -> Result<i64, String>
+fn wire__crate__api__webdav_download_file_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "webdav_download_file",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_url = <String>::sse_decode(&mut deserializer);
+            let api_user = <String>::sse_decode(&mut deserializer);
+            let api_password = <String>::sse_decode(&mut deserializer);
+            let api_remote_path = <String>::sse_decode(&mut deserializer);
+            let api_target_local_path = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok = crate::api::webdav_download_file(
+                            api_url,
+                            api_user,
+                            api_password,
+                            api_remote_path,
+                            api_target_local_path,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 // funcId 93 — rss_mark_read(db_path, link, ts) -> Result<i64, String>
 fn wire__crate__api__rss_mark_read_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
@@ -4366,6 +4460,9 @@ fn pde_ffi_dispatcher_primary_impl(
         111 => wire__crate__api__export_bookshelf_json_impl(port, ptr, rust_vec_len, data_len),
         // BATCH-27b (单本目录刷新) — 手动 wire fn 注册
         112 => wire__crate__api__update_book_toc_impl(port, ptr, rust_vec_len, data_len),
+        // BATCH-27c (webdav 通用 list_dir / download_file) — 手动 wire fn 注册
+        113 => wire__crate__api__webdav_list_dir_impl(port, ptr, rust_vec_len, data_len),
+        114 => wire__crate__api__webdav_download_file_impl(port, ptr, rust_vec_len, data_len),
         // R3: codegen default branch hit at runtime means Rust and Dart
         // have inconsistent funcId tables. build.rs catches this at
         // compile time when both sides are visible (R3 cross-check),

@@ -24,6 +24,7 @@ import '../features/rss/rss_source_manage_page.dart';
 import '../features/rss/rss_tab_page.dart';
 import '../features/rule_sub/rule_sub_page.dart';
 import '../features/qr/qr_scan_page.dart';
+import '../features/remote_books/remote_books_page.dart';
 
 final router = GoRouter(
   initialLocation: '/bookshelf',
@@ -173,6 +174,13 @@ final router = GoRouter(
     GoRoute(
       path: '/qr-scan',
       builder: (context, state) => const QrScanPage(),
+    ),
+    // BATCH-27c (05-22): 远程书浏览页。bookshelf PopupMenu「添加远程书」
+    // 入口（27a 灰显占位 → 27c 改可点）。复用 webdav_config_page 凭据
+    // + Rust webdav list_dir / download_file 通用 FRB（funcId 113/114）。
+    GoRoute(
+      path: '/remote-books',
+      builder: (_, __) => const RemoteBooksPage(),
     ),
   ],
 );

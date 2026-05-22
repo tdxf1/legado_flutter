@@ -1560,6 +1560,46 @@ pub async fn webdav_delete_backup(
 }
 
 // ============================================================
+// 通用 WebDAV 列目录 / 下载 (BATCH-27c / 05-22)
+// ============================================================
+//
+// `webdav_list_backups` / `webdav_download_backup` 写死 backup 前缀过滤
+// 与 zip 导入；本节加通用版本服务 RemoteBooksPage（PRD §A）：列目录
+// 不过滤 + 通用下载。返回结构 [{name, isDir, size, lastModified}]。
+
+/// BATCH-27c: 列任意子路径下的所有 entries（不过滤 backup 前缀）。
+/// `path` 相对 url，空串 = 根目录。返 JSON 数组：
+/// `[{"name":"x","isDir":false,"size":1024,"lastModified":1735732496}, ...]`。
+///
+/// path 内 `..` / 绝对路径 → Err，浅层 SSRF 防护。
+pub async fn webdav_list_dir(
+    url: String,
+    user: String,
+    password: String,
+    path: String,
+) -> Result<String, String> {
+    let client = core_net::webdav::WebDavClient::new(url, user, password);
+    let entries = client.list_dir(&path).await?;
+    serde_json::to_string(&entries).map_err(|e| format!("序列化失败: {}", e))
+}
+
+/// BATCH-27c: 通用 GET → 写本地路径。返写入字节数。
+/// `target_local_path` 父目录由 caller 创建（remote_books/ 等）；本 fn
+/// 不主动 mkdir 让 caller 显式控制持久化目录决策。
+pub async fn webdav_download_file(
+    url: String,
+    user: String,
+    password: String,
+    remote_path: String,
+    target_local_path: String,
+) -> Result<i64, String> {
+    let client = core_net::webdav::WebDavClient::new(url, user, password);
+    let path = std::path::Path::new(&target_local_path);
+    let bytes = client.download_to_path(&remote_path, path).await?;
+    Ok(bytes as i64)
+}
+
+// ============================================================
 // 备份密码持久化 (批次 12 / 05-19)
 // ============================================================
 //

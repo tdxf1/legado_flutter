@@ -279,6 +279,10 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                   } else if (value == 'update_toc') {
                     // BATCH-27b (05-22): 当前 Tab books 批量刷目录。
                     await _onUpdateToc(innerCtx, tabSpec, sortOrder);
+                  } else if (value == 'add_remote') {
+                    // BATCH-27c (05-22): 远程书浏览页（webdav 单 server
+                    // 最小可用版）。灰显占位 → 真功能跳 /remote-books。
+                    if (innerCtx.mounted) innerCtx.push('/remote-books');
                   }
                 },
                 itemBuilder: (context) => const [
@@ -301,12 +305,10 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),
-                  // 4. 添加远程书 — 灰显占位
+                  // 4. 添加远程书 — BATCH-27c 改可点（webdav 单 server）
                   PopupMenuItem(
-                    enabled: false,
                     value: 'add_remote',
                     child: ListTile(
-                      enabled: false,
                       leading: Icon(Icons.cloud_outlined),
                       title: Text('添加远程书'),
                       contentPadding: EdgeInsets.zero,

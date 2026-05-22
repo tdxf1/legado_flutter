@@ -32,8 +32,27 @@ use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE},
     Client, Method,
 };
+use serde::Serialize;
+use std::path::Path;
 use std::time::Duration;
 use tracing::{debug, warn};
+
+/// BATCH-27c: WebDAV 目录条目（通用 list_dir 返回类型）。`is_dir = true`
+/// 来自 propfind `<resourcetype><collection/>`；`size = 0` 对目录条目恒
+/// 等于 0；`last_modified` 是 `<getlastmodified>` parsed 为 unix 秒
+/// 时间戳，缺/解析失败时 None。
+///
+/// 序列化 → JSON 走 FRB 给 Dart 端 jsonDecode 用 camelCase（`isDir`,
+/// `lastModified`），与 dart 端约定一致。
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct DirEntry {
+    pub name: String,
+    #[serde(rename = "isDir")]
+    pub is_dir: bool,
+    pub size: u64,
+    #[serde(rename = "lastModified")]
+    pub last_modified: Option<i64>,
+}
 
 const PROPFIND_BODY: &str = r#"<?xml version="1.0" encoding="utf-8" ?>
 <propfind xmlns="DAV:">
@@ -193,12 +212,122 @@ impl WebDavClient {
         }
     }
 
+    /// BATCH-27c: 列任意子路径（`path` 相对 base_url，空串 = base_url
+    /// 自身）的所有 entries（不过滤 backup 前缀）。与 [`list_files`]
+    /// 区分 — 后者写死过滤 backup 前缀 + 仅返文件名 String。
+    ///
+    /// `path` 校验：含 `..` 或绝对路径 → 拒绝。这是浅层 SSRF 防护；
+    /// 远端 webdav 服务器自身也应做相对路径限制，但 dart 端构造的
+    /// pathStack join 不应越界（拼 `..` 是一个明显的代码 bug）。
+    pub async fn list_dir(&self, path: &str) -> Result<Vec<DirEntry>, String> {
+        if path.contains("..") || path.starts_with('/') {
+            return Err(format!("无效路径: {}", path));
+        }
+        let target_url = self.dir_url_for(path);
+        let mut headers = self.auth_headers();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/xml; charset=utf-8"),
+        );
+        headers.insert("Depth", HeaderValue::from_static("1"));
+        let req = self
+            .client
+            .request(
+                Method::from_bytes(b"PROPFIND").unwrap(),
+                &target_url,
+            )
+            .headers(headers)
+            .body(PROPFIND_BODY);
+        debug!("PROPFIND {} depth=1 (list_dir)", target_url);
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("PROPFIND 失败: {}", e))?;
+        let status = resp.status();
+        if !(status.is_success() || status.as_u16() == 207) {
+            return Err(format!("WebDAV 列目录失败: HTTP {}", status));
+        }
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("读取响应失败: {}", e))?;
+        let entries = parse_propfind_entries(&body);
+        // 服务器一般会把"当前目录自身"也作为第一个 response 返回（href
+        // 等于 list 路径）。靠 displayname 不一定能区分，但其 href 会
+        // 等于（或非常接近）请求的目录 URL；保守做法：过滤 name 为空
+        // 的项 + 当 name 与 path 末段相等且 isDir 时也跳过（自身）。
+        let self_segment = path
+            .rsplit('/')
+            .find(|s| !s.is_empty())
+            .unwrap_or("")
+            .to_string();
+        let filtered: Vec<DirEntry> = entries
+            .into_iter()
+            .filter(|e| {
+                if e.name.is_empty() {
+                    return false;
+                }
+                if e.is_dir && !self_segment.is_empty() && e.name == self_segment {
+                    return false;
+                }
+                true
+            })
+            .collect();
+        Ok(filtered)
+    }
+
+    /// BATCH-27c: 通用 GET → 流式写入本地路径。返写入 byte 数。
+    /// `target_local_path` 父目录需存在（caller 保证）；不在此 fn 创建。
+    /// 实现取 full body bytes 再一次性写盘 —— 与 `download` 同模式。
+    /// 流式分块写入需引入 `futures::StreamExt`，当前 deps 没有；备份 zip
+    /// 历史路径走 full bytes，这里保持一致。文件较大（>>100MB）时再
+    /// 评估是否升级流式（评估触发：reqwest::bytes_stream + futures 加 dep）。
+    pub async fn download_to_path(
+        &self,
+        remote_path: &str,
+        target_local_path: &Path,
+    ) -> Result<u64, String> {
+        let url = self.url_for(remote_path);
+        let resp = self
+            .client
+            .get(&url)
+            .headers(self.auth_headers())
+            .send()
+            .await
+            .map_err(|e| format!("下载失败: {}", e))?;
+        if !resp.status().is_success() {
+            return Err(format!("下载失败: HTTP {}", resp.status()));
+        }
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("读取下载内容失败: {}", e))?;
+        let len = bytes.len() as u64;
+        tokio::fs::write(target_local_path, &bytes)
+            .await
+            .map_err(|e| format!("写入本地文件失败: {}", e))?;
+        Ok(len)
+    }
+
     // ---- internal helpers ----
 
     fn url_for(&self, file_name: &str) -> String {
         // 简单 URL-encode 文件名里的空格 + #;其它字符暂时透传。
         let encoded = file_name.replace(' ', "%20").replace('#', "%23");
         format!("{}{}", self.base_url, encoded)
+    }
+
+    /// BATCH-27c: 给 list_dir 用的子路径 URL 拼接。`path` 已被
+    /// [`list_dir`] 校验过（无 `..` / abs path）；空串直接返回 base_url。
+    /// 末尾**保持** `/` —— webdav 协议很多服务器把 collection PROPFIND
+    /// 必须以 `/` 结尾，否则 response href 形态会变。
+    fn dir_url_for(&self, path: &str) -> String {
+        let p = path.trim_matches('/');
+        if p.is_empty() {
+            return self.base_url.clone();
+        }
+        let encoded = p.replace(' ', "%20").replace('#', "%23");
+        format!("{}{}/", self.base_url, encoded)
     }
 
     fn auth_headers(&self) -> HeaderMap {
@@ -236,6 +365,138 @@ pub fn build_basic_auth(user: &str, password: &str) -> String {
     let raw = format!("{}:{}", user, password);
     let b64 = base64::engine::general_purpose::STANDARD.encode(raw.as_bytes());
     format!("Basic {}", b64)
+}
+
+/// BATCH-27c: 解析 PROPFIND multi-status 响应里的 `<response>` 块，
+/// 每个块抽出 `displayname` / `resourcetype/collection` /
+/// `getcontentlength` / `getlastmodified` 4 个字段构造 [`DirEntry`]。
+///
+/// 与 [`parse_displaynames`] 区分：后者**只**抽 displayname 文本（用
+/// 于 list_files 配 backup 前缀过滤），本函数还要识别 collection / size /
+/// lastModified，给 list_dir 用。
+///
+/// 实现思路同 [`parse_displaynames`]：纯字符串搜索 + tag-open / tag-close
+/// 复用，不引 quick-xml。`response` 块用 `<...:?response>` 开 +
+/// `</...:?response>` 闭框定，块内字段独立 parse。命名空间前缀
+/// (`D:` / `dav:` 大小写) 一并兼容。
+fn parse_propfind_entries(xml: &str) -> Vec<DirEntry> {
+    let mut out = Vec::new();
+    let lower = xml.to_ascii_lowercase();
+    let bytes = xml.as_bytes();
+    let mut cursor = 0usize;
+    while cursor < lower.len() {
+        // Find next <response>
+        let open_pos = match find_tag_open(&lower, "response", cursor) {
+            Some(p) => p,
+            None => break,
+        };
+        let body_start = match lower[open_pos..].find('>') {
+            Some(p) => open_pos + p + 1,
+            None => break,
+        };
+        let close_pos = match find_tag_close(&lower, "response", body_start) {
+            Some(p) => p,
+            None => break,
+        };
+        // Slice out the response block bytes
+        let block_bytes = &bytes[body_start..close_pos];
+        let block_lower = &lower[body_start..close_pos];
+        let block_str = std::str::from_utf8(block_bytes).unwrap_or("");
+
+        let name = extract_first_tag_text(block_lower, block_str, "displayname")
+            .unwrap_or_default();
+        // resourcetype/collection 标识 dir
+        let is_dir = block_contains_collection(block_lower);
+        // getcontentlength
+        let size = extract_first_tag_text(block_lower, block_str, "getcontentlength")
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(0);
+        // getlastmodified
+        let last_modified = extract_first_tag_text(block_lower, block_str, "getlastmodified")
+            .and_then(|s| parse_http_or_iso_date(s.trim()));
+
+        out.push(DirEntry {
+            name,
+            is_dir,
+            size,
+            last_modified,
+        });
+
+        // Skip past this response close tag
+        if let Some(after) = lower[close_pos..].find('>') {
+            cursor = close_pos + after + 1;
+        } else {
+            break;
+        }
+    }
+    if out.is_empty() {
+        debug!("parse_propfind_entries 未提取到任何 response 块");
+    }
+    out
+}
+
+/// 从 propfind response 块内抽第一个匹配 tag 的内部文本，返回 trim +
+/// xml-entity 还原后的字符串。块内查找用 `find_tag_open` / `find_tag_close`
+/// 同 parse_displaynames。
+fn extract_first_tag_text(lower: &str, original: &str, tag: &str) -> Option<String> {
+    let open_pos = find_tag_open(lower, tag, 0)?;
+    let body_start = lower[open_pos..].find('>').map(|p| open_pos + p + 1)?;
+    let close_pos = find_tag_close(lower, tag, body_start)?;
+    if body_start > close_pos || close_pos > original.len() {
+        return None;
+    }
+    let text = &original[body_start..close_pos];
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(decode_xml_entities(trimmed))
+    }
+}
+
+/// `<resourcetype>` 内含 `<collection/>` 或 `<...:collection ...>` 标签则
+/// 返 true。空 `<resourcetype/>` / `<resourcetype></resourcetype>` 表示文件。
+fn block_contains_collection(block_lower: &str) -> bool {
+    // We do simple substring search constrained to the resourcetype tag
+    // contents; this avoids picking up "<collection>" elsewhere in the
+    // response (none should exist in standard webdav, but defensive).
+    let rt_open = match find_tag_open(block_lower, "resourcetype", 0) {
+        Some(p) => p,
+        None => return false,
+    };
+    let rt_body_start = match block_lower[rt_open..].find('>') {
+        Some(p) => rt_open + p + 1,
+        None => return false,
+    };
+    // 自闭合 <resourcetype/> → 无 inner，标记为文件
+    // detect by stepping back: if char before `>` is `/`, it's self-close
+    if rt_body_start >= 2 && &block_lower[rt_body_start - 2..rt_body_start - 1] == "/" {
+        return false;
+    }
+    let rt_close = match find_tag_close(block_lower, "resourcetype", rt_body_start) {
+        Some(p) => p,
+        None => return false,
+    };
+    let inner = &block_lower[rt_body_start..rt_close];
+    inner.contains("collection")
+}
+
+/// 解析 `<getlastmodified>` 字段。webdav 服务器多数返 RFC 1123 格式
+/// （`Thu, 01 Jan 2026 12:34:56 GMT`），少数返 ISO 8601；两个都试。
+/// 解析失败返 None；DirEntry.last_modified None 等价于"未提供"。
+fn parse_http_or_iso_date(s: &str) -> Option<i64> {
+    if s.is_empty() {
+        return None;
+    }
+    // RFC 1123 / 2822 (HTTP date)
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc2822(s) {
+        return Some(dt.timestamp());
+    }
+    // ISO 8601 / RFC 3339
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt.timestamp());
+    }
+    None
 }
 
 /// 极简提取 `<displayname>...</displayname>` 文本。
@@ -426,6 +687,171 @@ mod tests {
         </prop></propstat></response></multistatus>"#;
         let names = parse_displaynames(xml);
         assert_eq!(names, vec!["backup & thing.zip".to_string()]);
+    }
+
+    /// BATCH-27c: parse_propfind_entries 验目录 / 文件 / 大小 / 修改
+    /// 时间四字段抽取。fixture 对照原 Legado 用 jianguoyun / nextcloud 风格
+    /// `<D:multistatus>` 响应。
+    #[test]
+    fn test_parse_propfind_entries_files_and_dirs() {
+        let xml = r#"<?xml version="1.0"?>
+<D:multistatus xmlns:D="DAV:">
+  <D:response>
+    <D:href>/dav/legado/</D:href>
+    <D:propstat>
+      <D:prop>
+        <D:displayname>legado</D:displayname>
+        <D:resourcetype><D:collection/></D:resourcetype>
+        <D:getlastmodified>Thu, 01 Jan 2026 12:34:56 GMT</D:getlastmodified>
+      </D:prop>
+    </D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>/dav/legado/books/</D:href>
+    <D:propstat>
+      <D:prop>
+        <D:displayname>books</D:displayname>
+        <D:resourcetype><D:collection/></D:resourcetype>
+        <D:getlastmodified>Wed, 31 Dec 2025 23:00:00 GMT</D:getlastmodified>
+      </D:prop>
+    </D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>/dav/legado/note.txt</D:href>
+    <D:propstat>
+      <D:prop>
+        <D:displayname>note.txt</D:displayname>
+        <D:resourcetype/>
+        <D:getcontentlength>1024</D:getcontentlength>
+        <D:getlastmodified>Thu, 01 Jan 2026 10:00:00 GMT</D:getlastmodified>
+      </D:prop>
+    </D:propstat>
+  </D:response>
+</D:multistatus>"#;
+        let entries = parse_propfind_entries(xml);
+        assert_eq!(entries.len(), 3, "三条 response → 三个 entry");
+        // entry[0] 是请求目录自身 (legado / dir)
+        assert_eq!(entries[0].name, "legado");
+        assert!(entries[0].is_dir);
+        assert_eq!(entries[0].size, 0);
+        assert!(entries[0].last_modified.is_some());
+        // entry[1] 子目录 books/
+        assert_eq!(entries[1].name, "books");
+        assert!(entries[1].is_dir);
+        assert_eq!(entries[1].size, 0);
+        // entry[2] 文件 note.txt
+        assert_eq!(entries[2].name, "note.txt");
+        assert!(!entries[2].is_dir);
+        assert_eq!(entries[2].size, 1024);
+        assert!(entries[2].last_modified.is_some());
+        // 时间戳排序合理
+        let t1 = entries[0].last_modified.unwrap();
+        let t2 = entries[1].last_modified.unwrap();
+        assert!(t1 > t2, "Jan 01 12:34 > Dec 31 23:00 (UTC)");
+    }
+
+    /// BATCH-27c: 空 multistatus 响应返空 entries
+    #[test]
+    fn test_parse_propfind_entries_empty() {
+        let xml = r#"<?xml version="1.0"?><D:multistatus xmlns:D="DAV:"></D:multistatus>"#;
+        let entries = parse_propfind_entries(xml);
+        assert!(entries.is_empty());
+    }
+
+    /// BATCH-27c: DirEntry serde 序列化为 camelCase JSON
+    #[test]
+    fn test_dir_entry_serializes_camel_case() {
+        let e = DirEntry {
+            name: "books".to_string(),
+            is_dir: true,
+            size: 0,
+            last_modified: Some(1735732496),
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains("\"isDir\":true"));
+        assert!(json.contains("\"lastModified\":1735732496"));
+        assert!(json.contains("\"name\":\"books\""));
+    }
+
+    /// BATCH-27c: list_dir 拒绝越界 path（`..` / abs path）。
+    #[tokio::test]
+    async fn test_list_dir_rejects_invalid_paths() {
+        let client =
+            WebDavClient::new("http://example.invalid/dav/".into(), "u".into(), "p".into());
+        assert!(client.list_dir("../etc").await.is_err());
+        assert!(client.list_dir("foo/../bar").await.is_err());
+        assert!(client.list_dir("/abs/path").await.is_err());
+    }
+
+    /// BATCH-27c: list_dir 用 mock 服务器走 happy path。
+    /// 校验：传 path="books" → 末尾自带 `/` + 结果 entries 含子目录与文件。
+    #[tokio::test]
+    async fn test_list_dir_via_mock_server() {
+        let captured_path: Arc<std::sync::Mutex<Option<String>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let captured_clone = captured_path.clone();
+        let xml = r#"<?xml version="1.0"?>
+<D:multistatus xmlns:D="DAV:">
+  <D:response>
+    <D:href>/dav/legado/books/</D:href>
+    <D:propstat><D:prop>
+      <D:displayname>books</D:displayname>
+      <D:resourcetype><D:collection/></D:resourcetype>
+    </D:prop></D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>/dav/legado/books/a.epub</D:href>
+    <D:propstat><D:prop>
+      <D:displayname>a.epub</D:displayname>
+      <D:resourcetype/>
+      <D:getcontentlength>2048</D:getcontentlength>
+    </D:prop></D:propstat>
+  </D:response>
+</D:multistatus>"#
+            .to_string();
+        let (base, _h) = spawn_dav_mock(move |method, path, _body| {
+            assert_eq!(method, "PROPFIND");
+            *captured_clone.lock().unwrap() = Some(path.to_string());
+            (207, xml.clone().into_bytes())
+        })
+        .await;
+        let client =
+            WebDavClient::new(format!("{}/dav/legado/", base), "u".into(), "p".into());
+        let entries = client.list_dir("books").await.unwrap();
+        // 自身目录被过滤 → 仅 1 个文件
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "a.epub");
+        assert!(!entries[0].is_dir);
+        assert_eq!(entries[0].size, 2048);
+        // 校验请求 path 末尾带 `/`（webdav collection 需要）
+        let path = captured_path.lock().unwrap().clone().unwrap_or_default();
+        assert!(
+            path.ends_with("/dav/legado/books/"),
+            "expected trailing slash, got {path}"
+        );
+    }
+
+    /// BATCH-27c: download_to_path 写入 mock 返回的 body 到本地路径。
+    #[tokio::test]
+    async fn test_download_to_path_writes_target_file() {
+        let payload: Vec<u8> = b"webdav-payload-27c".to_vec();
+        let payload_clone = payload.clone();
+        let (base, _h) = spawn_dav_mock(move |method, _path, _body| {
+            assert_eq!(method, "GET");
+            (200, payload_clone.clone())
+        })
+        .await;
+        let client =
+            WebDavClient::new(format!("{}/dav/legado/", base), "u".into(), "p".into());
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let target = tmp_dir.path().join("out.bin");
+        let n = client
+            .download_to_path("books/a.epub", &target)
+            .await
+            .unwrap();
+        assert_eq!(n, payload.len() as u64);
+        let got = std::fs::read(&target).unwrap();
+        assert_eq!(got, payload);
     }
 
     /// 简易 WebDAV 测试服务器 — 因 httpmock 0.7 不支持 PROPFIND 等

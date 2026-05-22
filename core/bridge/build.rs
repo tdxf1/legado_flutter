@@ -132,6 +132,9 @@ const REQUIRED_WIRE_FN_FRAGMENTS: &[&str] = &[
     "wire__crate__api__export_bookshelf_json_impl",
     // BATCH-27b (单本目录刷新) — 1 个 wire fn (funcId 112)
     "wire__crate__api__update_book_toc_impl",
+    // BATCH-27c (webdav 通用 list_dir / download_file) — 2 个 wire fn (funcId 113-114)
+    "wire__crate__api__webdav_list_dir_impl",
+    "wire__crate__api__webdav_download_file_impl",
 ];
 
 const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
@@ -218,6 +221,9 @@ const REQUIRED_DISPATCHER_FRAGMENTS: &[&str] = &[
     "        111 =>",
     // BATCH-27b (单本目录刷新) 手动 dispatch 注册
     "        112 =>",
+    // BATCH-27c (webdav 通用 list_dir / download_file) 手动 dispatch 注册
+    "        113 =>",
+    "        114 =>",
 ];
 
 /// R3: the dispatcher default arms must surface the unknown funcId

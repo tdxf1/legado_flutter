@@ -416,6 +416,32 @@ Future<int> updateBookToc(
     RustLib.instance.api
         .crateApiUpdateBookToc(dbPath: dbPath, bookId: bookId);
 
+/// BATCH-27c: 通用 webdav 列目录。`path` 相对 url，空串 = root。返
+/// JSON 数组：`[{"name","isDir","size","lastModified"}, ...]`。与
+/// [`webdavListBackups`] 区分 — 后者写死 backup 前缀过滤 + 返 String 列表。
+Future<String> webdavListDir(
+        {required String url,
+        required String user,
+        required String password,
+        required String path}) =>
+    RustLib.instance.api.crateApiWebdavListDir(
+        url: url, user: user, password: password, path: path);
+
+/// BATCH-27c: 通用 webdav 下载到本地路径，返写入字节数。
+/// `targetLocalPath` 父目录由 caller 创建。
+Future<PlatformInt64> webdavDownloadFile(
+        {required String url,
+        required String user,
+        required String password,
+        required String remotePath,
+        required String targetLocalPath}) =>
+    RustLib.instance.api.crateApiWebdavDownloadFile(
+        url: url,
+        user: user,
+        password: password,
+        remotePath: remotePath,
+        targetLocalPath: targetLocalPath);
+
 /// 获取所有替换规则，返回 JSON 数组
 Future<String> getReplaceRules({required String dbPath}) =>
     RustLib.instance.api.crateApiGetReplaceRules(dbPath: dbPath);
