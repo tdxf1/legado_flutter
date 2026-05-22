@@ -193,6 +193,8 @@
 
 **未做**：FRB 桥 `rss_article_get_by_origin_link`（Rust dao 已有 line 147 + 单测 line 464，但缺 FRB pub fn + binding regen + .so 重打包）— PRD Out of Scope，留 BATCH-21b。FRB 桥能把全数组遍历从 ~50ms 降到 ~5ms（单条 SELECT），收益清晰但跨层 effort 大。
 
+**Resolution (BATCH-21b, 2026-05-22)**: 完整收尾。手动 wire FRB pub fn `rss_article_get_by_origin_link(db_path, origin, link) -> Result<String, String>`（funcId 110，三处同步：build.rs guard fragments + frb_generated.rs wire fn + 4253 行 dispatcher arm + frb_generated.dart abstract method + impl callFfi + ConstMeta）。Dart 端 `api.dart::rssArticleGetByOriginLink` wrapper + `rss_article_detail_page.dart::_bootstrap::articleFuture` 替换：旧 14 行 `rssListArticles + jsonDecode(arr) + for 找 link` IIFE 改为 8 行 `rssArticleGetByOriginLink + jsonDecode 单 Map`。null 处理走 `raw == 'null'` 与现有 `rss_source_get` 模式一致。dao 已有 3 case 单测覆盖（test_get_by_origin_link line 464）；本批未加新单测但 baseline 523 PASS 视为回归。`cargo build -p bridge` build.rs guard PASS = funcId 110 三处同步。task: 05-22-batch-21b-rss-detail-frb-bridge。
+
 新增 1 case widget test 验证 isStarred future 在 fetch 启动前先发起（用 `Completer<bool>` + `Completer<Map>` 跟踪 started flag，验并行启动顺序）。
 
 ---
