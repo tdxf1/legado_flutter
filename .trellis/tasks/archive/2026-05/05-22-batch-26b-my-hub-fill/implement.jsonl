@@ -1,0 +1,8 @@
+{"role": "system", "content": "BATCH-26b /my hub fill implement context"}
+{"file": "flutter_app/lib/features/my/my_hub_page.dart", "reason": "26a 占位骨架，本批扩为 14 项 hub"}
+{"file": "flutter_app/lib/features/settings/settings_page.dart", "reason": "复用 _SectionHeader 模式 + 工具段双入口保留"}
+{"file": "flutter_app/lib/core/router.dart", "reason": "确认 onTap 跳转的 5 个 path 都存在"}
+{"file": ".trellis/tasks/05-22-batch-26b-my-hub-fill/prd.md", "reason": "本批需求 + 1:1 映射表"}
+{"file": ".trellis/tasks/05-22-align-ui-with-legado-android/prd.md", "reason": "父任务 ADR / 决策"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "spec 落地段落「页面布局对齐 (BATCH-26)」"}
+{"file": ".trellis/spec/flutter-app/directory-structure.md", "reason": "feature 目录与 widget 命名约定"}
