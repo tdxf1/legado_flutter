@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "27e 是否新违反 Forbidden（PopupMenuItem value 不改名 / 批量执行模型 / search 栈复用）+ 是否补 27e 子节 / 27a 表第 5/12 行同步"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "testWidgets 覆盖度 + bookshelf_menu_test 同步 enabled 列表"}
+{"file": ".trellis/spec/rust-core/index.md", "reason": "FRB funcId 118 注册 + build.rs 守卫 + source_dao 单元测试"}

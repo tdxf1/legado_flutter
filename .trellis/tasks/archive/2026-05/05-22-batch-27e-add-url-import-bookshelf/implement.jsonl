@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "BATCH-27a bookshelf PopupMenu 范本 + Forbidden 反向（修改现有 PopupMenuItem value key 名禁令）+ 27c-3/27d 批量执行模型决策对照"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "Riverpod state + override 注入模式 + ref.invalidate(allBooksProvider) 范本"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "*Override 模式 + testWidgets fixture + bookshelf_menu_test 范本"}
+{"file": ".trellis/spec/rust-core/index.md", "reason": "Rust FRB 新增 funcId / build.rs REQUIRED_*_FRAGMENTS 守卫 / source_dao 编辑规范"}
+{"file": ".trellis/tasks/archive/2026-05/05-22-batch-27-bookshelf-menu-10/prd.md", "reason": "27a PopupMenu 13 项决策依据 + add_url / import_bookshelf 灰显原因（依赖 WebBook 抓详情栈）"}
