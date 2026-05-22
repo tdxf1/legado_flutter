@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "28-followup 是否新违反 Forbidden + 搜索模式互斥契约 + testing 覆盖"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "testWidgets 覆盖度 + tearDown 清理"}
