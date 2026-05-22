@@ -1,0 +1,9 @@
+{"role": "system", "content": "BATCH-26a router 4-tab 重构 implement context"}
+{"file": "flutter_app/lib/core/router.dart", "reason": "current 5-tab StatefulShellRoute structure"}
+{"file": "flutter_app/lib/features/bookshelf/bookshelf_page.dart", "reason": "AppBar + PopupMenu 改造目标"}
+{"file": "flutter_app/lib/features/download/download_page.dart", "reason": "标题改「缓存/导出」"}
+{"file": "flutter_app/lib/features/rss/rss_source_manage_page.dart", "reason": "评估能否抽 widget 给 RssTabPage 复用"}
+{"file": ".trellis/tasks/05-22-batch-26a-router-4tab-restructure/prd.md", "reason": "本批需求与验收"}
+{"file": ".trellis/tasks/05-22-align-ui-with-legado-android/prd.md", "reason": "父任务背景与 ADR"}
+{"file": ".trellis/spec/flutter-app/directory-structure.md", "reason": "目录约定"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "spec 落地方向"}
