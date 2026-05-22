@@ -49,6 +49,9 @@ Future<void> main() async {
   // pref_config_other.xml `android:defaultValue="true"` 对齐。
   final showDiscovery = await loadShowDiscoveryFromDisk();
   final showRss = await loadShowRssFromDisk();
+  // BATCH-26d (05-22): 启动加载 defaultHomePage，让 startup postFrame
+  // 跳转决策能拿到正确值。与 26c 同模式 wire（disk → ProviderScope.overrides）。
+  final defaultHomePage = await loadDefaultHomePageFromDisk();
   runApp(ProviderScope(
     overrides: [
       themeModeProvider.overrideWith((ref) => themeMode),
@@ -56,15 +59,28 @@ Future<void> main() async {
       refreshRateModeProvider.overrideWith((ref) => refreshRateMode),
       showDiscoveryProvider.overrideWith((ref) => showDiscovery),
       showRssProvider.overrideWith((ref) => showRss),
+      defaultHomePageProvider.overrideWith((ref) => defaultHomePage),
     ],
     child: const LegadoApp(),
   ));
   WidgetsBinding.instance.addPostFrameCallback((_) async {
+    // pendingRoute 优先级最高（重启后回到通知 / 外部 deep link 跳转点）。
+    // 命中后提前 return，避免后续 defaultHomePage 跳转覆盖。
     final route = await loadPendingRoute();
     if (route != null) {
       router.go(route);
       await clearPendingRoute();
+      return;
     }
+    // BATCH-26d: 应用 defaultHomePage（仅当对应 tab 可见，对齐原版
+    // MainActivity.kt:385-398 upHomePage 行为：toggle 关闭时保留 bookshelf
+    // 兜底，不跳）。
+    applyDefaultHomePage(
+      router,
+      defaultHomePage,
+      showDiscovery: showDiscovery,
+      showRss: showRss,
+    );
   });
 }
 

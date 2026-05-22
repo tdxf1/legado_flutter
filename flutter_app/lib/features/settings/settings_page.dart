@@ -206,6 +206,18 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
               saveShowRssToDisk(v);
             },
           ),
+          // BATCH-26d (05-22): 启动默认页。对齐原 legado
+          // `pref_config_other.xml` defaultHomePage NameListPreference +
+          // `MainActivity.kt:385-398` upHomePage()。点击弹 4 选对话框
+          // （书架 / 发现 / 订阅 / 我的），选完写 provider + 持久化；
+          // 重启后 startup postFrame 跳到对应 tab。
+          ListTile(
+            leading: const Icon(Icons.home_outlined),
+            title: const Text('启动默认页'),
+            subtitle: Text(ref.watch(defaultHomePageProvider).label),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _showDefaultHomePageDialog(context),
+          ),
           const Divider(indent: 16, endIndent: 16),
           _SectionHeader(title: '工具'),
           // BATCH-18f (F-W2B-016)：以下 5 项原本在 bookshelf AppBar PopupMenu，
@@ -291,6 +303,47 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
       case ThemeMode.dark:
         return Icons.dark_mode;
     }
+  }
+
+  /// BATCH-26d (05-22): 启动默认页 4 选对话框。模式参考
+  /// [`bookshelf_page._showSortDialog`]：用 `SimpleDialog` + `ListTile +
+  /// trailing Icons.check + Navigator.pop(ctx, value)`，不用已 deprecated
+  /// 的 `RadioListTile.groupValue/onChanged`（对齐 BATCH-19a 决策）。
+  ///
+  /// 选完写 provider + 持久化，并 SnackBar 提示「下次启动生效」（用户
+  /// 感知不到立即效果，要重启后才走 [applyDefaultHomePage] 跳转）。
+  Future<void> _showDefaultHomePageDialog(BuildContext context) async {
+    final current = ref.read(defaultHomePageProvider);
+    final picked = await showDialog<DefaultHomePage>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('启动默认页'),
+        children: [
+          for (final v in DefaultHomePage.values)
+            ListTile(
+              title: Text(v.label),
+              trailing: v == current
+                  ? Icon(
+                      Icons.check,
+                      color: Theme.of(ctx).colorScheme.primary,
+                    )
+                  : null,
+              onTap: () => Navigator.pop(ctx, v),
+            ),
+        ],
+      ),
+    );
+    if (picked == null || picked == current) return;
+    ref.read(defaultHomePageProvider.notifier).state = picked;
+    // showDialog 结束后回到本页，await 后必须复查 mounted。
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('已设为「${picked.label}」(下次启动生效)')),
+    );
+    // 持久化 fire-and-forget（与 26c 的 saveShowDiscoveryToDisk /
+    // saveShowRssToDisk / 书架 grid view 同模式：不 await 写盘，让 UX
+    // 立刻反馈，写失败由 errorTag 走 debugPrint）。
+    saveDefaultHomePageToDisk(picked);
   }
 }
 

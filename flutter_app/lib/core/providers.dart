@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import 'persistence/json_store.dart';
 import 'theme.dart';
@@ -324,6 +325,129 @@ Future<void> saveShowRssToDisk(bool value, {String? directory}) => writeJsonKey(
       directory: directory,
       errorTag: 'show rss',
     );
+
+/// BATCH-26d (05-22): 启动默认页（对齐原 legado `pref_config_other.xml`
+/// `defaultHomePage` NameListPreference + `MainActivity.kt:385-398` upHomePage
+/// 行为）。
+///
+/// 用 enum 保 type-safe；持久化用 String key 与原版 SharedPreferences
+/// 字面量（`"bookshelf"` / `"explore"` / `"rss"` / `"my"`）对齐，未来加新
+/// home page 时不会 index 错位（参考 BATCH-21c 选枚举优于 bool 的同款理由）。
+///
+/// 启动时 [applyDefaultHomePage] 会按此值跳到对应 tab；选 explore / rss 但
+/// 对应 toggle ([showDiscoveryProvider] / [showRssProvider]) 关闭时**不跳**，
+/// 保留 bookshelf 兜底（与原版 upHomePage 完全一致）。
+enum DefaultHomePage { bookshelf, explore, rss, my }
+
+extension DefaultHomePageX on DefaultHomePage {
+  /// 持久化用的 String key，对齐原 legado SharedPreferences 字面量。
+  String get key {
+    switch (this) {
+      case DefaultHomePage.bookshelf:
+        return 'bookshelf';
+      case DefaultHomePage.explore:
+        return 'explore';
+      case DefaultHomePage.rss:
+        return 'rss';
+      case DefaultHomePage.my:
+        return 'my';
+    }
+  }
+
+  /// UI 显示文案，对齐原 legado `arrays.xml` `default_home_page`。
+  String get label {
+    switch (this) {
+      case DefaultHomePage.bookshelf:
+        return '书架';
+      case DefaultHomePage.explore:
+        return '发现';
+      case DefaultHomePage.rss:
+        return '订阅';
+      case DefaultHomePage.my:
+        return '我的';
+    }
+  }
+
+  /// `router.go(...)` 的目标路径，对齐 BATCH-26a 4 ShellBranch path。
+  String get routePath {
+    switch (this) {
+      case DefaultHomePage.bookshelf:
+        return '/bookshelf';
+      case DefaultHomePage.explore:
+        return '/explore';
+      case DefaultHomePage.rss:
+        return '/rss';
+      case DefaultHomePage.my:
+        return '/my';
+    }
+  }
+
+  /// 反查 [DefaultHomePage]：未知 / 损坏的 String key 兜底回 [bookshelf]，
+  /// 对齐原版 `android:defaultValue="bookshelf"`。
+  static DefaultHomePage fromKey(String s) {
+    for (final v in DefaultHomePage.values) {
+      if (v.key == s) return v;
+    }
+    return DefaultHomePage.bookshelf;
+  }
+}
+
+/// BATCH-26d: 启动默认页 StateProvider。Default = bookshelf，对齐原 legado
+/// `pref_config_other.xml` `android:defaultValue="bookshelf"`。
+final defaultHomePageProvider =
+    StateProvider<DefaultHomePage>((ref) => DefaultHomePage.bookshelf);
+
+Future<DefaultHomePage> loadDefaultHomePageFromDisk({String? directory}) =>
+    readJsonKey<DefaultHomePage>(
+      'defaultHomePage',
+      (raw) => raw is String
+          ? DefaultHomePageX.fromKey(raw)
+          : DefaultHomePage.bookshelf,
+      DefaultHomePage.bookshelf,
+      directory: directory,
+    );
+
+Future<void> saveDefaultHomePageToDisk(DefaultHomePage v,
+        {String? directory}) =>
+    writeJsonKey(
+      'defaultHomePage',
+      v.key,
+      directory: directory,
+      errorTag: 'default home page',
+    );
+
+/// BATCH-26d: 启动时按 [DefaultHomePage] 跳转，行为对齐原 legado
+/// `MainActivity.kt:385-398` upHomePage()。
+///
+/// - bookshelf → 不跳（router 默认 `initialLocation` 已是 `/bookshelf`）
+/// - explore → 仅当 [showDiscovery] = true；toggle 关闭则保留 bookshelf
+/// - rss → 仅当 [showRss] = true；toggle 关闭则保留 bookshelf
+/// - my → 永远跳（my tab 永久可见）
+///
+/// 用顶级 `router.go('/path')` 而非 `goBranch`：startup postFrame 阶段
+/// `_AppShell` 的 `navigationShell` 已 mount，但跨 ShellBranch 跳转用顶级
+/// `router.go` 让 GoRouter 自动定位 ShellBranch 更直接（BATCH-26a 已验证
+/// 4 ShellBranch path 直接 `router.go` 是 OK 的）。
+void applyDefaultHomePage(
+  GoRouter router,
+  DefaultHomePage page, {
+  required bool showDiscovery,
+  required bool showRss,
+}) {
+  switch (page) {
+    case DefaultHomePage.bookshelf:
+      return; // 默认就在书架
+    case DefaultHomePage.explore:
+      if (showDiscovery) router.go('/explore');
+      return;
+    case DefaultHomePage.rss:
+      if (showRss) router.go('/rss');
+      return;
+    case DefaultHomePage.my:
+      router.go('/my');
+      return;
+  }
+}
 
 /// 阅读器渲染模式。
 ///
