@@ -45,12 +45,24 @@ class BookshelfPage extends ConsumerStatefulWidget {
     required String documentsDir,
   })? importLocalBookOverride;
 
+  /// BATCH-27a: 测试钩子，注入假的 exportBookshelfJson FRB 调用，返回
+  /// 与真实 FRB 同形状的 JSON 字符串（`"[]"` 或 `'[{"name":"..."}]'`）。
+  final Future<String> Function({required String dbPath})?
+      exportBookshelfJsonOverride;
+
+  /// BATCH-27a: 测试钩子，注入假的 documents 目录路径（不走 path_provider）。
+  /// 与 [documentsDirOverride] 字段语义类似，但 `_onExportBookshelf` 用
+  /// 此字段决定 books.json 的写入位置。
+  final String? exportDocumentsDirectoryOverride;
+
   const BookshelfPage({
     super.key,
     this.dbPathOverride,
     this.documentsDirOverride,
     this.pickFileForLocalImportOverride,
     this.importLocalBookOverride,
+    this.exportBookshelfJsonOverride,
+    this.exportDocumentsDirectoryOverride,
   });
 
   @override
@@ -132,13 +144,14 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
             PopupMenuButton<String>(
               tooltip: '更多',
               onSelected: (value) async {
-                // BATCH-18f (F-W2B-016)：bookshelf AppBar 仅保留书架场景高频
-                // 4 项；backup / read_stats / cache_management / rss_favorites
-                // / rule_subs 5 项已移到 settings_page 工具段。
-                // BATCH-26a (05-22)：rss_source_manage 项已撤（迁去 RSS tab
-                // AppBar「RSS 源设置」icon）；新增 cache_export 入「缓存/导出」
-                // → /downloads，对齐 `main_bookshelf.xml:43-47 menu_download
-                // @string/cache_export`。
+                // BATCH-27a (05-22)：PopupMenu 严格按原 legado
+                // `main_bookshelf.xml` 12 项 + flutter 自加「扫码导入」共
+                // 13 项排布。6 项灰显占位（更新目录 / 添加远程书 /
+                // 添加网络URL / 书架管理 / 导入书架 / 日志）走
+                // `enabled: false` + 不写 onTap，对齐 BATCH-26b 决策
+                // —— 灰显本身就是信号，不弹 SnackBar。新增真功能 2 项：
+                // bookshelf_layout 弹 SimpleDialog 切「列表 / 网格」；
+                // export_bookshelf 调 FRB 写 documents_dir/books.json。
                 if (value == 'manage_groups') {
                   await showDialog(
                     context: context,
@@ -154,25 +167,79 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                   // 批次 20 (05-19): QR 扫码导入。扫描结果由 qr_scan_page
                   // 自己处理 + pop 后回到原页。
                   if (context.mounted) context.push('/qr-scan');
+                } else if (value == 'bookshelf_layout') {
+                  // BATCH-27a (05-22): 书架布局对话框（列表 / 网格）。
+                  await _showLayoutDialog(context);
+                } else if (value == 'export_bookshelf') {
+                  // BATCH-27a (05-22): 导出书架 JSON 到 documents_dir。
+                  await _onExportBookshelf(context);
                 }
               },
               itemBuilder: (context) => const [
+                // 1. 搜索 — 已是 AppBar IconButton（不进 menu）
+                // 2. 更新目录 — 灰显占位
                 PopupMenuItem(
-                  value: 'manage_groups',
+                  enabled: false,
+                  value: 'update_toc',
                   child: ListTile(
-                    leading: Icon(Icons.folder_outlined),
-                    title: Text('管理分组'),
+                    enabled: false,
+                    leading: Icon(Icons.refresh),
+                    title: Text('更新目录'),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),
+                // 3. 添加本地书
                 PopupMenuItem(
                   value: 'import_local',
                   child: ListTile(
                     leading: Icon(Icons.note_add),
-                    title: Text('导入本地书'),
+                    title: Text('添加本地书'),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),
+                // 4. 添加远程书 — 灰显占位
+                PopupMenuItem(
+                  enabled: false,
+                  value: 'add_remote',
+                  child: ListTile(
+                    enabled: false,
+                    leading: Icon(Icons.cloud_outlined),
+                    title: Text('添加远程书'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                // 5. 添加网络URL — 灰显占位
+                PopupMenuItem(
+                  enabled: false,
+                  value: 'add_url',
+                  child: ListTile(
+                    enabled: false,
+                    leading: Icon(Icons.link),
+                    title: Text('添加网络URL'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                // 6. 扫码导入 — flutter 自加项，置于本地书 / 远程书附近
+                PopupMenuItem(
+                  value: 'qr_scan',
+                  child: ListTile(
+                    leading: Icon(Icons.qr_code_scanner),
+                    title: Text('扫码导入'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                // 7. 书架管理 — 灰显占位（27c 批量编辑页）
+                PopupMenuItem(
+                  enabled: false,
+                  value: 'bookshelf_manage',
+                  child: ListTile(
+                    enabled: false,
+                    leading: Icon(Icons.edit_note),
+                    title: Text('书架管理'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                // 8. 缓存/导出
                 PopupMenuItem(
                   value: 'cache_export',
                   child: ListTile(
@@ -181,11 +248,52 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),
+                // 9. 分组管理（保留 manage_groups key 名 backward compat）
                 PopupMenuItem(
-                  value: 'qr_scan',
+                  value: 'manage_groups',
                   child: ListTile(
-                    leading: Icon(Icons.qr_code_scanner),
-                    title: Text('扫码导入'),
+                    leading: Icon(Icons.folder_outlined),
+                    title: Text('分组管理'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                // 10. 书架布局 — 真功能（27a 新增）
+                PopupMenuItem(
+                  value: 'bookshelf_layout',
+                  child: ListTile(
+                    leading: Icon(Icons.dashboard_outlined),
+                    title: Text('书架布局'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                // 11. 导出书架 — 真功能（27a 新增）
+                PopupMenuItem(
+                  value: 'export_bookshelf',
+                  child: ListTile(
+                    leading: Icon(Icons.upload_file),
+                    title: Text('导出书架'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                // 12. 导入书架 — 灰显占位
+                PopupMenuItem(
+                  enabled: false,
+                  value: 'import_bookshelf',
+                  child: ListTile(
+                    enabled: false,
+                    leading: Icon(Icons.file_download_outlined),
+                    title: Text('导入书架'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+                // 13. 日志 — 灰显占位
+                PopupMenuItem(
+                  enabled: false,
+                  value: 'log',
+                  child: ListTile(
+                    enabled: false,
+                    leading: Icon(Icons.article_outlined),
+                    title: Text('日志'),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ),
@@ -334,6 +442,89 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     notifier.state = updated;
     // 持久化到 settings.json，杀进程重启后保留排序。
     await saveReaderSettingsToDisk(updated);
+  }
+
+  /// BATCH-27a (05-22): 书架布局对话框（列表 / 网格）。对齐原 legado
+  /// `main_bookshelf.xml:51 menu_bookshelf_layout` →
+  /// `BaseBookshelfFragment.kt:115 configBookshelf` 的 2 选行为。
+  ///
+  /// UI 复用 [_showSortDialog] 同款 SimpleDialog + ListTile + check
+  /// trailing 模式（避免新增 deprecation warning，与 BATCH-19a 决策一致）。
+  /// 选完写回 [_isGridView] 并落盘 [saveBookshelfGridViewToDisk]，
+  /// 与现有 `Icons.list/Icons.grid_view` IconButton 切换路径完全等价。
+  Future<void> _showLayoutDialog(BuildContext context) async {
+    final picked = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return SimpleDialog(
+          title: const Text('书架布局'),
+          children: [
+            for (final entry in const <(bool, String)>[
+              (false, '列表'),
+              (true, '网格'),
+            ])
+              ListTile(
+                title: Text(entry.$2),
+                trailing: _isGridView == entry.$1
+                    ? const Icon(Icons.check, color: Colors.blue)
+                    : null,
+                onTap: () => Navigator.pop(ctx, entry.$1),
+              ),
+          ],
+        );
+      },
+    );
+    if (picked == null || picked == _isGridView) return;
+    // setState after await showDialog 必须 mounted check —
+    // 用户可能在 dialog 仍打开时退出页面，对齐
+    // `.trellis/spec/flutter-app/async-and-mounted.md` Pattern 2.
+    safeSetState(() => _isGridView = picked);
+    await saveBookshelfGridViewToDisk(_isGridView);
+  }
+
+  /// BATCH-27a (05-22): 导出书架 JSON 到 documents_dir/books.json。
+  /// 对齐原 legado `BookshelfViewModel.kt:102-128 exportBookshelf`：
+  /// 调 FRB [`rust_api.exportBookshelfJson`] 拿 `[{name,author,intro}]`
+  /// → 写入 `<docs>/books.json` → SnackBar 显示路径。空书架（`"[]"`）
+  /// 不落盘，直接 SnackBar「书架为空」。失败 catch + SnackBar 提示，
+  /// 不向上抛打断书架页。
+  ///
+  /// 走过 `exportBookshelfJsonOverride` / `exportDocumentsDirectoryOverride`
+  /// 测试钩子时不依赖 path_provider / FRB；生产路径走默认实现。
+  Future<void> _onExportBookshelf(BuildContext context) async {
+    try {
+      final String dbPath =
+          widget.dbPathOverride ?? await ref.read(dbPathProvider.future);
+      final exportFn = widget.exportBookshelfJsonOverride ??
+          ({required String dbPath}) =>
+              rust_api.exportBookshelfJson(dbPath: dbPath);
+      final json = await exportFn(dbPath: dbPath);
+      if (!context.mounted) return;
+      // 空书架（pretty 序列化对空数组也只输出 `[]`，无换行）→ 早返回不写文件
+      if (json.trim() == '[]') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('书架为空')),
+        );
+        return;
+      }
+      // 解析 documents 目录：测试钩子优先；其次 documentsDirOverride（与
+      // 导入本地书共用）；最后走 path_provider。
+      final String docsDir = widget.exportDocumentsDirectoryOverride ??
+          widget.documentsDirOverride ??
+          await resolvePersistenceDir();
+      final filePath = '$docsDir/books.json';
+      final file = File(filePath);
+      await file.writeAsString(json);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已导出到 $filePath')),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('导出失败: $e')),
+      );
+    }
   }
 }
 

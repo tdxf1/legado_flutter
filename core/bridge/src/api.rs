@@ -923,6 +923,32 @@ pub fn export_all_sources(db_path: String) -> Result<String, String> {
         .map_err(|e| format!("导出失败: {}", e))
 }
 
+/// BATCH-27a: 导出书架为 JSON 数组。对齐原版
+/// `BookshelfViewModel.kt:102-128 exportBookshelf` —— 仅写
+/// `name` / `author` / `intro` 三字段（Legado 备份/分享格式），
+/// 2-space pretty 缩进。空书架返回 `"[]"`。
+///
+/// 返回 JSON 字符串而不是文件，由 Dart 端写入 documents_dir/books.json，
+/// 与 [`export_all_sources`] 同模式。
+pub fn export_bookshelf_json(db_path: String) -> Result<String, String> {
+    let conn = open_db(&db_path)?;
+    let dao = core_storage::book_dao::BookDao::new(&conn);
+    let books = dao
+        .get_all()
+        .map_err(|e| format!("查询书架失败: {}", e))?;
+    let entries: Vec<serde_json::Value> = books
+        .iter()
+        .map(|b| {
+            serde_json::json!({
+                "name": b.name,
+                "author": b.author.as_deref().unwrap_or(""),
+                "intro": b.intro.as_deref().unwrap_or(""),
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&entries).map_err(|e| format!("序列化失败: {}", e))
+}
+
 // ============================================================
 // 替换规则 (Replace Rules) — 返回 JSON 字符串
 // ============================================================
@@ -2755,5 +2781,99 @@ mod cache_concurrency_tests {
 
         t_a.join().unwrap();
         t_b.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod export_bookshelf_tests {
+    use super::*;
+    use core_storage::models::Book;
+    use tempfile::TempDir;
+
+    fn fresh_db() -> (TempDir, String) {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db").to_str().unwrap().to_string();
+        // 必须建一个 source 行，因为 books.source_id 有外键约束
+        let conn = core_storage::database::init_database(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO book_sources (id, name, url, created_at, updated_at) \
+             VALUES ('s1', 'Source', 'https://e', 1, 1)",
+            [],
+        )
+        .unwrap();
+        (dir, db_path)
+    }
+
+    fn book(id: &str, name: &str, author: Option<&str>, intro: Option<&str>) -> Book {
+        Book {
+            id: id.to_string(),
+            source_id: "s1".to_string(),
+            source_name: Some("Source".to_string()),
+            name: name.to_string(),
+            author: author.map(|s| s.to_string()),
+            cover_url: None,
+            chapter_count: 0,
+            latest_chapter_title: None,
+            intro: intro.map(|s| s.to_string()),
+            kind: None,
+            book_url: None,
+            toc_url: None,
+            last_check_time: None,
+            last_check_count: 0,
+            total_word_count: 0,
+            can_update: true,
+            order_time: 0,
+            latest_chapter_time: None,
+            custom_cover_path: None,
+            custom_info_json: None,
+            dur_chapter_index: 0,
+            dur_chapter_pos: 0,
+            dur_chapter_title: None,
+            dur_chapter_time: 0,
+            group_id: 0,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    /// BATCH-27a: 空书架返回 `"[]"`（去掉缩进的空数组）。pretty 序列化
+    /// 对空数组也只输出 `[]`，不带换行。
+    #[test]
+    fn test_export_bookshelf_empty() {
+        let (_dir, db_path) = fresh_db();
+        let json = export_bookshelf_json(db_path).unwrap();
+        assert_eq!(json, "[]");
+    }
+
+    /// BATCH-27a: 有书架时输出 name / author / intro 三字段，对齐原版
+    /// `BookshelfViewModel.kt:102-128`。author / intro 缺失时落回空串。
+    #[test]
+    fn test_export_bookshelf_with_books() {
+        let (_dir, db_path) = fresh_db();
+        let conn = open_db(&db_path).unwrap();
+        let dao = core_storage::book_dao::BookDao::new(&conn);
+        dao.upsert(&book("b1", "三国演义", Some("罗贯中"), Some("乱世枭雄")))
+            .unwrap();
+        dao.upsert(&book("b2", "Anonymous", None, None)).unwrap();
+        drop(conn);
+
+        let json = export_bookshelf_json(db_path).unwrap();
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.len(), 2);
+        // get_all 默认 TimeAdd DESC + 两本 order_time 都是 0 时退回插入顺序
+        // 不绑顺序，按 name 找
+        let by_name: std::collections::HashMap<&str, &serde_json::Value> = parsed
+            .iter()
+            .map(|v| (v["name"].as_str().unwrap(), v))
+            .collect();
+        let v1 = by_name["三国演义"];
+        assert_eq!(v1["name"].as_str().unwrap(), "三国演义");
+        assert_eq!(v1["author"].as_str().unwrap(), "罗贯中");
+        assert_eq!(v1["intro"].as_str().unwrap(), "乱世枭雄");
+
+        let v2 = by_name["Anonymous"];
+        // 缺失字段落回空串，不是 null
+        assert_eq!(v2["author"].as_str().unwrap(), "");
+        assert_eq!(v2["intro"].as_str().unwrap(), "");
     }
 }

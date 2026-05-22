@@ -395,6 +395,12 @@ Future<String> validateSourceFromDb(
 Future<String> exportAllSources({required String dbPath}) =>
     RustLib.instance.api.crateApiExportAllSources(dbPath: dbPath);
 
+/// BATCH-27a: 导出书架为 JSON 数组（仅 name/author/intro 三字段，
+/// 对齐原版 BookshelfViewModel.kt:102-128 exportBookshelf）。
+/// 空书架返回 `"[]"`。
+Future<String> exportBookshelfJson({required String dbPath}) =>
+    RustLib.instance.api.crateApiExportBookshelfJson(dbPath: dbPath);
+
 /// 获取所有替换规则，返回 JSON 数组
 Future<String> getReplaceRules({required String dbPath}) =>
     RustLib.instance.api.crateApiGetReplaceRules(dbPath: dbPath);

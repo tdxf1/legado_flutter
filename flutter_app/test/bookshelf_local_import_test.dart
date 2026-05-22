@@ -79,11 +79,13 @@ void main() {
     await tester.tap(moreBtn);
     await tester.pumpAndSettle();
 
-    // 2. 顶栏菜单应有"导入本地书"
-    expect(find.text('导入本地书'), findsOneWidget);
+    // 2. 顶栏菜单应有"添加本地书"（BATCH-27a 起对齐原 legado
+    // `main_bookshelf.xml menu_add_local` 文案，原 batch-13 的「导入本地书」
+    // 改名为「添加本地书」）
+    expect(find.text('添加本地书'), findsOneWidget);
 
     // 3. 点击触发导入流程
-    await tester.tap(find.text('导入本地书'));
+    await tester.tap(find.text('添加本地书'));
     // 不用 pumpAndSettle —— 后面有 GoRouter context.push 触发的导航；但
     // 这个 widget 没绑路由（MaterialApp.home），所以 context.push 会报
     // "No GoRouter found"。我们 catch 在 _onImportLocalBook 的 try 里，

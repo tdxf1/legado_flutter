@@ -484,6 +484,8 @@ abstract class RustLibApi extends BaseApi {
 
   Future<String> crateApiRssArticleGetByOriginLink(
       {required String dbPath, required String origin, required String link});
+
+  Future<String> crateApiExportBookshelfJson({required String dbPath});
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -3541,6 +3543,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(
         debugName: "rss_article_get_by_origin_link",
         argNames: ["dbPath", "origin", "link"],
+      );
+
+  @override
+  Future<String> crateApiExportBookshelfJson({required String dbPath}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(dbPath, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 111, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_String,
+        decodeErrorData: sse_decode_String,
+      ),
+      constMeta: kCrateApiExportBookshelfJsonConstMeta,
+      argValues: [dbPath],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiExportBookshelfJsonConstMeta => const TaskConstMeta(
+        debugName: "export_bookshelf_json",
+        argNames: ["dbPath"],
       );
 
   @protected
