@@ -188,13 +188,21 @@ class _RssTabPageState extends ConsumerState<RssTabPage> {
     }
     final q = _searchQuery;
     if (q.isNotEmpty) {
-      final lq = q.toLowerCase();
-      list = list.where((s) {
-        final name = ((s['source_name'] as String?) ?? '').toLowerCase();
-        final url = ((s['source_url'] as String?) ?? '').toLowerCase();
-        final group = ((s['source_group'] as String?) ?? '').toLowerCase();
-        return name.contains(lq) || url.contains(lq) || group.contains(lq);
-      }).toList();
+      if (q.startsWith('group:')) {
+        final gq = q.substring(6).toLowerCase();
+        list = list.where((s) {
+          final group = ((s['source_group'] as String?) ?? '').toLowerCase();
+          return group.contains(gq);
+        }).toList();
+      } else {
+        final lq = q.toLowerCase();
+        list = list.where((s) {
+          final name = ((s['source_name'] as String?) ?? '').toLowerCase();
+          final url = ((s['source_url'] as String?) ?? '').toLowerCase();
+          final group = ((s['source_group'] as String?) ?? '').toLowerCase();
+          return name.contains(lq) || url.contains(lq) || group.contains(lq);
+        }).toList();
+      }
     }
     return list;
   }
@@ -232,8 +240,8 @@ class _RssTabPageState extends ConsumerState<RssTabPage> {
                       child: GridView.builder(
                         padding: const EdgeInsets.all(8),
                         gridDelegate:
-                            const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 4,
+                            const SliverGridDelegateWithMaxCrossAxisExtent(
+                          maxCrossAxisExtent: 120,
                           childAspectRatio: 0.75,
                           crossAxisSpacing: 8,
                           mainAxisSpacing: 8,

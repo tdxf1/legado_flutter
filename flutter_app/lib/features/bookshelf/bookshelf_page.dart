@@ -713,50 +713,56 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
 
   /// BATCH-27e (05-22): 添加网络URL — 单 URL add 入口。
   Future<void> _onAddUrl(BuildContext context) async {
-    final url = await showDialog<String>(
+    final text = await showDialog<String>(
       context: context,
       builder: (ctx) => const _AddUrlDialog(),
     );
-    if (url == null || url.trim().isEmpty) return;
+    if (text == null || text.trim().isEmpty) return;
     if (!context.mounted) return;
 
     final messenger = ScaffoldMessenger.of(context);
+    final urls = text
+        .split('\n')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+    if (urls.isEmpty) return;
+
+    int success = 0;
+    int fail = 0;
     try {
       await ref.read(dbInitializedProvider.future);
       final dbPath = await ref.read(dbPathProvider.future);
 
-      final sourceJson = await rust_api.findBookSourceForUrl(
-        dbPath: dbPath,
-        bookUrl: url.trim(),
-      );
-      if (sourceJson == null) {
-        if (!context.mounted) return;
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text('未找到匹配书源，请先在「书源管理」中启用书源'),
-          ),
-        );
-        return;
+      for (final url in urls) {
+        try {
+          final sourceJson = await rust_api.findBookSourceForUrl(
+            dbPath: dbPath,
+            bookUrl: url,
+          );
+          if (sourceJson == null) {
+            fail++;
+            continue;
+          }
+          final infoJson = await rust_api.getBookInfoOnline(
+            sourceJson: sourceJson,
+            bookUrl: url,
+          );
+          await rust_api.saveBook(
+            dbPath: dbPath,
+            bookJson: infoJson,
+          );
+          success++;
+        } catch (e) {
+          debugPrint('[add_url] $url failed: $e');
+          fail++;
+        }
       }
-
-      final infoJson = await rust_api.getBookInfoOnline(
-        sourceJson: sourceJson,
-        bookUrl: url.trim(),
-      );
       if (!context.mounted) return;
-
-      await rust_api.saveBook(
-        dbPath: dbPath,
-        bookJson: infoJson,
-      );
       ref.invalidate(allBooksProvider);
       ref.invalidate(booksByGroupProvider);
-      if (!context.mounted) return;
-
-      final info = jsonDecode(infoJson) as Map<String, dynamic>;
-      final bookName = (info['name'] as String?) ?? '(无标题)';
       messenger.showSnackBar(
-        SnackBar(content: Text('已添加：$bookName')),
+        SnackBar(content: Text('添加完成：成功 $success / 失败 $fail')),
       );
     } catch (e) {
       if (!context.mounted) return;
@@ -766,7 +772,8 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     }
   }
 
-  /// BATCH-27e (05-22): 导入书架 — 二选一 SimpleDialog（粘贴 / 文件）。
+  /// BATCH-27e (05-22): 导入书架 — 三选一 SimpleDialog（粘贴 / 文件 / URL）。
+  /// BATCH-29: 加 URL 导入选项（HTTP GET → parse JSON）。
   Future<void> _onImportBookshelf(BuildContext context) async {
     final choice = await showDialog<int>(
       context: context,
@@ -781,6 +788,10 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
             onPressed: () => Navigator.of(ctx).pop(2),
             child: const Text('从文件导入'),
           ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.of(ctx).pop(3),
+            child: const Text('从 URL 导入'),
+          ),
         ],
       ),
     );
@@ -793,7 +804,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
         context: context,
         builder: (ctx) => const _PasteBookshelfJsonDialog(),
       );
-    } else {
+    } else if (choice == 2) {
       final result = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['json'],
@@ -801,6 +812,26 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
       if (result == null || result.files.isEmpty) return;
       final file = result.files.single;
       text = await File(file.path!).readAsString();
+    } else {
+      text = await showDialog<String>(
+        context: context,
+        builder: (ctx) => const _UrlImportDialog(),
+      );
+      if (text != null && text.isNotEmpty) {
+        try {
+          final client = HttpClient();
+          final request = await client.getUrl(Uri.parse(text.trim()));
+          final response = await request.close();
+          text = await response.transform(utf8.decoder).join();
+          client.close();
+        } catch (e) {
+          if (!context.mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('URL 请求失败: $e')),
+          );
+          return;
+        }
+      }
     }
     if (text == null || text.trim().isEmpty) return;
     if (!context.mounted) return;
@@ -1220,9 +1251,11 @@ class _AddUrlDialogState extends State<_AddUrlDialog> {
       title: const Text('添加网络URL'),
       content: TextField(
         controller: _ctrl,
+        maxLines: 5,
         decoration: const InputDecoration(
-          hintText: 'https://example.com/book/123',
-          labelText: '书籍URL',
+          hintText: 'https://example.com/book/123\nhttps://example.com/book/456',
+          labelText: '书籍URL（每行一个）',
+          border: OutlineInputBorder(),
         ),
         autofocus: true,
       ),
@@ -1285,6 +1318,53 @@ class _PasteBookshelfJsonDialogState extends State<_PasteBookshelfJsonDialog> {
             Navigator.of(context).pop(_ctrl.text);
           },
           child: const Text('导入'),
+        ),
+      ],
+    );
+  }
+}
+
+/// BATCH-29: import_bookshelf 的 URL 导入对话框。
+class _UrlImportDialog extends StatefulWidget {
+  const _UrlImportDialog();
+
+  @override
+  State<_UrlImportDialog> createState() => _UrlImportDialogState();
+}
+
+class _UrlImportDialogState extends State<_UrlImportDialog> {
+  final _ctrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('从 URL 导入'),
+      content: TextField(
+        controller: _ctrl,
+        decoration: const InputDecoration(
+          hintText: 'https://example.com/bookshelf.json',
+          labelText: 'JSON URL',
+        ),
+        autofocus: true,
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final text = _ctrl.text.trim();
+            if (text.isEmpty) return;
+            Navigator.of(context).pop(text);
+          },
+          child: const Text('获取'),
         ),
       ],
     );
