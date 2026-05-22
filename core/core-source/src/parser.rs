@@ -1366,6 +1366,14 @@ impl BookSourceParser {
             extract_from_contexts(self, rules.chapter_name.as_deref(), &item_contexts, context);
         let urls =
             extract_from_contexts(self, rules.chapter_url.as_deref(), &item_contexts, context);
+        // BATCH-13b (F-W1B-025): 4 个 closure（is_vip / is_volume / is_pay /
+        // update_time）串行不重入，共享 outer-mutable RuleContext，把每章
+        // 4 次 RuleContext::clone（含整页 HTML String + HashMap）降到整批 1
+        // 次。Inner 只重写 `result` 字段，run_rule_first(rule, html=item, &ctx)
+        // 的 html 参数是源；ctx.src 在 build_runtime_vars 中
+        // （legado/js_runtime.rs::build_runtime_vars）即使非空也不被 closure
+        // 写入，所以 4 closure 间共享语义与原 per-iter clone 完全等价。
+        let mut shared_ctx = context.clone();
         let vips = rules
             .is_vip
             .as_deref()
@@ -1373,9 +1381,9 @@ impl BookSourceParser {
                 item_contexts
                     .iter()
                     .map(|item| {
-                        let mut ctx = context.clone();
-                        ctx.result = vec![crate::legado::LegadoValue::String(item.clone())];
-                        self.run_rule_first(rule, item, &ctx)
+                        shared_ctx.result =
+                            vec![crate::legado::LegadoValue::String(item.clone())];
+                        self.run_rule_first(rule, item, &shared_ctx)
                             .map(|v| !v.is_empty() && v != "false" && v != "0")
                     })
                     .collect()
@@ -1388,9 +1396,9 @@ impl BookSourceParser {
                 item_contexts
                     .iter()
                     .map(|item| {
-                        let mut ctx = context.clone();
-                        ctx.result = vec![crate::legado::LegadoValue::String(item.clone())];
-                        self.run_rule_first(rule, item, &ctx)
+                        shared_ctx.result =
+                            vec![crate::legado::LegadoValue::String(item.clone())];
+                        self.run_rule_first(rule, item, &shared_ctx)
                             .map(|v| !v.is_empty() && v != "false" && v != "0")
                             .unwrap_or(false)
                     })
@@ -1404,9 +1412,9 @@ impl BookSourceParser {
                 item_contexts
                     .iter()
                     .map(|item| {
-                        let mut ctx = context.clone();
-                        ctx.result = vec![crate::legado::LegadoValue::String(item.clone())];
-                        self.run_rule_first(rule, item, &ctx)
+                        shared_ctx.result =
+                            vec![crate::legado::LegadoValue::String(item.clone())];
+                        self.run_rule_first(rule, item, &shared_ctx)
                             .map(|v| !v.is_empty() && v != "false" && v != "0")
                             .unwrap_or(false)
                     })
@@ -1420,9 +1428,9 @@ impl BookSourceParser {
                 item_contexts
                     .iter()
                     .filter_map(|item| {
-                        let mut ctx = context.clone();
-                        ctx.result = vec![crate::legado::LegadoValue::String(item.clone())];
-                        self.run_rule_first(rule, item, &ctx)
+                        shared_ctx.result =
+                            vec![crate::legado::LegadoValue::String(item.clone())];
+                        self.run_rule_first(rule, item, &shared_ctx)
                     })
                     .collect()
             })
@@ -3666,6 +3674,99 @@ mod tests {
         assert_eq!(chapters[3].url, server.url("/ch4"));
         page1_mock.assert();
         page2_mock.assert();
+    }
+
+    /// BATCH-13b (F-W1B-025): 验证 4 个 closure（is_vip / is_volume / is_pay /
+    /// update_time）共享 outer-mutable RuleContext 的实现与原 per-iter clone
+    /// 行为完全等价。每章 4 次 RuleContext::clone（含整页 HTML String + HashMap）
+    /// 降到整批 1 次。注：每个 closure 内仅重写 `ctx.result`，其它字段
+    /// （base_url / src / variables / shared_variables）保持 outer 值，
+    /// run_rule_first(rule, html=item, &ctx) 用 html 参数为源，与原实现一致。
+    #[tokio::test]
+    async fn test_parse_chapters_4_closures_share_ctx_equivalence() {
+        use crate::types::TocRule;
+        use httpmock::prelude::*;
+
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method(GET).path("/toc");
+            then.status(200)
+                .header("Content-Type", "text/html; charset=utf-8")
+                .body(
+                    r#"<html><ul class="chapters">
+                    <li><a href="/c1">Ch1</a><span class="vip">true</span><span class="vol">false</span><span class="pay">false</span><span class="upd">2025-01-01</span></li>
+                    <li><a href="/c2">Ch2</a><span class="vip">false</span><span class="vol">true</span><span class="pay">false</span><span class="upd">2025-01-02</span></li>
+                    <li><a href="/c3">Ch3</a><span class="vip">true</span><span class="vol">false</span><span class="pay">true</span><span class="upd">2025-01-03</span></li>
+                    </ul></html>"#,
+                );
+        });
+
+        let source = BookSource {
+            id: "test".into(),
+            name: "Test Source".into(),
+            url: server.base_url(),
+            rule_toc: Some(TocRule {
+                chapter_list: Some("ul.chapters@li".into()),
+                chapter_name: Some("a@text".into()),
+                chapter_url: Some("a@href".into()),
+                is_vip: Some("span.vip@text".into()),
+                is_volume: Some("span.vol@text".into()),
+                is_pay: Some("span.pay@text".into()),
+                update_time: Some("span.upd@text".into()),
+                ..Default::default()
+            }),
+            source_type: 0,
+            enabled: true,
+            group_name: None,
+            custom_order: 0,
+            weight: 0,
+            rule_search: None,
+            rule_book_info: None,
+            rule_content: None,
+            rule_review: None,
+            login_url: None,
+            login_ui: None,
+            login_check_js: None,
+            header: None,
+            js_lib: None,
+            cover_decode_js: None,
+            explore_url: None,
+            rule_explore: None,
+            book_url_pattern: None,
+            enabled_explore: false,
+            last_update_time: 0,
+            book_source_comment: None,
+            concurrent_rate: None,
+            variable_comment: None,
+            explore_screen: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        let parser = BookSourceParser::new();
+        let chapters = parser
+            .get_chapters(&source, "/toc")
+            .await
+            .expect("chapters ok");
+
+        assert_eq!(chapters.len(), 3, "expected 3 chapters");
+        // is_vip: closure result Option<bool> -> column matches per-row值
+        assert_eq!(chapters[0].is_vip, Some(true));
+        assert_eq!(chapters[1].is_vip, Some(false));
+        assert_eq!(chapters[2].is_vip, Some(true));
+        // is_volume: closure result bool（unwrap_or false）
+        assert!(!chapters[0].is_volume);
+        assert!(chapters[1].is_volume);
+        assert!(!chapters[2].is_volume);
+        // is_pay: closure result bool
+        assert!(!chapters[0].is_pay);
+        assert!(!chapters[1].is_pay);
+        assert!(chapters[2].is_pay);
+        // update_time -> tag
+        assert_eq!(chapters[0].tag.as_deref(), Some("2025-01-01"));
+        assert_eq!(chapters[1].tag.as_deref(), Some("2025-01-02"));
+        assert_eq!(chapters[2].tag.as_deref(), Some("2025-01-03"));
+        mock.assert();
     }
 
     #[tokio::test]
