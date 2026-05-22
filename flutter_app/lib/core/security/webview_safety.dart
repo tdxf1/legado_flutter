@@ -87,20 +87,28 @@ enum HostClass {
 
 /// 解析 [url] 并把 host 归类。
 ///
-/// IPv4 RFC 标准：
+/// IPv4 RFC 标准（与 Rust `core/core-source/src/legado/ssrf_guard.rs:86-110`
+/// 对齐）：
 /// - `127.0.0.0/8` → loopback
+/// - `0.0.0.0/8` → loopback（"this network"，BATCH-05b）
 /// - `169.254.0.0/16` → linkLocal
 /// - `10.0.0.0/8` / `172.16.0.0/12` / `192.168.0.0/16` → privateNetwork
+/// - `100.64.0.0/10` (CGNAT) → privateNetwork（BATCH-05b）
+/// - `224.0.0.0/4` (multicast) → privateNetwork（BATCH-05b）
 /// - 其余 → public
 ///
-/// IPv6（best-effort，BATCH-05 范围有限）：
+/// IPv6（best-effort，BATCH-05b 扩展）：
 /// - `::1` → loopback
+/// - `::ffff:a.b.c.d` (IPv4-mapped) → 按 IPv4 重分类，防 `::ffff:127.0.0.1`
+///   绕过 IPv4 检查
 /// - `fe80::/10` → linkLocal
+/// - `fc00::/7` (ULA) → privateNetwork
+/// - `ff00::/8` (multicast) → privateNetwork
 /// - 其余 → public
 ///
 /// 主机名：
 /// - `localhost` / `localhost.localdomain` → loopback
-/// - 其余域名 → public（不做 DNS 解析；DNS 攻击面留 BATCH-05b）
+/// - 其余域名 → public（不做 DNS 解析；DNS rebinding 防护范围属 BATCH-10）
 ///
 /// 解析失败 → invalid。
 HostClass classifyHost(String url) {
@@ -129,12 +137,24 @@ HostClass classifyHost(String url) {
   // IPv6：URI host 不带方括号，但包含 `:`
   if (host.contains(':')) {
     if (host == '::1') return HostClass.loopback;
-    // fe80::/10 — 前缀 fe8x / fe9x / feax / febx
-    if (host.startsWith('fe8') ||
-        host.startsWith('fe9') ||
-        host.startsWith('fea') ||
-        host.startsWith('feb')) {
+    // BATCH-05b: IPv4-mapped IPv6 (::ffff:a.b.c.d) → 按 IPv4 重分类，
+    // 防攻击者用 `::ffff:127.0.0.1` / `::ffff:10.0.0.1` 绕过 IPv4 检查
+    if (host.startsWith('::ffff:')) {
+      final ipv4Part = host.substring(7);
+      final ipv4Mapped = _tryParseIpv4(ipv4Part);
+      if (ipv4Mapped != null) return _classifyIpv4(ipv4Mapped);
+    }
+    // fe80::/10 link-local — 前缀 fe8x / fe9x / feax / febx
+    if (_ipv6HasPrefix(host, const ['fe8', 'fe9', 'fea', 'feb'])) {
       return HostClass.linkLocal;
+    }
+    // BATCH-05b: fc00::/7 ULA (unique local) — fc** / fd**
+    if (_ipv6HasPrefix(host, const ['fc', 'fd'])) {
+      return HostClass.privateNetwork;
+    }
+    // BATCH-05b: ff00::/8 multicast
+    if (host.startsWith('ff')) {
+      return HostClass.privateNetwork;
     }
     return HostClass.public;
   }
@@ -160,11 +180,25 @@ HostClass _classifyIpv4(List<int> octets) {
   final a = octets[0];
   final b = octets[1];
   if (a == 127) return HostClass.loopback;
+  // BATCH-05b: 0.0.0.0/8 "this network" 当 loopback 处理（与 Rust
+  // ssrf_guard `is_unspecified` 对齐）
+  if (a == 0) return HostClass.loopback;
   if (a == 169 && b == 254) return HostClass.linkLocal;
   if (a == 10) return HostClass.privateNetwork;
   if (a == 172 && b >= 16 && b <= 31) return HostClass.privateNetwork;
   if (a == 192 && b == 168) return HostClass.privateNetwork;
+  // BATCH-05b: CGNAT 100.64.0.0/10
+  if (a == 100 && b >= 64 && b <= 127) return HostClass.privateNetwork;
+  // BATCH-05b: IPv4 multicast 224.0.0.0/4 (224..239)
+  if (a >= 224 && a <= 239) return HostClass.privateNetwork;
   return HostClass.public;
+}
+
+bool _ipv6HasPrefix(String host, List<String> prefixes) {
+  for (final p in prefixes) {
+    if (host.startsWith(p)) return true;
+  }
+  return false;
 }
 
 /// 项目统一 UA。避免 webview-flutter 默认 UA 暴露 Android API level / 设备

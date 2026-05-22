@@ -131,6 +131,21 @@ class _RssArticleDetailPageState extends ConsumerState<RssArticleDetailPage> {
     _bootstrap();
   }
 
+  @override
+  void dispose() {
+    // BATCH-05b：跨文章避免 cookie / cache / localStorage 累积。
+    // RSS detail webview 加载远端 untrusted HTML（disabled JS 已是
+    // BATCH-05 防线），但 cache 仍持久化跨域 cookie；dispose 时清。
+    // controller.clearCache() / clearLocalStorage() 在 webview_flutter
+    // 4.13 跨 Android/iOS 统一 API（pubspec ^4.8.0）。
+    final ctl = _webController;
+    if (ctl != null) {
+      ctl.clearCache().catchError((_) {});
+      ctl.clearLocalStorage().catchError((_) {});
+    }
+    super.dispose();
+  }
+
   Future<String> _dbPath() async {
     return widget.dbPathOverride ?? await ref.read(dbPathProvider.future);
   }

@@ -168,6 +168,63 @@ void main() {
       expect(classifyHost('http://[2001:db8::1]'), HostClass.public);
     });
 
+    // BATCH-05b: 对齐 Rust ssrf_guard.rs:86-110 的 host 分类范围。
+    test('IPv4 CGNAT 100.64.0.0/10', () {
+      expect(classifyHost('http://100.64.0.1'), HostClass.privateNetwork);
+      expect(
+        classifyHost('http://100.127.255.255'),
+        HostClass.privateNetwork,
+      );
+    });
+
+    test('IPv4 CGNAT 边界 100.63 和 100.128 是 public', () {
+      expect(classifyHost('http://100.63.255.255'), HostClass.public);
+      expect(classifyHost('http://100.128.0.1'), HostClass.public);
+    });
+
+    test('IPv4 multicast 224.0.0.0/4', () {
+      expect(classifyHost('http://224.0.0.1'), HostClass.privateNetwork);
+      expect(
+        classifyHost('http://239.255.255.255'),
+        HostClass.privateNetwork,
+      );
+    });
+
+    test('IPv4 0.0.0.0/8 → loopback', () {
+      expect(classifyHost('http://0.0.0.0'), HostClass.loopback);
+      expect(classifyHost('http://0.255.255.255'), HostClass.loopback);
+    });
+
+    test('IPv6 ULA fc00::/7', () {
+      expect(classifyHost('http://[fc00::1]'), HostClass.privateNetwork);
+      expect(
+        classifyHost('http://[fd12:3456::1]'),
+        HostClass.privateNetwork,
+      );
+    });
+
+    test('IPv6 multicast ff00::/8', () {
+      expect(classifyHost('http://[ff02::1]'), HostClass.privateNetwork);
+    });
+
+    test('IPv4-mapped IPv6 ::ffff:127.0.0.1 → loopback', () {
+      expect(
+        classifyHost('http://[::ffff:127.0.0.1]'),
+        HostClass.loopback,
+      );
+    });
+
+    test('IPv4-mapped IPv6 ::ffff:10.0.0.1 → privateNetwork', () {
+      expect(
+        classifyHost('http://[::ffff:10.0.0.1]'),
+        HostClass.privateNetwork,
+      );
+    });
+
+    test('IPv4-mapped IPv6 ::ffff:8.8.8.8 → public', () {
+      expect(classifyHost('http://[::ffff:8.8.8.8]'), HostClass.public);
+    });
+
     test('invalid empty', () {
       expect(classifyHost(''), HostClass.invalid);
     });

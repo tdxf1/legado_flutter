@@ -211,6 +211,16 @@ $script
   }
 
   @override
+  void dispose() {
+    // BATCH-05b：reader webview 跑远端 webJs 规则（unrestricted JS 由
+    // 业务必需保留），但 page session 完成后清 cache + localStorage 防
+    // 跨 rule eval 状态污染。控制器已 late final 初始化 → 无需 null 检查。
+    _controller.clearCache().catchError((_) {});
+    _controller.clearLocalStorage().catchError((_) {});
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
