@@ -1,0 +1,9 @@
+{"role": "system", "content": "BATCH-26d defaultHomePage implement context"}
+{"file": "flutter_app/lib/core/providers.dart", "reason": "26c showDiscoveryProvider 邻接 + 加 enum + StateProvider + load/save"}
+{"file": "flutter_app/lib/main.dart", "reason": "startup postFrame 跳 router + pendingRoute 链协同"}
+{"file": "flutter_app/lib/features/settings/settings_page.dart", "reason": "「主页」分组追加 ListTile + 4 选对话框（参考 bookshelf_page._showSortDialog 模式）"}
+{"file": "flutter_app/lib/core/router.dart", "reason": "router.go path 列表参考"}
+{"file": "flutter_app/lib/features/bookshelf/bookshelf_page.dart", "reason": "已有 _showSortDialog（line ~280）4 选 ListTile + trailing check 模式范本"}
+{"file": ".trellis/tasks/05-22-batch-26d-default-home-page/prd.md", "reason": "本批 PRD"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "BATCH-26 段加新小节"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "Settings IO Wrappers + parser 不抛 + errorTag 5 条规则"}
