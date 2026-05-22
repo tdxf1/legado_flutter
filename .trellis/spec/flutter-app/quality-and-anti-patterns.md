@@ -393,6 +393,32 @@ QR 扫码 `_fetchText` 加：
 
 `webview_safety.dart` 是纯函数，无需 override 钩子；在 widget test 里直接调 `enforceWebViewScheme('https://x') / classifyHost('http://192.168.1.1')` 即可。caller-level 测试（如 `qr_scan_page_test.dart`）通过既有 `*Override` 钩子覆盖（`scanResultOverride` / `permissionDeniedOverride` 等）。
 
+### WebView dispose 清理 + IPv6/IPv4 完整 (BATCH-05b)
+
+**WebView caller dispose 契约**：所有 `WebViewController()` 持有方都必须 override `dispose()` 调
+`controller.clearCache().catchError((_) {})` + `controller.clearLocalStorage().catchError((_) {})`
+后再 `super.dispose()`。webview_flutter 4.13 起跨 Android/iOS 统一支持。
+异步 Future 不 await（dispose 不能 async），失败静默。
+
+适用 caller：
+
+- `core/platform_webview_executor.dart::_WebViewExecutionPageState` (reader webview rule executor)
+- `features/rss/rss_article_detail_page.dart::_RssArticleDetailPageState` (RSS 文章 webview)
+
+未来新加的 caller 加进表。
+
+**`classifyHost` 与 Rust `ssrf_guard::is_url_safe_for_fetch` 对齐**：
+两边 host 分类范围必须保持一致，参考 `core/core-source/src/legado/ssrf_guard.rs:86-110`。
+当前覆盖：
+
+| 分类 | IPv4 | IPv6 |
+|------|------|------|
+| loopback | 127.0.0.0/8, 0.0.0.0/8, localhost | ::1, ::ffff:127.x.x.x |
+| linkLocal | 169.254.0.0/16 | fe80::/10 |
+| privateNetwork | 10/8, 172.16/12, 192.168/16, 100.64/10 (CGNAT), 224.0.0.0/4 (multicast) | fc00::/7 (ULA), ff00::/8 (multicast), ::ffff:RFC1918 (mapped) |
+
+IPv4-mapped IPv6 (`::ffff:host`) 走 IPv4 重分类，避免攻击者用 `::ffff:127.0.0.1` 绕过 IPv4 检查。
+
 
 ## 列表 reactivity 模式 (BATCH-21)
 
