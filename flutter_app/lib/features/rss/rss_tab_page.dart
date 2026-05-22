@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -32,12 +33,21 @@ class RssTabPage extends ConsumerStatefulWidget {
   /// 测试钩子：注入假未读数 Map<sourceUrl, count>。
   final Map<String, int>? unreadCountsOverride;
 
+  /// BATCH-28-followup 测试钩子：注入 setEnabled FRB 替身。
+  final Future<void> Function(String dbPath, String url, bool enabled)?
+      setEnabledOverride;
+
+  /// BATCH-28-followup 测试钩子：注入 delete FRB 替身。
+  final Future<void> Function(String dbPath, String url)? deleteOverride;
+
   const RssTabPage({
     super.key,
     this.dbPathOverride,
     this.sourcesOverride,
     this.groupsOverride,
     this.unreadCountsOverride,
+    this.setEnabledOverride,
+    this.deleteOverride,
   });
 
   @override
@@ -53,10 +63,23 @@ class _RssTabPageState extends ConsumerState<RssTabPage> {
   String? _filterGroup;
   bool _refreshing = false;
 
+  // BATCH-28-followup: 搜索模式
+  bool _searchMode = false;
+  String _searchQuery = '';
+  Timer? _searchDebounce;
+  final TextEditingController _searchController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
     _loadAll();
+  }
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadAll() async {
@@ -155,45 +178,31 @@ class _RssTabPageState extends ConsumerState<RssTabPage> {
   }
 
   List<Map<String, dynamic>> get _filteredSources {
+    var list = _sources;
     final g = _filterGroup;
-    if (g == null) return _sources;
-    return _sources.where((s) {
-      final groups = (s['source_group'] as String?) ?? '';
-      return groups.split(',').map((e) => e.trim()).contains(g);
-    }).toList();
+    if (g != null) {
+      list = list.where((s) {
+        final groups = (s['source_group'] as String?) ?? '';
+        return groups.split(',').map((e) => e.trim()).contains(g);
+      }).toList();
+    }
+    final q = _searchQuery;
+    if (q.isNotEmpty) {
+      final lq = q.toLowerCase();
+      list = list.where((s) {
+        final name = ((s['source_name'] as String?) ?? '').toLowerCase();
+        final url = ((s['source_url'] as String?) ?? '').toLowerCase();
+        final group = ((s['source_group'] as String?) ?? '').toLowerCase();
+        return name.contains(lq) || url.contains(lq) || group.contains(lq);
+      }).toList();
+    }
+    return list;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('订阅'),
-        bottom: _groups.isNotEmpty
-            ? PreferredSize(
-                preferredSize: const Size.fromHeight(48),
-                child: _buildGroupChips(),
-              )
-            : null,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.star_outline),
-            tooltip: '收藏',
-            onPressed: () => context.push('/rss-favorites'),
-          ),
-          IconButton(
-            icon: const Icon(Icons.folder_outlined),
-            tooltip: '分组',
-            onPressed: _groups.isNotEmpty
-                ? () => _showGroupPicker(context)
-                : null,
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'RSS 源设置',
-            onPressed: () => context.push('/rss-source-manage'),
-          ),
-        ],
-      ),
+      appBar: _searchMode ? _buildSearchAppBar() : _buildAppBar(),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
@@ -237,6 +246,196 @@ class _RssTabPageState extends ConsumerState<RssTabPage> {
     );
   }
 
+  AppBar _buildAppBar() {
+    return AppBar(
+      title: const Text('订阅'),
+      bottom: _groups.isNotEmpty
+          ? PreferredSize(
+              preferredSize: const Size.fromHeight(48),
+              child: _buildGroupChips(),
+            )
+          : null,
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.search),
+          tooltip: '搜索',
+          onPressed: _enterSearchMode,
+        ),
+        IconButton(
+          icon: const Icon(Icons.star_outline),
+          tooltip: '收藏',
+          onPressed: () => context.push('/rss-favorites'),
+        ),
+        IconButton(
+          icon: const Icon(Icons.folder_outlined),
+          tooltip: '分组',
+          onPressed:
+              _groups.isNotEmpty ? () => _showGroupPicker(context) : null,
+        ),
+        IconButton(
+          icon: const Icon(Icons.settings_outlined),
+          tooltip: 'RSS 源设置',
+          onPressed: () => context.push('/rss-source-manage'),
+        ),
+      ],
+    );
+  }
+
+  AppBar _buildSearchAppBar() {
+    return AppBar(
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back),
+        onPressed: _exitSearchMode,
+      ),
+      title: TextField(
+        controller: _searchController,
+        autofocus: true,
+        decoration: const InputDecoration(
+          hintText: '搜索源名称 / URL / 分组',
+          border: InputBorder.none,
+        ),
+        onChanged: _onSearchChanged,
+      ),
+      bottom: _groups.isNotEmpty
+          ? PreferredSize(
+              preferredSize: const Size.fromHeight(48),
+              child: _buildGroupChips(),
+            )
+          : null,
+    );
+  }
+
+  // BATCH-28-followup: 搜索模式
+  void _enterSearchMode() {
+    setState(() => _searchMode = true);
+  }
+
+  void _exitSearchMode() {
+    _searchDebounce?.cancel();
+    setState(() {
+      _searchMode = false;
+      _searchQuery = '';
+      _searchController.clear();
+    });
+  }
+
+  void _onSearchChanged(String text) {
+    if (text.isEmpty) {
+      _searchDebounce?.cancel();
+      setState(() => _searchQuery = '');
+      return;
+    }
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      setState(() => _searchQuery = text);
+    });
+  }
+
+  // BATCH-28-followup: 长按 3 项菜单
+  void _showSourceMenu(BuildContext context, Map<String, dynamic> source) {
+    final enabled = source['enabled'] as bool? ?? true;
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(enabled ? Icons.do_not_disturb_alt : Icons.refresh),
+              title: Text(enabled ? '禁用源' : '启用源'),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                _onToggleEnabled(source);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const Text('删除'),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                _onDeleteSource(source);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('编辑'),
+              onTap: () {
+                Navigator.of(ctx).pop();
+                context.push('/rss-source-manage');
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _onToggleEnabled(Map<String, dynamic> source) async {
+    final url = (source['source_url'] as String?) ?? '';
+    if (url.isEmpty) return;
+    final enabled = source['enabled'] as bool? ?? true;
+    try {
+      final String dbPath =
+          widget.dbPathOverride ?? await ref.read(dbPathProvider.future);
+      final fn = widget.setEnabledOverride ??
+          ({required String dbPath, required String url, required bool enabled}) =>
+              rust_api.rssSourceSetEnabled(dbPath: dbPath, url: url, enabled: enabled);
+      await fn(dbPath: dbPath, url: url, enabled: !enabled);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(enabled ? '已禁用' : '已启用')),
+      );
+      _loadAll();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('操作失败: $e')),
+      );
+    }
+  }
+
+  Future<void> _onDeleteSource(Map<String, dynamic> source) async {
+    final url = (source['source_url'] as String?) ?? '';
+    final name = (source['source_name'] as String?) ?? '(未命名)';
+    if (url.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除源？'),
+        content: Text('确定删除「$name」？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      final String dbPath =
+          widget.dbPathOverride ?? await ref.read(dbPathProvider.future);
+      final fn = widget.deleteOverride ??
+          ({required String dbPath, required String url}) =>
+              rust_api.rssSourceDelete(dbPath: dbPath, url: url);
+      await fn(dbPath: dbPath, url: url);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已删除「$name」')),
+      );
+      _loadAll();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('删除失败: $e')),
+      );
+    }
+  }
+
   Widget _buildEmptyState() {
     return Center(
       child: Column(
@@ -277,6 +476,7 @@ class _RssTabPageState extends ConsumerState<RssTabPage> {
           final encoded = Uri.encodeQueryComponent(url);
           context.push('/rss-articles?sourceUrl=$encoded');
         },
+        onLongPress: () => _showSourceMenu(context, source),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
