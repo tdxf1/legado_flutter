@@ -43,11 +43,19 @@ Future<void> main() async {
   // loadReaderSettingsFromDisk（_readerSettingsLoaded flag 控制），
   // helper 幂等无副作用。
   final readerSettings = await loadReaderSettingsFromDisk();
+  // BATCH-26c (05-22): 启动加载底栏 tab 显隐 toggle，让 _AppShell
+  // 第一帧就拿到正确的 destinations 数组，避免「先渲染 4 destination
+  // 再因 listen 收缩到 2/3」的视觉抖动。default true 与原 legado
+  // pref_config_other.xml `android:defaultValue="true"` 对齐。
+  final showDiscovery = await loadShowDiscoveryFromDisk();
+  final showRss = await loadShowRssFromDisk();
   runApp(ProviderScope(
     overrides: [
       themeModeProvider.overrideWith((ref) => themeMode),
       readerSettingsProvider.overrideWith((ref) => readerSettings),
       refreshRateModeProvider.overrideWith((ref) => refreshRateMode),
+      showDiscoveryProvider.overrideWith((ref) => showDiscovery),
+      showRssProvider.overrideWith((ref) => showRss),
     ],
     child: const LegadoApp(),
   ));

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'providers.dart';
 import '../features/bookshelf/bookshelf_page.dart';
 import '../features/bookshelf/book_info_edit_page.dart';
 import '../features/explore/explore_page.dart';
@@ -175,40 +177,90 @@ final router = GoRouter(
   ],
 );
 
-class _AppShell extends StatelessWidget {
+class _AppShell extends ConsumerWidget {
   final StatefulNavigationShell navigationShell;
 
   const _AppShell({required this.navigationShell});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // BATCH-26c (05-22): 底栏 tab 动态显隐。对齐原 legado
+    // `MainActivity.kt:364-381` 行为：showDiscovery / showRss 关闭时
+    // 隐藏对应 NavigationDestination，但 ShellBranch 与 GoRoute 都不删
+    // — 用户仍可直接 URL `/explore` / `/rss` 访问。
+    //
+    // 4 ShellBranch 固定 0..3 = 书架/发现/订阅/我的；NavigationBar 的
+    // selectedIndex / onDestinationSelected 是 view-index（0..可见 tab 数 - 1）
+    // 与 branch-index (0..3) 之间的映射，靠 visibleBranchIndices 翻译。
+    final showDiscovery = ref.watch(showDiscoveryProvider);
+    final showRss = ref.watch(showRssProvider);
+
+    final visibleBranchIndices = <int>[
+      0, // 书架（永远可见）
+      if (showDiscovery) 1, // 发现
+      if (showRss) 2, // 订阅
+      3, // 我的（永远可见）
+    ];
+
+    // 当前 branch 不在可见列表（用户在 /explore 但刚关掉「显示发现」的
+    // 中间帧）→ selectedIndex fallback 0（书架），避免 NavigationBar
+    // 渲染负数 selectedIndex 报错。listen 回调（下方）会在下一帧把当前
+    // branch 切回 0，视觉短暂落到书架槽位即可。
+    final viewIndex = visibleBranchIndices.indexOf(navigationShell.currentIndex);
+    final selectedViewIndex = viewIndex < 0 ? 0 : viewIndex;
+
+    // 关闭 toggle 后若当前正在被隐藏的 branch → 自动 goBranch(0) 切回
+    // 书架。包 postFrameCallback 避免在 build 期间触发 navigation state
+    // 变更（StatefulNavigationShell 内部走 ChangeNotifier，build 内
+    // notifyListeners 会触发 setState during build）。
+    ref.listen<bool>(showDiscoveryProvider, (prev, next) {
+      if (!next && navigationShell.currentIndex == 1) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          navigationShell.goBranch(0);
+        });
+      }
+    });
+    ref.listen<bool>(showRssProvider, (prev, next) {
+      if (!next && navigationShell.currentIndex == 2) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          navigationShell.goBranch(0);
+        });
+      }
+    });
+
     return Scaffold(
       body: navigationShell,
       // BATCH-26a (05-22): 4 NavigationDestination 对齐原 legado
       // `main_bnv.xml` 0-3 槽位（书架 / 发现 / 订阅 / 我的）。
+      // BATCH-26c (05-22): 「发现」/「订阅」按 toggle 动态显示。
       bottomNavigationBar: NavigationBar(
-        selectedIndex: navigationShell.currentIndex,
-        onDestinationSelected: (index) => navigationShell.goBranch(
-          index,
-          initialLocation: index == navigationShell.currentIndex,
-        ),
-        destinations: const [
-          NavigationDestination(
+        selectedIndex: selectedViewIndex,
+        onDestinationSelected: (index) {
+          final branchIndex = visibleBranchIndices[index];
+          navigationShell.goBranch(
+            branchIndex,
+            initialLocation: branchIndex == navigationShell.currentIndex,
+          );
+        },
+        destinations: [
+          const NavigationDestination(
             icon: Icon(Icons.library_books_outlined),
             selectedIcon: Icon(Icons.library_books),
             label: '书架',
           ),
-          NavigationDestination(
-            icon: Icon(Icons.explore_outlined),
-            selectedIcon: Icon(Icons.explore),
-            label: '发现',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.rss_feed_outlined),
-            selectedIcon: Icon(Icons.rss_feed),
-            label: '订阅',
-          ),
-          NavigationDestination(
+          if (showDiscovery)
+            const NavigationDestination(
+              icon: Icon(Icons.explore_outlined),
+              selectedIcon: Icon(Icons.explore),
+              label: '发现',
+            ),
+          if (showRss)
+            const NavigationDestination(
+              icon: Icon(Icons.rss_feed_outlined),
+              selectedIcon: Icon(Icons.rss_feed),
+              label: '订阅',
+            ),
+          const NavigationDestination(
             icon: Icon(Icons.person_outline),
             selectedIcon: Icon(Icons.person),
             label: '我的',

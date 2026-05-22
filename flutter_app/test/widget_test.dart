@@ -118,7 +118,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byType(Switch));
+    // BATCH-26c (05-22): SettingsPage 现在含 3 个 Switch（通知权限 +
+    // 主页段 显示「发现」/「订阅」），通知 Switch 是第一个，其它两个
+    // 在 SwitchListTile 内。点首个 Switch 即点通知权限。
+    await tester.tap(find.byType(Switch).first);
     await tester.pumpAndSettle();
 
     expect(requestCalled, isTrue);
@@ -143,7 +146,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byType(Switch));
+    // BATCH-26c (05-22): 同上，通知 Switch 是第一个。
+    await tester.tap(find.byType(Switch).first);
     await tester.pumpAndSettle();
 
     expect(find.text('请在系统设置中关闭通知权限'), findsOneWidget);

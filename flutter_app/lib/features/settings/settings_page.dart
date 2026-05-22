@@ -180,6 +180,33 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
             ),
           ),
           const Divider(indent: 16, endIndent: 16),
+          _SectionHeader(title: '主页'),
+          // BATCH-26c (05-22): 底栏「发现」/「订阅」tab 显隐 toggle，
+          // 对齐原 legado `pref_config_other.xml` showDiscovery / showRss
+          // SwitchPreference。toggle 关闭后 _AppShell 的 NavigationBar
+          // 自动隐藏对应 destination；ShellBranch 与 GoRoute 不删，用户
+          // 仍可直接 URL `/explore` / `/rss` 访问。
+          SwitchListTile(
+            secondary: const Icon(Icons.explore_outlined),
+            title: const Text('显示「发现」'),
+            subtitle: const Text('底栏显示「发现」tab'),
+            value: ref.watch(showDiscoveryProvider),
+            onChanged: (v) {
+              ref.read(showDiscoveryProvider.notifier).state = v;
+              saveShowDiscoveryToDisk(v);
+            },
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.rss_feed_outlined),
+            title: const Text('显示「订阅」'),
+            subtitle: const Text('底栏显示「订阅」tab'),
+            value: ref.watch(showRssProvider),
+            onChanged: (v) {
+              ref.read(showRssProvider.notifier).state = v;
+              saveShowRssToDisk(v);
+            },
+          ),
+          const Divider(indent: 16, endIndent: 16),
           _SectionHeader(title: '工具'),
           // BATCH-18f (F-W2B-016)：以下 5 项原本在 bookshelf AppBar PopupMenu，
           // 重组到此处与 replace_rules 同列于"工具"段，bookshelf 仅保留书架

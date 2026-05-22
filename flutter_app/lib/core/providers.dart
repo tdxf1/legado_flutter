@@ -283,6 +283,48 @@ Future<bool> loadSearchPrecisionFromDisk() => readJsonKey<bool>(
 
 Future<void> saveSearchPrecisionToDisk(bool enabled) =>
     writeJsonKey('searchPrecision', enabled, errorTag: 'search precision');
+
+/// BATCH-26c (05-22): 底栏「发现」tab 显隐 toggle。对齐原 legado
+/// `pref_config_other.xml` `showDiscovery` SwitchPreference + `MainActivity.kt:364-371`
+/// 行为：toggle 关闭后底栏 NavigationDestination 不显示，但 `/explore` 路由
+/// 仍可直接 URL 访问（`_AppShell` 不删 ShellBranch，仅按 toggle 过滤
+/// destinations）。默认 true，与原版 `android:defaultValue="true"` 对齐。
+final showDiscoveryProvider = StateProvider<bool>((ref) => true);
+
+/// BATCH-26c (05-22): 底栏「订阅」tab 显隐 toggle。语义同 [showDiscoveryProvider]，
+/// 对齐原 legado `showRss` SwitchPreference。默认 true。
+final showRssProvider = StateProvider<bool>((ref) => true);
+
+Future<bool> loadShowDiscoveryFromDisk({String? directory}) =>
+    readJsonKey<bool>(
+      'showDiscovery',
+      (raw) => raw is bool ? raw : true,
+      true,
+      directory: directory,
+    );
+
+Future<void> saveShowDiscoveryToDisk(bool value, {String? directory}) =>
+    writeJsonKey(
+      'showDiscovery',
+      value,
+      directory: directory,
+      errorTag: 'show discovery',
+    );
+
+Future<bool> loadShowRssFromDisk({String? directory}) => readJsonKey<bool>(
+      'showRss',
+      (raw) => raw is bool ? raw : true,
+      true,
+      directory: directory,
+    );
+
+Future<void> saveShowRssToDisk(bool value, {String? directory}) => writeJsonKey(
+      'showRss',
+      value,
+      directory: directory,
+      errorTag: 'show rss',
+    );
+
 /// 阅读器渲染模式。
 ///
 /// 之前散落使用 `_settings.pageAnim == ReaderPageAnim.scroll` 或

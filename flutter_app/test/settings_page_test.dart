@@ -65,6 +65,13 @@ void main() {
 
   testWidgets('SettingsPage 工具段 6 项 ListTile 都有 chevron_right',
       (tester) async {
+    // BATCH-26c (05-22): 加完「主页」段（2 SwitchListTile + Section
+    // header）后默认 800x600 viewport 装不下 chevron_right 段。改用
+    // 大尺寸 viewport 让全部 item 一次构建（与 my_hub_page_test
+    // 同模式）。
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
     await tester.pumpWidget(
       const ProviderScope(
         child: MaterialApp(home: SettingsPage()),
@@ -73,9 +80,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // 工具段 6 个 ListTile 应都有 trailing chevron_right；通知 / 主题
-    // RadioListTile / 关于 段不带 chevron_right。但 ListView 可能 lazy
-    // build viewport 外 item，简单做"至少 1 个"存在性断言即可（具体数量
-    // 取决于 viewport 大小，flaky）。
-    expect(find.byIcon(Icons.chevron_right), findsAtLeastNWidgets(1));
+    // RadioListTile / 关于 段 / 主页 SwitchListTile 不带 chevron_right。
+    expect(find.byIcon(Icons.chevron_right), findsAtLeastNWidgets(6));
   });
 }
