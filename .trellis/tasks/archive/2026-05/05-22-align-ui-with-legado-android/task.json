@@ -1,0 +1,29 @@
+{
+  "id": "align-ui-with-legado-android",
+  "name": "align-ui-with-legado-android",
+  "title": "align UI layout with Android legado original",
+  "description": "",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "doro",
+  "assignee": "doro",
+  "createdAt": "2026-05-22",
+  "completedAt": "2026-05-22",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "05-22-batch-26a-router-4tab-restructure",
+    "05-22-batch-26b-my-hub-fill"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
