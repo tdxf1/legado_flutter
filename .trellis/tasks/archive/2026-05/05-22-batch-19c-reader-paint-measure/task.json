@@ -11,6 +11,6 @@
   "depends_on": ["05-22-batch-19b-reader-perf-selector"],
   "context": {
     "findings": ["F-W2A-012", "F-W2A-013"],
-    "split": "BATCH-19 拆 19a/19b/19c：本批是 3/3。F-W2A-012 子项 2/3 (calcPoints 缓存 + shader 缓存) 留独立 follow-up"
+    "split": "BATCH-19 拆 19a/19b/19c：本批是 3/3。F-W2A-012 子项 2/3 (calcPoints 缓存 + shader 缓存) 评估为 Resolved-by-Design（drag/anim 热路径 currentTouch 每帧变早退/缓存 miss + idle 期 painter.shouldRepaint 已挡），复评触发条件入 spec。"
   }
 }

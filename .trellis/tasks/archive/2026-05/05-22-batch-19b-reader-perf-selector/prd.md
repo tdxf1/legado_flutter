@@ -64,8 +64,10 @@
 ## 6. 不在范围
 
 - F-W2A-012/013（Listenable 拆层 + measure 同步化）→ BATCH-19c
+  <!-- 19c 归档实际：F-W2A-012 子项 1 现状评估保留合并 listenable，子项 2 _calcPoints 早退 + 子项 3 shader 缓存评估为 RBD，详见 19c PRD § 8 -->
 - ReaderController class 抽取（路线图原计划）→ 19c 后再评估必要性
 - shader 缓存优化（F-W2A-012 子项）→ 19c
+  <!-- 19c 归档实际：决策 RBD（drag/anim 热路径 cache key 每帧 miss + idle 期 shouldRepaint 已挡 paint），见 19c PRD § 8 / spec quality-and-anti-patterns.md「Reader 渲染边界」段 -->
 
 ## 7. 风险点
 

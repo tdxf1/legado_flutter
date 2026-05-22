@@ -201,10 +201,10 @@
 
 **建议**: (1) 加一个 `Listenable.merge` 的"内层 controller-only" + "外层 anim-only" 拆分，让纯 controller 变更不重绘 painter；(2) `_calcPoints` 缓存上一帧的 `_touchX/_touchY` 与 cornerXY，相等时早 return；(3) 给 `LinearGradient` shader 缓存（segments 在 L0=6 时每帧创建 6 个 shader，明显可省）。
 
-**Resolution**: BATCH-19c (2026-05-22) — **partial resolved**：
+**Resolution**: BATCH-19c (2026-05-22) — **resolved**：
 - 子项 1（Listenable 拆层）：评估后**保留合并**。`PageViewController` 7 处 `notifyListeners` 调用点（`setNeighborChapter` / `commitToNextChapter` / `commitToPrevChapter` / `jumpToPage` / `goToNextPage` / `goToPrevPage` / `_measureChapter` postFrame）全部是离散低频用户/系统事件，并发上限 ≈ 用户 tap 频率 ≤ 3-5 次/秒；合并 listenable 引入的"无效 painter rebuild"成本可忽略。嵌套 `AnimatedBuilder` 方案在 anim 帧仍重建内层 builder + painter，只在 anim 未跑时收益，但那种情况频率已极低，嵌套引入的可读性成本不划算。`page_view.dart::build` 在 `AnimatedBuilder` 上方加 28 行 doc 注释列出 7 个调用点 + 复评触发条件（controller 高频源新增 / `shouldRepaint` 字段大幅扩张时回头拆嵌套）。决策同步入 spec `quality-and-anti-patterns.md`「Reader 渲染边界 (BATCH-19c)」段。
-- 子项 2（仿真 `_calcPoints` 早退缓存）：**split-out**，独立 follow-up（行为重写 + 浮点 epsilon + fps 测试，ROI 需评估）。
-- 子项 3（仿真 `LinearGradient` shader 缓存）：**split-out**，独立 follow-up（同 file 注释承认"开销可控"，需先量化再决定）。
+- 子项 2（仿真 `_calcPoints` 早退缓存）：**Resolved-by-Design / 不动**。仿真翻页 painter 热路径（drag / tap-anim）期间 `currentTouch` 每帧都变（手指位置 / lerp 进度），早退 guard 永不命中；idle 期 `painter.shouldRepaint` 已返 false → `paint` 不被调用，guard 也无处发挥。ROI 在没有 fps 基线测试支撑前不明，行为重写引入浮点 epsilon 风险大于收益。复评触发条件入 spec：(a) fps 基线 + profile 实证热点落在 atan2/sqrt 时；(b) anim 模型改为离散帧使 guard 命中率上升时；(c) `_calcPoints` 几何被多个 painter 共享、缓存收益放大时；任一满足回头加。
+- 子项 3（仿真 `LinearGradient` shader 缓存）：**Resolved-by-Design / 不动**。4 处 `ui.Gradient.linear` 的 cache key 必须含 `(_isRtOrLb, _bs/_bc/_be 系列动态坐标, head/tailColor)`——坐标全部由 `currentTouch` 派生、drag/anim 期每帧 miss，与子项 2 同样的命中率问题。同 file 注释已承认"开销可控"。复评触发条件同子项 2（fps 实证 / 离散帧 anim / 多 painter 共享几何）。
 task: 05-22-batch-19c-reader-paint-measure。
 
 ---

@@ -126,3 +126,20 @@
 
 - **Listenable 拆层**：嵌套 `AnimatedBuilder` 效果不确定（每帧外层 builder 调内层 builder，内层可能仍跑），**最大风险是没收益**。实施前 sub-agent 必须 grep 当前 controller `notifyListeners` 调用点列表 + 调用频率评估，如果非动画期 notify 频率低（每章节切换 1-2 次）→ 不拆改为加 doc 说明现状是 acceptable trade-off + master finding 标 partial Resolved + spec 注解。
 - **phase-aware notify**：`SchedulerBinding.instance.schedulerPhase` API 稳定（Flutter 3.x+）；但 idle 同步 notify 在罕见的"build 期触发 loadChapter → 同步 notify → 上游 widget 还在 build → setState during build"场景仍可能出 assert。decision tree 在 sub-agent 实施时跑测试验证。
+
+## 8. Post-archive update (2026-05-22)
+
+本 PRD 第 1 / 5 / 6 / 7 节多处把 F-W2A-012 子项 2（`_calcPoints` 早退缓存）+ 子项 3（`LinearGradient` shader 缓存）描述为「留独立 follow-up / split-out / 标 partial Resolved」。归档后复评，决策修订为 **Resolved-by-Design (RBD) 不实施**。理由：
+
+- 仿真翻页 painter 热路径只有 drag / tap-anim 两种；这两条路径上 `currentTouch` 每帧都不同（手指位置 / `_animStartTouch` → `_animTargetTouch` lerp 进度），早退 guard 与 shader 缓存键永远 miss。
+- idle 期 painter `shouldRepaint` 已把 `currentTouch / direction / animProgress` 加入比较，外层 `AnimatedBuilder` 触发时返 false → `paint` 根本不被调用，guard / cache 也无处发挥。
+- LinearGradient cache key 必须含 `(_isRtOrLb, _bs/_bc/_be 系列动态坐标, head/tailColor)`，与 currentTouch miss 同源问题。
+
+修订同步入：
+- master `findings.md` F-W2A-012 行 → `Resolved`（不再 `Partial Resolved`）
+- `findings-flutter-core.md` F-W2A-012 Resolution → 子项 2/3 标 RBD + 三条复评触发条件
+- spec `quality-and-anti-patterns.md`「Reader 渲染边界 (BATCH-19c)」段尾追加「`_calcPoints` 早退缓存与 LinearGradient shader 缓存评估结论 (不动)」小节
+
+复评触发条件（任一满足回头加缓存）：(1) fps 基线测试 + profile 实证热点确实落在 `_calcPoints` atan2/sqrt 或 shader 创建；(2) 仿真翻页改离散帧 anim 模型，guard 命中率上升；(3) `_calcPoints` 几何被多个 painter 共享，缓存收益放大。
+
+第 1 / 5 / 6 / 7 节正文保留原计划描述以反映当时的归档状态，本节为权威修订口径。

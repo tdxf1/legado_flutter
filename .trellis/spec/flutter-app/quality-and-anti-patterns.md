@@ -132,10 +132,27 @@ if (canNotifySync) {
 - 若 `_PageViewPainter.shouldRepaint` 比对字段大幅扩张（>20 字段）、单次比较成本上升到不可忽略，也是触发条件之一。
 - 若新增 listenable（DragDelegate 单独的 ValueNotifier 等），优先用 `Listenable.merge` 加进去而不是嵌套 builder。
 
-### 未拆事项（独立 follow-up）
+### `_calcPoints` 早退缓存与 LinearGradient shader 缓存评估结论（Resolved-by-Design / 不动）
 
-- **F-W2A-012 子项 2**：仿真翻页 `_calcPoints` 早退缓存（保存上一帧 `(touchX, touchY, cornerXY)`，相等时早 return 跳过 atan2 / sqrt）。涉及浮点 epsilon + fps 测试覆盖，行为重写复杂，**不在 BATCH-19c 范围**。
-- **F-W2A-012 子项 3**：仿真翻页 `LinearGradient` shader 缓存（segments=6 时每帧创建 6 个 shader）。同 file 注释已承认"开销可控"，独立 evaluate，**不在 BATCH-19c 范围**。
+`SimulationPageDelegate._calcPoints` 与 `draw` 内 4 处 `ui.Gradient.linear` 经评估**不加缓存**，原因：
+
+仿真翻页 painter 的实际重绘路径只有 3 类：
+
+| 路径 | currentTouch 行为 | painter `shouldRepaint` | 早退 / shader 缓存命中 |
+|---|---|---|---|
+| 用户 drag 期间 | 跟手指每帧变（slop 越过后） | `isRunning=true` 必返 true | `_calcPoints` guard 不命中（touch 每帧不同）；shader 缓存键也每帧 miss |
+| tap 触发的 anim 期间 | 由 `_animStartTouch` → `_animTargetTouch` lerp，每帧不同 | `isRunning=true` 必返 true | 同上 |
+| anim 完成后 idle | currentTouch 不再变 | `isRunning=false` + 字段相等返 false → **draw 不被调用** | guard / 缓存都触不到 |
+
+drag / anim 是仿真翻页**唯一**的 painter 热路径；这两条路径上 `currentTouch` 每帧都不同（手指位置 / lerp 进度），早退 guard 永远 miss。idle 期 painter 的 `shouldRepaint` 已经把 `currentTouch` / `direction` / `animProgress` 加进比较，外层 `AnimatedBuilder` 触发时 `shouldRepaint` 返 false → `paint` 不会被调用 → 也不存在"draw 被多调一次需要 guard 拦掉"的问题。
+
+LinearGradient shader 缓存的 cache key 必须包含 `(_isRtOrLb, _bs1x, _bs1y, _bc1x, _bc1y, _bc2x, _bc2y, _be1x, _be1y, _be2x, _be2y, headColor, tailColor)`——这些坐标全部由动态 `currentTouch` 派生，drag/anim 期每帧不同，**与 `_calcPoints` guard 同样的 miss 率**。同 file 注释已承认 LinearGradient shader 创建"开销可控"。
+
+复评触发条件：
+
+- 加上 fps 基线测试（widget benchmark 或 driver 追 frame budget），实测仿真翻页在 60Hz / 120Hz 设备上跑出 jank、且 profile 抓出热点确实落在 `_calcPoints` 的 atan2/sqrt 或 shader 创建上时，再回头评估。
+- 若仿真翻页改 anim 模型（不再每帧 lerp currentTouch，而是固定帧数离散推进 + 中间帧复用同一几何），则早退 guard 命中率提升，那时再加。
+- 若 `_calcPoints` 输出几何被多个 painter 共享（目前只有 simulation 一个用），缓存收益放大，也是触发点。
 
 
 ## Lint Bar
