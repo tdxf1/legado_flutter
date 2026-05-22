@@ -1,0 +1,7 @@
+{"role": "system", "content": "BATCH-13b implement context"}
+{"file": ".trellis/tasks/05-22-batch-13b-rulecontext-clone-perf/prd.md", "reason": "本批 PRD（4N → 1 次 clone 重构 + borrow checker 风险点）"}
+{"file": "core/core-source/src/parser.rs", "reason": "parse_chapters_from_page line 1369-1429 4 closure 改 outer-mutable ctx 共享"}
+{"file": "core/core-source/src/legado/context.rs", "reason": "RuleContext 字段表（line 23-40）参考 — 不改，仅核实 result 字段是 Vec<LegadoValue>"}
+{"file": "core/core-source/src/legado/js_runtime.rs", "reason": "build_runtime_vars line 268-301 参考 — 验证 ctx.src.is_empty 时 fallback html 参数（行为等价证明）"}
+{"file": "core/core-source/src/legado/rule.rs", "reason": "execute_legado_rule line 122 入口签名 + run_rule 调用链（不改）"}
+{"file": ".trellis/spec/rust-core/quality-and-anti-patterns.md", "reason": "性能段加 'RuleContext clone 复用模式' 小节（如该段已存在）"}

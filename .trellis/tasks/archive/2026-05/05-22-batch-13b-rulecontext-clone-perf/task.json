@@ -1,0 +1,18 @@
+{
+  "id": "05-22-batch-13b-rulecontext-clone-perf",
+  "title": "BATCH-13b parse_chapters_from_page RuleContext clone 复用（4N → 1）",
+  "createdAt": "2026-05-22",
+  "completedAt": "2026-05-22",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "depends_on": ["05-21-batch-13-quickjs-runtime-pool"],
+  "context": {
+    "findings": ["F-W1B-025"],
+    "follow_up_of": "BATCH-13",
+    "scope": "parse_chapters_from_page 4 个 Option::map 闭包内 RuleContext clone 共享改造（4N → 1 次 clone）",
+    "key_insight": "4 闭包串行不重入；run_rule_first(rule, html, &ctx) 用 html 参数源，ctx.src 不参与 → outer clone 1 次 + inner 重写 result 字段安全等价"
+  }
+}
