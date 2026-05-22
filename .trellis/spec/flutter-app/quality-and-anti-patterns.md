@@ -644,6 +644,90 @@ GoRouter `context.push<T>(...)` 必须显式声明类型参数。无类型参数
 - `rss_article_list_page_test.dart::BATCH-21c (F-W2B-012)` × 3 — 把 `/rss-articles-detail` 路由 stub 成 `_DetailStubPage` 在 postFrame 立刻 `context.pop(returns)`，验 list 端在 failed → setState rollback + SnackBar；success / null → 保留 optimistic 不弹 SnackBar
 
 
+## 页面布局对齐 (BATCH-26)
+
+flutter_app 的顶层导航 + 二级页面入口位置以原 legado/ Android 项目为锚（仓内对照源码：`/root/data/workspaces/doro_FriendMessage_641981595/legado/`）。新增页面时优先按原版位置摆，避免重新出现 5/6 tab 蔓延或入口埋深。
+
+### 4 tab destination 锚（对齐 `legado/main_bnv.xml`）
+
+| index | path | builder | label | icon | selectedIcon |
+|---|---|---|---|---|---|
+| 0 | /bookshelf | BookshelfPage | 书架 | library_books_outlined | library_books |
+| 1 | /explore | ExplorePage | 发现 | explore_outlined | explore |
+| 2 | /rss | RssTabPage | 订阅 | rss_feed_outlined | rss_feed |
+| 3 | /my | MyHubPage | 我的 | person_outline | person |
+
+`StatefulShellRoute.indexedStack`，`initialLocation: '/bookshelf'`。任何想加第 5 个底栏 tab 的需求都先评估**能否归入「我的」hub 或现有 tab 顶部 menu**。
+
+### My hub 14 项 + 3 分组（对齐 `legado/pref_main.xml`）
+
+`flutter_app/lib/features/my/my_hub_page.dart` 是 `StatelessWidget`（不引 ViewModel/Provider），Body `ListView` 严格按下表 3 分组顺序：
+
+**第一组（无 header）**：
+
+| pref key | title | flutter 状态 | onTap |
+|---|---|---|---|
+| bookSourceManage | 书源管理 | ✓ | → /sources |
+| txtTocRuleManage | TXT 目录规则 | ✗ 灰 | null |
+| replaceManage | 替换净化 | ✓ | → /replace-rules |
+| dictRuleManage | 字典规则 | ✗ 灰 | null |
+| themeMode | 主题模式 | ✗ 灰（settings 内有真功能） | null |
+| webService | Web 服务 | ✗ 灰 SwitchListTile（value:false / onChanged:null） | n/a |
+
+**「设置」分组**：
+
+| pref key | title | flutter 状态 | onTap |
+|---|---|---|---|
+| web_dav_setting | 备份与恢复 | ✓ | → /backup |
+| theme_setting | 主题设置 | ✗ 灰 | null |
+| setting | 其他设置 | ✓ | → /settings |
+
+**「其它」分组**：
+
+| pref key | title | flutter 状态 | onTap |
+|---|---|---|---|
+| bookmark | 书签 | ✗ 灰 | null |
+| readRecord | 阅读记录 | ✓ | → /read-stats |
+| fileManage | 文件管理 | ✗ 灰 | null |
+| about | 关于 | ✗ 灰 | null |
+| exit | 退出 | ✗ 灰（Flutter app 一般不需要） | null |
+
+### 占位策略
+
+未实现项**全部**走 `ListTile(enabled: false)` + onTap 不写（不弹 SnackBar，不显示「待实现」字样 — 灰显本身就是信号）。Web 服务保留 SwitchListTile 形态以视觉对齐原版「这是个 toggle」语义。
+
+新功能落地时**只需把灰显项的 enabled / onTap 替换**，标题 + icon + 分组位置不要动 — 用户心智 = 原 legado。
+
+### 不进 hub 的迁移项
+
+按 R4 决策**不**进 hub，避免与 pref_main.xml 1:1 锚错位：
+
+- 缓存/导出 → 书架 PopupMenu（对齐原 `main_bookshelf.xml` line 44-47 `menu_download` / `@string/cache_export`）
+- RSS 源管理 / RSS 收藏 → RSS tab AppBar 顶部 IconButton（对齐 `main_rss.xml` 6/12/22 收藏 / 分组 / 设置三 always icon）
+- 订阅源（RuleSub） / 二维码扫码 → 暂留 settings_page 工具段（属 BATCH-18f 重组）
+
+### 过渡性双入口（spec 临时态）
+
+BATCH-18f 在 settings_page line 183-229 加的「工具」段 6 项（备份/恢复 / 阅读统计 / 缓存管理 / RSS 收藏 / 订阅源 / 替换规则）与 26b 加的 hub 入口**双入口共存**。临时态 acceptable，让用户从两个习惯路径都能到达。
+
+收敛节奏：等用户体感稳定后再开 26c/follow-up 删 settings 工具段，单入口由 hub 提供。在 26c 前**不要**单方面删 settings 工具段。
+
+新加的管理类入口默认归入 hub，**不再**往 settings_page 工具段加新项。
+
+### 测试钩子（BATCH-26b 范本）
+
+- `my_hub_page_test.dart::BATCH-26b: hub 显示 14 项 + 3 分组结构` — `scrollUntilVisible` 验 14 项标题全可见 + 「设置」/「其它」section header
+- `my_hub_page_test.dart::BATCH-26b: 灰显项 enabled false / SwitchListTile onChanged null` — viewport 800x2400 一帧构建后循环 8 项 ListTile + Switch 验
+- `my_hub_page_test.dart::BATCH-26b: 已实现项 onTap` × 3 — 书源管理 / 替换净化 / 阅读记录；用 `routerDelegate.currentConfiguration.matches.last.matchedLocation` 验路由（go_router 14 的 `uri` 字段在 `imperative push` 下不更新）
+
+### Forbidden 反向
+
+- ❌ 加第 5 个底栏 tab — 任何 hub 能容纳的内容都不该提为 tab
+- ❌ 在新页面里复刻 settings_page 「工具段」式的 6 项二次入口 — 现有过渡态已饱和
+- ❌ 灰显项加 onTap 弹 SnackBar — 灰显本身就是信号，多弹一层是噪声
+- ❌ MyHubPage / ExplorePage / RssTabPage 引入 Provider — hub 当前是纯 StatelessWidget，未来加状态时先评估「真要 hub 自己持有 state，还是子页 state」
+
+
 ## Performance Notes
 
 - `cached_network_image` is the only blessed image cache. Don't add a parallel `Image.network` call site.
