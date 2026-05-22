@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 import 'package:legado_flutter/features/rss/rss_article_detail_page.dart';
 
@@ -236,4 +237,125 @@ void main() {
     // starred=true 走 filled star icon
     expect(find.byIcon(Icons.star), findsOneWidget);
   });
+
+  testWidgets(
+      'BATCH-21c (F-W2B-012): markRead success → AppBar back pops with '
+      'MarkReadResult.success', (WidgetTester tester) async {
+    final result = await _pumpDetailAndTapBack(
+      tester,
+      readTime: 0,
+      markReadOverride: (dbPath, link, ts) async => 1,
+    );
+    expect(result, MarkReadResult.success);
+  });
+
+  testWidgets(
+      'BATCH-21c (F-W2B-012): markRead throws → AppBar back pops with '
+      'MarkReadResult.failed (list will rollback optimistic)',
+      (WidgetTester tester) async {
+    final result = await _pumpDetailAndTapBack(
+      tester,
+      readTime: 0,
+      markReadOverride: (dbPath, link, ts) async {
+        throw Exception('FRB / db lock');
+      },
+    );
+    expect(result, MarkReadResult.failed);
+  });
+
+  testWidgets(
+      'BATCH-21c (F-W2B-012): article already read → mark_read skipped → '
+      'AppBar back pops with MarkReadResult.skipped (default)',
+      (WidgetTester tester) async {
+    var markReadCalls = 0;
+    final result = await _pumpDetailAndTapBack(
+      tester,
+      readTime: 1700000000, // 已读，跳过 mark_read
+      markReadOverride: (dbPath, link, ts) async {
+        markReadCalls++;
+        return 1;
+      },
+    );
+    expect(markReadCalls, 0, reason: 'readTime != 0 时不应调 mark_read');
+    expect(result, MarkReadResult.skipped);
+  });
+}
+
+/// BATCH-21c (F-W2B-012) helper：在一个最小 GoRouter 里 push detail 页 →
+/// pumpAndSettle → tap AppBar leading back → 返回 detail pop 时携带的
+/// `MarkReadResult`（或 null 如未携带）。
+Future<MarkReadResult?> _pumpDetailAndTapBack(
+  WidgetTester tester, {
+  required int readTime,
+  required Future<int> Function(String, String, int) markReadOverride,
+}) async {
+  final completer = Completer<MarkReadResult?>();
+  final router = GoRouter(
+    initialLocation: '/home',
+    routes: [
+      GoRoute(
+        path: '/home',
+        builder: (context, state) => Scaffold(
+          body: Center(
+            child: ElevatedButton(
+              onPressed: () async {
+                final r = await context.push<MarkReadResult>('/detail');
+                completer.complete(r);
+              },
+              child: const Text('GO'),
+            ),
+          ),
+        ),
+      ),
+      GoRoute(
+        path: '/detail',
+        builder: (context, state) => RssArticleDetailPage(
+          sourceUrl: 'https://feed.example/atom',
+          link: 'https://x/article/1',
+          dbPathOverride: '/tmp/legado-test.db',
+          disableWebView: true,
+          sourceOverride: const {
+            'source_url': 'https://feed.example/atom',
+            'source_name': '示例 RSS',
+          },
+          articleOverride: {
+            'origin': 'https://feed.example/atom',
+            'sort': '',
+            'title': '示例文章',
+            'pub_date': '2024-05-19',
+            'link': 'https://x/article/1',
+            'image': null,
+            'description': null,
+            'order_num': 0,
+            'read_time': readTime,
+            'star': 0,
+          },
+          isStarredOverride: (dbPath, origin, link) async => false,
+          fetchHtmlOverride: (dbPath, sourceUrl, link) async {
+            return {
+              'html': '<html><body>x</body></html>',
+              'base_url': 'https://feed.example/atom',
+            };
+          },
+          markReadOverride: markReadOverride,
+        ),
+      ),
+    ],
+  );
+  await tester.pumpWidget(
+    ProviderScope(
+      child: MaterialApp.router(
+        routerConfig: router,
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+  // 首屏 home → 点 GO 进 detail
+  await tester.tap(find.text('GO'));
+  await tester.pumpAndSettle();
+  // detail _bootstrap 已跑完，_markReadResult 已根据三路径设值。
+  // 点 AppBar leading back（Icons.arrow_back 是 detail leading 自定义按钮）
+  await tester.tap(find.byIcon(Icons.arrow_back));
+  await tester.pumpAndSettle();
+  return completer.future;
 }

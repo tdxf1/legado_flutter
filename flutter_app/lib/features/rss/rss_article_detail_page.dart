@@ -4,11 +4,27 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../core/providers.dart';
 import '../../core/widgets/safe_setstate.dart';
 import '../../src/rust/api.dart' as rust_api;
+
+/// BATCH-21c (F-W2B-012)：mark_read 实际持久化结果。detail 页 pop
+/// 时通过 GoRouter `context.pop(result)` 回传给 list，让 list 按需
+/// rollback optimistic read_time。
+///
+/// 三态语义：
+/// - [success]: detail 真正调通 mark_read（含 article 原本已读跳过的情况）
+/// - [failed]: mark_read 抛异常（FRB / 网络 / db lock）—— list 应 rollback
+/// - [skipped]: 未走到 mark_read（_error 早返回 / link 空 / article 缺 /
+///   readTime != 0）—— db 状态未变，list 保留 optimistic 等下次刷新自然修正
+enum MarkReadResult {
+  success,
+  failed,
+  skipped,
+}
 
 /// RSS 文章详情页（批次 18 / 05-19）。
 ///
@@ -118,6 +134,11 @@ class _RssArticleDetailPageState extends ConsumerState<RssArticleDetailPage> {
   bool _isStarred = false;
   bool _starBusy = false;
 
+  /// BATCH-21c (F-W2B-012)：mark_read 实际持久化结果。AppBar leading
+  /// IconButton 主动 `context.pop(_markReadResult)` 时携带回 list。
+  /// 默认 [MarkReadResult.skipped]：未进 mark_read 分支时兜底。
+  MarkReadResult _markReadResult = MarkReadResult.skipped;
+
   WebViewController? _webController;
 
   /// WebView init 失败的错误信息（BATCH-05 / F-W2B-011）。非 null 时
@@ -209,10 +230,18 @@ class _RssArticleDetailPageState extends ConsumerState<RssArticleDetailPage> {
                 dbPath: dbPath, link: widget.link, ts: ts);
           }
           article?['read_time'] = ts;
+          // BATCH-21c (F-W2B-012): mark_read 写库成功 → 回传 list 不要
+          // rollback optimistic（list 端 read_time 与 db 一致）
+          _markReadResult = MarkReadResult.success;
         } catch (_) {
           // mark read 失败不阻塞 UI
+          // BATCH-21c (F-W2B-012): mark_read 抛异常 → 回传 list 让其
+          // rollback optimistic（list 端 read_time 与 db 不一致需还原）
+          _markReadResult = MarkReadResult.failed;
         }
       }
+      // 不进入 if 分支（readTime != 0 / link 空）保持默认 skipped：db
+      // 状态未变，list 端不应据此 rollback。
 
       // 3. fetch html — 单独串行保留独立错误分支（fetch 失败仍能展示
       // source/article 元数据 + 错误占位）。
@@ -369,33 +398,51 @@ class _RssArticleDetailPageState extends ConsumerState<RssArticleDetailPage> {
     final title = (_article?['title'] as String?)?.trim().isNotEmpty == true
         ? _article!['title'] as String
         : 'RSS 文章';
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+    // BATCH-21c (F-W2B-012): PopScope.onPopInvokedWithResult 在 OS back
+    // / 手势返回时 didPop 已发生，无法再携带 result（已知 limitation）。
+    // 因此 OS back 路径下 list 收到 null，走老的"软一致"路径（保留
+    // optimistic 等下次 _loadArticles 自然修正）。仅 AppBar leading
+    // IconButton 主动 `context.pop(_markReadResult)` 携带 result，让 list
+    // 按需 rollback。
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, _) {},
+      child: Scaffold(
+        appBar: AppBar(
+          // BATCH-21c (F-W2B-012): 替换默认 leading 让 AppBar back 携带
+          // _markReadResult；OS back / iOS swipe back 走默认 Navigator.pop
+          // 不带 result，是已知 limitation。
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            tooltip: '返回',
+            onPressed: () => context.pop(_markReadResult),
+          ),
+          title: Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          actions: [
+            IconButton(
+              icon: Icon(_isStarred ? Icons.star : Icons.star_outline),
+              tooltip: _isStarred ? '取消收藏' : '收藏',
+              onPressed: (_loading || _article == null || _starBusy)
+                  ? null
+                  : _toggleStar,
+            ),
+            IconButton(
+              icon: const Icon(Icons.open_in_browser),
+              tooltip: '阅读原文（批次 19+）',
+              onPressed: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('阅读原文功能将在后续批次实装')),
+                );
+              },
+            ),
+          ],
         ),
-        actions: [
-          IconButton(
-            icon: Icon(_isStarred ? Icons.star : Icons.star_outline),
-            tooltip: _isStarred ? '取消收藏' : '收藏',
-            onPressed: (_loading || _article == null || _starBusy)
-                ? null
-                : _toggleStar,
-          ),
-          IconButton(
-            icon: const Icon(Icons.open_in_browser),
-            tooltip: '阅读原文（批次 19+）',
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('阅读原文功能将在后续批次实装')),
-              );
-            },
-          ),
-        ],
+        body: _buildBody(context),
       ),
-      body: _buildBody(context),
     );
   }
 

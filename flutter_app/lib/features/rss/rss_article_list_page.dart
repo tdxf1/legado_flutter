@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/providers.dart';
 import '../../src/rust/api.dart' as rust_api;
+import 'rss_article_detail_page.dart' show MarkReadResult;
 
 /// RSS 文章列表页（批次 17 / 05-19）。
 ///
@@ -267,13 +268,15 @@ class _RssArticleListPageState extends ConsumerState<RssArticleListPage>
     //
     // 软一致语义（BATCH-21 / F-W2B-012）：
     // - 用户体验上 read_time 在列表 + detail 两处独立维护
-    // - 若 detail 写库成功（绝大多数情况）：返回 list 时已读状态正确
-    // - 若 detail 写库失败（FRB 异常 / 网络 / db lock）：本次返回 list 仍
-    //   显示已读 dot 消失（optimistic），但下次 _loadArticles 拉取时会
-    //   恢复 stale 状态（read_time = 0）；用户再次点击会重试
-    // - 这是 trade-off：避免双写 + 立即视觉反馈，代价是失败时下次自然修正
-    //   而不是立即 rollback（rollback 需要 detail→list 通信机制，留 future
-    //   work）
+    // - detail 写库成功（绝大多数情况）：返回 list 时已读状态正确
+    // - detail 写库失败（FRB 异常 / 网络 / db lock）：BATCH-21c 已加
+    //   AppBar back 路径的 result 通信 —— detail 通过
+    //   `context.pop(MarkReadResult.failed)` 通知 list 主动 rollback
+    //   optimistic read_time + 弹 SnackBar。
+    // - OS back / iOS swipe back 路径仍走老软一致（PopScope
+    //   onPopInvokedWithResult 在 didPop 时已无法携带 result，已知
+    //   limitation）：list 收到 `null` 时保留 optimistic，等下次
+    //   _loadArticles 拉取自然修正 stale read_time。
     final ts = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     setState(() {
       article['read_time'] = ts;
@@ -281,9 +284,21 @@ class _RssArticleListPageState extends ConsumerState<RssArticleListPage>
     if (!mounted) return;
     final encodedSource = Uri.encodeQueryComponent(widget.sourceUrl);
     final encodedLink = Uri.encodeQueryComponent(link);
-    context.push(
+    // BATCH-21c (F-W2B-012): await detail 返回 mark_read 结果。仅 failed
+    // 时 rollback optimistic；success / skipped / null 都保留。显式声明
+    // 类型参数让 GoRouter 走 type-safe push 而非返回 Object?。
+    final result = await context.push<MarkReadResult>(
       '/rss-articles-detail?sourceUrl=$encodedSource&link=$encodedLink',
     );
+    if (!mounted) return;
+    if (result == MarkReadResult.failed) {
+      setState(() {
+        article['read_time'] = 0;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已读状态同步失败，下次刷新会重试')),
+      );
+    }
   }
 
   @override
