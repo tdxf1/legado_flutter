@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "「批量后台任务模式 (BATCH-27b)」+「批量任务 + Notification 通道契约」+「页面布局对齐 (BATCH-26)」段，27c-3 直接套 27b runner 范本（singleton + Queue + StreamController.broadcast + Notification id）；27a 表 add_remote 行需要更新「（27c-3 加批量）」"}
+{"file": ".trellis/spec/flutter-app/async-and-mounted.md", "reason": "RemoteBooksPage StreamSubscription listener 挂 initState + dispose cancel；mounted 守卫；safeSetState；seq token 防旧 future 覆盖"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "ref.invalidate(allBooksProvider/booksByGroupProvider) 批量完成后触发；singleton runner 跨页面持久状态约束"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "testWidgets pattern + Override constructor 注入 + systemTemp createTempSync + addTearDown；runner singleton resetForTest 使用约定"}
+{"file": ".trellis/spec/flutter-app/persistence.md", "reason": "documentsDir + remote_books/ 子目录 + safeFileName 规则 + dbPathProvider 对齐 27c-1 落地"}
+{"file": ".trellis/spec/flutter-app/directory-structure.md", "reason": "新建 flutter_app/lib/core/remote_book_runner.dart 位置约定（与 download_runner.dart / update_toc_runner.dart 同级）"}

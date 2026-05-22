@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "check 27c-3 spec compliance：批量后台任务范本（Queue/Concurrency/Notification id 99002 不冲突 99000/99001）+ Forbidden 反向（不向上抛单本错；不弹单本 SnackBar；不跨目录批量）+ 27a 表 add_remote 行同步"}
+{"file": ".trellis/spec/flutter-app/async-and-mounted.md", "reason": "check StreamSubscription 必 initState 挂 + dispose cancel；safeSetState 守 mounted；seq token 防旧 future 在 batch 完成后 invalidate Provider 时不复发"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "check testWidgets 覆盖：长按入选择 / 全选只勾文件 / 退出选择恢复 AppBar / runner 去重 / done emit + reset / Override 注入正确避免 secure_storage 平台通道"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "check 批量完成 invalidate allBooksProvider/booksByGroupProvider 一次而非每本；singleton runner 跨页面 lifecycle 不丢状态"}
