@@ -1341,6 +1341,51 @@ pull-to-refresh。
   （否则 Dart analyzer 将 `widget.dbPathOverride ?? await` 推断为
   `String?`，与 `rss_source_manage_page` 同款决策）。
 
+#### 搜索 + 长按菜单 (BATCH-28-followup)
+
+**R1 AppBar 搜索 SearchView**：
+
+- AppBar actions 加搜索 IconButton（`Icons.search`），点击进入 `_searchMode`。
+- 搜索模式 AppBar：`[back arrow] [TextField(autofocus)]` actions 清空。
+  AppBar bottom chips 保留（搜索仅是 view filter，与 group filter 正交）。
+- `_onSearchChanged`：debounce 300ms `Timer` → `setState(_searchQuery = text)`。
+  空 query 立即取消 debounce + `_searchQuery = ''` — 与 27c-4
+  RemoteBooksPage 完全同款。
+- filter 逻辑：`_filteredSources` getter 先 group filter 再 search
+  filter（name + URL + source_group toLowerCase contains）。
+- 退出：back arrow → `_searchDebounce?.cancel()` + `_searchQuery = ''` +
+  `_searchController.clear()` + `_searchMode = false`。
+- `group:<name>` prefix 语法不在 MVP（留 followup）。
+
+**R2 长按 3 项菜单**：
+
+- `onLongPress` → `showModalBottomSheet` 3 项：
+  1. **禁用/启用** toggle：`rssSourceSetEnabled(dbPath, url, !enabled)`
+     → SnackBar → `_loadAll()` 刷新
+  2. **删除**：confirm dialog → `rssSourceDelete(dbPath, url)` →
+     SnackBar → `_loadAll()`
+  3. **编辑**：push `/rss-source-manage`
+- 测试钩子：`setEnabledOverride` / `deleteOverride`（`Future<void>
+  Function(...)`），与 `RssSourceManagePage` 同模式。
+- 「置顶」不在 MVP（需新 FRB，留 BATCH-29+）。
+
+**Forbidden 反向（BATCH-28-followup 新增 2 条）**：
+
+- ❌ 搜索模式下 TextField 直接过滤不 debounce — 每次都 setState 在 100+
+  源 grid 下引起 UI 重绘风暴。必须用 debounce 300ms（与 27c-4 同款）。
+- ❌ 长按菜单用 `showMenu` / `PopupMenuButton` 而非 `showModalBottomSheet`
+  — BottomSheet 更适配 Material 3 手势关闭 + SafeArea，且不与 GridView
+  item 内层级冲突（showMenu 需计算 offset relativeTo widget 且容易
+  被 Card clip 裁切）。
+
+**测试钩子（BATCH-28-followup 范本）**：
+
+- 2 个新 *Override：`setEnabledOverride / deleteOverride`（叠加 28 的 4
+  个 → 共 6 个）。
+- `rss_tab_page_test.dart` 7 testWidgets（28 的 4 + 28-followup 3）：
+  搜索 IconButton → AppBar 切 TextField + back arrow / 搜索输入「科技」
+  → 仅科技源可见 + 清空恢复全部 / 长按 → BottomSheet 3 项可见。
+
 
 ## Performance Notes
 
