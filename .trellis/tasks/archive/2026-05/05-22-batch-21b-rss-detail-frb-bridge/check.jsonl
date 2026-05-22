@@ -1,0 +1,5 @@
+{"role": "system", "content": "BATCH-21b check context"}
+{"file": ".trellis/tasks/05-22-batch-21b-rss-detail-frb-bridge/prd.md", "reason": "validation against acceptance criteria"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings.md", "reason": "master report F-W2B-009 主题更新"}
+{"file": ".trellis/tasks/archive/2026-05/05-19-full-codebase-review/research/findings-flutter-features.md", "reason": "Wave 2B 详细 finding F-W2B-009 标 Resolved 收尾（去掉留 BATCH-21b 字样）"}
+{"file": ".trellis/spec/cross-language/frb-bridge.md", "reason": "FRB 桥手动 wire 模式（funcId 110 复用现有约束）"}

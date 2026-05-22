@@ -1,0 +1,17 @@
+{
+  "id": "05-22-batch-21b-rss-detail-frb-bridge",
+  "title": "BATCH-21b RSS detail page FRB 桥优化（消除全数组遍历）",
+  "createdAt": "2026-05-22",
+  "completedAt": "2026-05-22",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "depends_on": ["05-21-batch-21-rss-search-reactivity"],
+  "context": {
+    "findings": ["F-W2B-009"],
+    "follow_up_of": "BATCH-21",
+    "scope": "FRB 手动 wire 1 个 pub fn (funcId 110) + dart caller 替换"
+  }
+}

@@ -1,0 +1,8 @@
+{"role": "system", "content": "BATCH-21b implement context"}
+{"file": ".trellis/tasks/05-22-batch-21b-rss-detail-frb-bridge/prd.md", "reason": "本批 PRD（FRB 手动 wire + dart caller 替换）"}
+{"file": "core/bridge/src/api.rs", "reason": "新增 rss_article_get_by_origin_link pub fn，参考 rss_list_articles (line 1981) 模板"}
+{"file": "core/bridge/src/frb_generated.rs", "reason": "手动加 wire fn（参考 rss_list_articles_impl line 1763-1797）+ dispatcher arm 110"}
+{"file": "core/bridge/build.rs", "reason": "guard fragments 各加 110 entry"}
+{"file": "flutter_app/lib/src/rust/api.dart", "reason": "dart 端 rssArticleGetByOriginLink wrapper（参考 rssListArticles line 699）"}
+{"file": "flutter_app/lib/src/rust/frb_generated.dart", "reason": "abstract RustLibApi 声明（line 478 附近）+ impl callFfi（参考 crateApiRssListArticles line 3009 模板）"}
+{"file": "flutter_app/lib/features/rss/rss_article_detail_page.dart", "reason": "_bootstrap articleFuture 改用 FRB 桥（line 158-171 替换为单行调用）"}
