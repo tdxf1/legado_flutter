@@ -1,0 +1,8 @@
+{"role": "system", "content": "BATCH-03b implement context"}
+{"file": ".trellis/tasks/05-22-batch-03b-backup-password-secure/prd.md", "reason": "本批 PRD（backup 密码迁 secure_storage + Rust 标 deprecate）"}
+{"file": ".trellis/tasks/archive/2026-05/05-21-batch-03-secure-webdav-credentials/prd.md", "reason": "BATCH-03 PRD 模板（webdav_password 迁移模式抄过来）"}
+{"file": "flutter_app/lib/features/settings/webdav_config_page.dart", "reason": "_loadConfig backup 路径 line 142-151 + _saveConfig backup 路径 line 213-226 改 secure_storage；webdav_password 模板在 line 120-141 / line 212"}
+{"file": "core/bridge/src/api.rs", "reason": "set_backup_password line 1452 + get_backup_password line 1510 加 deprecated doc 注释（不加 attr）"}
+{"file": "flutter_app/lib/core/security/secure_storage.dart", "reason": "doc 加 backup_password key namespace（line 18 已留扩展位）"}
+{"file": "flutter_app/test/webdav_config_page_test.dart", "reason": "现有 backup password test 加 setSecureStorageOverrideForTest 让走 FRB fallback 路径"}
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "凭据存储边界扩 backup_password 迁移模式 + 主题闭环说明"}

@@ -1,0 +1,17 @@
+{
+  "id": "05-22-batch-03b-backup-password-secure",
+  "title": "BATCH-03b backup 密码迁 secure_storage（凭据存储主题闭环）",
+  "createdAt": "2026-05-22",
+  "completedAt": "2026-05-22",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "depends_on": ["05-21-batch-03-secure-webdav-credentials"],
+  "context": {
+    "findings": ["F-W1A-020"],
+    "follow_up_of": "BATCH-03",
+    "scope": "Dart 端 backup 密码读写改 secure_storage + 启动期一次性迁移 + Rust 标 deprecate（FRB binary contract 保留）"
+  }
+}
