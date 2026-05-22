@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "spec 一致性 check — 27d-followup 是否新违反 Forbidden 反向 / 是否补 27d-followup 子节"}
+{"file": ".trellis/spec/flutter-app/persistence.md", "reason": "settings.json bookshelfManageOpenReader 命名空间 + 默认值 + IO 路径合规校验"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "testWidgets 覆盖度 + override 模式 + tearDown 清理 check"}

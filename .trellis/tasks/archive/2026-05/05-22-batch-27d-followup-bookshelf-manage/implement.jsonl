@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/flutter-app/quality-and-anti-patterns.md", "reason": "BATCH-27d 选择模式状态机范本 + 启动默认页 26d settings.json 持久化范本 + Forbidden 反向必查"}
+{"file": ".trellis/spec/flutter-app/persistence.md", "reason": "settings.json key 命名空间 + IO 路径 + 测试钩子 — R3 加 bookshelfManageOpenReader 必读"}
+{"file": ".trellis/spec/flutter-app/state-and-providers.md", "reason": "Riverpod state 管理 + override 注入模式 — R1 _filterGroupId / R2 _lastTappedId state 设计参考"}
+{"file": ".trellis/spec/flutter-app/testing.md", "reason": "testWidgets 范本 + override fixture 模式 — R1/R2/R3 ≥5 testWidgets 必读"}
+{"file": ".trellis/tasks/archive/2026-05/05-22-batch-27d-bookshelf-manage/prd.md", "reason": "27d 既有 8 *Override + state 设计 / Out of Scope 5 项原始决策依据"}
