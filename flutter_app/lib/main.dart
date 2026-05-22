@@ -52,6 +52,11 @@ Future<void> main() async {
   // BATCH-26d (05-22): 启动加载 defaultHomePage，让 startup postFrame
   // 跳转决策能拿到正确值。与 26c 同模式 wire（disk → ProviderScope.overrides）。
   final defaultHomePage = await loadDefaultHomePageFromDisk();
+  // BATCH-27d-followup (05-22): 启动加载 bookshelfManageOpenReader，
+  // BookshelfManagePage 第一帧就拿到正确 toggle 值（避免「先渲染默认
+  // false 再 listen 异步刷新」的视觉抖动）。
+  final bookshelfManageOpenReader =
+      await loadBookshelfManageOpenReaderFromDisk();
   runApp(ProviderScope(
     overrides: [
       themeModeProvider.overrideWith((ref) => themeMode),
@@ -60,6 +65,8 @@ Future<void> main() async {
       showDiscoveryProvider.overrideWith((ref) => showDiscovery),
       showRssProvider.overrideWith((ref) => showRss),
       defaultHomePageProvider.overrideWith((ref) => defaultHomePage),
+      bookshelfManageOpenReaderProvider
+          .overrideWith((ref) => bookshelfManageOpenReader),
     ],
     child: const LegadoApp(),
   ));

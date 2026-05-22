@@ -10,7 +10,9 @@ import 'package:legado_flutter/features/bookshelf/bookshelf_manage_page.dart';
 
 /// BATCH-27d (05-22): 书架管理批量编辑页测试。
 ///
-/// 8 testWidgets 覆盖：
+/// 8 + 5 testWidgets 覆盖：
+///
+/// BATCH-27d:
 /// 1. 列表渲染 + 长按进选择模式 + Checkbox leading
 /// 2. 全选 → 所有 ids 进 _selectedIds
 /// 3. 取消（close）→ 退选择模式
@@ -19,6 +21,13 @@ import 'package:legado_flutter/features/bookshelf/bookshelf_manage_page.dart';
 /// 6. 「允许更新」批量调 setBookCanUpdate
 /// 7. 「禁用更新」批量调 setBookCanUpdate(false)
 /// 8. 「移到分组」弹 GroupPickerDialog → batch setBookGroup
+///
+/// BATCH-27d-followup:
+/// 9. group chips 默认「全部」选中 + 渲染所有书
+/// 10. 选「未分组」chip → 仅 group=0 的书可见
+/// 11. 区间选（已选 b1 + 长按 b3 → {b1 b2 b3}）
+/// 12. openReader=true → 普通模式点书名 push '/reader'
+/// 13. openReader=false → 普通模式点书名 no-op
 ///
 /// 测试目录用 `Directory.systemTemp.createTempSync` 拿唯一路径（对齐
 /// BATCH-27a/27c-1/27c-3 决策），`addTearDown` 兜底清理。
@@ -48,6 +57,8 @@ void main() {
       required String dbPath,
       required String bookId,
     })? clearCacheFn,
+    bool? openReader,
+    void Function(String bookId)? onReaderPush,
   }) {
     final router = GoRouter(
       initialLocation: '/bookshelf-manage',
@@ -63,7 +74,20 @@ void main() {
             setCanUpdateOverride: setCanUpdateFn,
             setBookGroupOverride: setBookGroupFn,
             clearCacheOverride: clearCacheFn,
+            openReaderOverride: openReader,
           ),
+        ),
+        // BATCH-27d-followup: 测试 push '/reader' 用的 stub 路由。
+        GoRoute(
+          path: '/reader',
+          builder: (context, state) {
+            final id = state.uri.queryParameters['bookId'] ?? '';
+            onReaderPush?.call(id);
+            return Scaffold(
+              appBar: AppBar(title: const Text('Reader Stub')),
+              body: Text('reader bookId=$id'),
+            );
+          },
         ),
       ],
     );
@@ -369,18 +393,229 @@ void main() {
     await tester.tap(find.text('移到分组'));
     await tester.pumpAndSettle();
 
-    // GroupPickerDialog 显示「选择分组」+「未分组」+ 2 group
+    // GroupPickerDialog 显示「选择分组」+「未分组」+ 2 group。
+    // 27d-followup 后 AppBar 也有 group chips「未分组/玄幻/都市」，所以
+    // 这些文本会重复出现 (chip + dialog option) — 用 descendant 限定到
+    // SimpleDialog 范围内查找。
     expect(find.text('选择分组'), findsOneWidget);
-    expect(find.text('未分组'), findsOneWidget);
-    expect(find.text('玄幻'), findsOneWidget);
-    expect(find.text('都市'), findsOneWidget);
+    final dialogScope = find.byType(SimpleDialog);
+    expect(
+      find.descendant(of: dialogScope, matching: find.text('未分组')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: dialogScope, matching: find.text('玄幻')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: dialogScope, matching: find.text('都市')),
+      findsOneWidget,
+    );
 
-    // 选「都市」
-    await tester.tap(find.text('都市'));
+    // 选「都市」（dialog 内）
+    await tester.tap(
+      find.descendant(of: dialogScope, matching: find.text('都市')),
+    );
     await tester.pumpAndSettle();
 
     expect(calls, 5);
     expect(lastGroupId, 2);
     expect(find.text('移到分组完成：成功 5 / 失败 0'), findsOneWidget);
+  });
+
+  // ==========================================================================
+  // BATCH-27d-followup (05-22): 5 testWidgets
+  // ==========================================================================
+
+  /// 27d-followup fixture：5 本书 + group 字段（b1=未分组 / b2 b3=玄幻
+  /// id=1 / b4 b5=都市 id=2）。配 2 group fixtures (id=1 玄幻 / id=2
+  /// 都市)。
+  List<Map<String, dynamic>> fixtureBooksWithGroup() => [
+        {'id': 'b1', 'name': '一本好书', 'author': '作者甲', 'group': 0},
+        {'id': 'b2', 'name': '另一本', 'author': '作者乙', 'group': 1},
+        {'id': 'b3', 'name': '第三本', 'author': '作者丙', 'group': 1},
+        {'id': 'b4', 'name': '第四本', 'author': '作者丁', 'group': 2},
+        {'id': 'b5', 'name': '第五本', 'author': '作者戊', 'group': 2},
+      ];
+
+  testWidgets('BATCH-27d-followup: group chips 默认「全部」选中 + 渲染所有书',
+      (tester) async {
+    final tmp = Directory.systemTemp
+        .createTempSync('legado_flutter_test_27dfu_chip_default_');
+    addTearDown(() {
+      if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+    });
+    await tester.pumpWidget(buildPage(
+      dbPath: '${tmp.path}/x.db',
+      docsDir: tmp.path,
+      books: fixtureBooksWithGroup(),
+      groups: const [
+        {'id': 1, 'group_name': '玄幻'},
+        {'id': 2, 'group_name': '都市'},
+      ],
+    ));
+    await tester.pumpAndSettle();
+
+    // 4 chips: 全部 / 未分组 / 玄幻 / 都市
+    expect(find.byType(ChoiceChip), findsNWidgets(4));
+    // 默认「全部」chip selected=true
+    final allChip = tester.widget<ChoiceChip>(
+      find.widgetWithText(ChoiceChip, '全部'),
+    );
+    expect(allChip.selected, isTrue);
+    // 5 本书全部可见
+    expect(find.text('一本好书'), findsOneWidget);
+    expect(find.text('第五本'), findsOneWidget);
+  });
+
+  testWidgets('BATCH-27d-followup: 选「未分组」chip → 仅 group=0 可见',
+      (tester) async {
+    final tmp = Directory.systemTemp
+        .createTempSync('legado_flutter_test_27dfu_chip_filter_');
+    addTearDown(() {
+      if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+    });
+    await tester.pumpWidget(buildPage(
+      dbPath: '${tmp.path}/x.db',
+      docsDir: tmp.path,
+      books: fixtureBooksWithGroup(),
+      groups: const [
+        {'id': 1, 'group_name': '玄幻'},
+        {'id': 2, 'group_name': '都市'},
+      ],
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(ChoiceChip, '未分组'));
+    await tester.pumpAndSettle();
+
+    // 仅 b1 (group=0) 可见
+    expect(find.text('一本好书'), findsOneWidget);
+    expect(find.text('另一本'), findsNothing);
+    expect(find.text('第三本'), findsNothing);
+    expect(find.text('第四本'), findsNothing);
+    expect(find.text('第五本'), findsNothing);
+
+    // 切「玄幻」 → 仅 b2 b3
+    await tester.tap(find.widgetWithText(ChoiceChip, '玄幻'));
+    await tester.pumpAndSettle();
+    expect(find.text('一本好书'), findsNothing);
+    expect(find.text('另一本'), findsOneWidget);
+    expect(find.text('第三本'), findsOneWidget);
+    expect(find.text('第四本'), findsNothing);
+  });
+
+  testWidgets(
+      'BATCH-27d-followup: 区间选 (已选 b1 长按 b3 → {b1 b2 b3})',
+      (tester) async {
+    final tmp = Directory.systemTemp
+        .createTempSync('legado_flutter_test_27dfu_range_');
+    addTearDown(() {
+      if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+    });
+    await tester.pumpWidget(buildPage(
+      dbPath: '${tmp.path}/x.db',
+      docsDir: tmp.path,
+      books: fixtureBooksWithGroup(),
+    ));
+    await tester.pumpAndSettle();
+
+    // 长按 b1 → 进选择模式 + b1 选中 + _lastTappedId=b1
+    await tester.longPress(find.text('一本好书'));
+    await tester.pumpAndSettle();
+    expect(find.text('选择 1 项'), findsOneWidget);
+
+    // 长按 b3 → 区间 b1..b3 = {b1 b2 b3}
+    await tester.longPress(find.text('第三本'));
+    await tester.pumpAndSettle();
+    expect(find.text('选择 3 项'), findsOneWidget);
+
+    // 验 Checkbox：b1 b2 b3 = checked / b4 b5 = unchecked
+    final b1Checkbox = tester.widget<Checkbox>(
+      find.descendant(
+        of: find.widgetWithText(ListTile, '一本好书'),
+        matching: find.byType(Checkbox),
+      ),
+    );
+    final b2Checkbox = tester.widget<Checkbox>(
+      find.descendant(
+        of: find.widgetWithText(ListTile, '另一本'),
+        matching: find.byType(Checkbox),
+      ),
+    );
+    final b3Checkbox = tester.widget<Checkbox>(
+      find.descendant(
+        of: find.widgetWithText(ListTile, '第三本'),
+        matching: find.byType(Checkbox),
+      ),
+    );
+    final b4Checkbox = tester.widget<Checkbox>(
+      find.descendant(
+        of: find.widgetWithText(ListTile, '第四本'),
+        matching: find.byType(Checkbox),
+      ),
+    );
+    expect(b1Checkbox.value, isTrue);
+    expect(b2Checkbox.value, isTrue);
+    expect(b3Checkbox.value, isTrue);
+    expect(b4Checkbox.value, isFalse);
+
+    // 再长按 b5 → 起点 = b3（上次长按） → 区间 b3..b5 全加（追加不清）
+    await tester.longPress(find.text('第五本'));
+    await tester.pumpAndSettle();
+    expect(find.text('选择 5 项'), findsOneWidget);
+  });
+
+  testWidgets(
+      'BATCH-27d-followup: openReader=true → 普通模式点书名 push /reader',
+      (tester) async {
+    final tmp = Directory.systemTemp
+        .createTempSync('legado_flutter_test_27dfu_open_reader_on_');
+    addTearDown(() {
+      if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+    });
+    String? pushedBookId;
+    await tester.pumpWidget(buildPage(
+      dbPath: '${tmp.path}/x.db',
+      docsDir: tmp.path,
+      books: fixtureBooksWithGroup(),
+      openReader: true,
+      onReaderPush: (id) => pushedBookId = id,
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('一本好书'));
+    await tester.pumpAndSettle();
+
+    // /reader stub mounted + bookId 透出
+    expect(find.text('Reader Stub'), findsOneWidget);
+    expect(pushedBookId, 'b1');
+  });
+
+  testWidgets(
+      'BATCH-27d-followup: openReader=false → 普通模式点书名 no-op',
+      (tester) async {
+    final tmp = Directory.systemTemp
+        .createTempSync('legado_flutter_test_27dfu_open_reader_off_');
+    addTearDown(() {
+      if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+    });
+    String? pushedBookId;
+    await tester.pumpWidget(buildPage(
+      dbPath: '${tmp.path}/x.db',
+      docsDir: tmp.path,
+      books: fixtureBooksWithGroup(),
+      openReader: false,
+      onReaderPush: (id) => pushedBookId = id,
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('一本好书'));
+    await tester.pumpAndSettle();
+
+    // no-op：仍在 BookshelfManagePage（AppBar title 不变）+ stub 未触发
+    expect(find.text('书架管理'), findsOneWidget);
+    expect(find.text('Reader Stub'), findsNothing);
+    expect(pushedBookId, isNull);
   });
 }

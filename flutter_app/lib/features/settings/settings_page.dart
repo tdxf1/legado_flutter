@@ -218,6 +218,21 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _showDefaultHomePageDialog(context),
           ),
+          // BATCH-27d-followup (05-22): 「点书名直接打开阅读」 toggle。
+          // 默认 false（保持 BATCH-27d 现状：点书名 no-op，仅长按出菜单
+          // / 选择模式 toggle 选中）。on=点书名 push '/reader' 直接进
+          // 阅读，与主书架点书名行为一致。选择模式优先级最高，永远
+          // toggle 选中（与本 toggle 状态无关）。
+          SwitchListTile(
+            secondary: const Icon(Icons.menu_book_outlined),
+            title: const Text('点书名直接打开阅读'),
+            subtitle: const Text('「书架管理」页点书名时直接进入阅读'),
+            value: ref.watch(bookshelfManageOpenReaderProvider),
+            onChanged: (v) {
+              ref.read(bookshelfManageOpenReaderProvider.notifier).state = v;
+              saveBookshelfManageOpenReaderToDisk(v);
+            },
+          ),
           const Divider(indent: 16, endIndent: 16),
           _SectionHeader(title: '工具'),
           // BATCH-18f (F-W2B-016)：以下 5 项原本在 bookshelf AppBar PopupMenu，

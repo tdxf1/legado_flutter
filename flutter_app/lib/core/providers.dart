@@ -449,6 +449,36 @@ void applyDefaultHomePage(
   }
 }
 
+/// BATCH-27d-followup (05-22): 「点书名直接打开阅读」 toggle。
+///
+/// `BookshelfManagePage` 普通模式下点书名是否 push '/reader' 直接进入阅读，
+/// 默认 `false`（保持 BATCH-27d 现状：点书名 no-op，仅长按出菜单 / 选择
+/// 模式下 toggle 选中）。打开后用户可像主书架一样点书名直接读，但失去
+/// 「批量编辑页是只读管理界面」的语义。选择模式优先级最高，永远 toggle
+/// 选中（与 [bookshelfManageOpenReaderProvider] 状态无关）。
+///
+/// 持久化用 bool key `bookshelfManageOpenReader`，对齐 BATCH-26d
+/// `defaultHomePage` 同款 readJsonKey/writeJsonKey 范本。
+final bookshelfManageOpenReaderProvider =
+    StateProvider<bool>((ref) => false);
+
+Future<bool> loadBookshelfManageOpenReaderFromDisk({String? directory}) =>
+    readJsonKey<bool>(
+      'bookshelfManageOpenReader',
+      (raw) => raw is bool ? raw : false,
+      false,
+      directory: directory,
+    );
+
+Future<void> saveBookshelfManageOpenReaderToDisk(bool v,
+        {String? directory}) =>
+    writeJsonKey(
+      'bookshelfManageOpenReader',
+      v,
+      directory: directory,
+      errorTag: 'bookshelf manage open reader',
+    );
+
 /// 阅读器渲染模式。
 ///
 /// 之前散落使用 `_settings.pageAnim == ReaderPageAnim.scroll` 或

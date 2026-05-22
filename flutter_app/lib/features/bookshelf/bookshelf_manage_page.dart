@@ -1,23 +1,38 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/persistence/json_store.dart';
 import '../../core/providers.dart';
 import '../../core/util/platform_int64.dart';
 import '../../src/rust/api.dart' as rust_api;
 
-/// BATCH-27d (05-22) 书架管理批量编辑页。
+/// BATCH-27d (05-22) 书架管理批量编辑页。BATCH-27d-followup (05-22) 加
+/// 列表头分组筛选 + 选中区间（峰胸长按）+ 「点书名直接打开阅读」 toggle。
 ///
 /// 对齐原 legado [`BookshelfManageActivity.kt:269-313`] +
 /// [`bookshelf_menage_sel.xml`] 的批量编辑流程：长按多选书 → 4 项
 /// actionbar（删除 / canUpdate toggle / 移分组 / 清缓存）。`换源` /
-/// `选中区间` / `导出全部书源` / 列表头部分组筛选 / 「点击书名打开详情」
-/// toggle 留 27d follow-up（PRD §Out of Scope）。
+/// `导出全部书源` 依赖 BookSource 表（Flutter 端未实现），留 BATCH-29+
+/// 独立批。
 ///
 /// 选择模式范本完全套 BATCH-27c-3 RemoteBooksPage：
 /// - `_selectionMode` + `Set<String> _selectedIds`（key=book.id）
 /// - PopScope 优先级：选择模式非空 → 退选择；空 → 默认 pop 关页
 /// - 长按文件项进选择 + Checkbox leading
+///
+/// BATCH-27d-followup 加：
+/// - `_filterGroupId: int?`（null=全部 / 0=未分组 / >0=指定 group），顶部
+///   horizontal ChoiceChip 单选；不持久化（每次进页 = 全部）；选择模式
+///   下也可见可点切换；切换 filter 不动 `_selectedIds`（被 filter 隐藏
+///   的项仍记得已选，重切回时 Checkbox 仍勾上）。
+/// - `_lastTappedId: String?`：选择模式下区间选起点。长按时若起点非空 +
+///   非当前项 → 起点到当前项的 `_filteredBooks` 范围全加入 `_selectedIds`
+///   （**追加不清以前**）；起点为空时 fallback 为单 toggle 加入 +
+///   `_lastTappedId = id`。普通 onTap 在选择模式下也更新 `_lastTappedId`。
+/// - 普通模式 onTap → 看 [bookshelfManageOpenReaderProvider]（settings.json
+///   bool）决定 push '/reader' 或 no-op。选择模式优先级最高，永远 toggle
+///   选中（与 toggle 状态无关）。
 ///
 /// 批量调用模式（与 27b/27c-3 Runner 模式差异化）：
 /// - 27b update_toc / 27c-3 batch download 是网络 IO 长任务，走
@@ -72,6 +87,10 @@ class BookshelfManagePage extends ConsumerStatefulWidget {
     required String bookId,
   })? clearCacheOverride;
 
+  /// BATCH-27d-followup 测试用：注入 [bookshelfManageOpenReaderProvider]
+  /// 的初始值，跳过 settings.json IO。生产路径走 `ref.watch(...)`。
+  final bool? openReaderOverride;
+
   const BookshelfManagePage({
     super.key,
     this.dbPathOverride,
@@ -82,6 +101,7 @@ class BookshelfManagePage extends ConsumerStatefulWidget {
     this.setCanUpdateOverride,
     this.setBookGroupOverride,
     this.clearCacheOverride,
+    this.openReaderOverride,
   });
 
   @override
@@ -92,6 +112,41 @@ class BookshelfManagePage extends ConsumerStatefulWidget {
 class _BookshelfManagePageState extends ConsumerState<BookshelfManagePage> {
   bool _selectionMode = false;
   final Set<String> _selectedIds = <String>{};
+
+  /// BATCH-27d-followup: 列表头分组筛选。`null` = 全部（默认），`0` =
+  /// 未分组，`>0` = 指定 group id。每次进页重置（不持久化）。选择模式
+  /// 下也可点切换 — 不退选择模式，不清 `_selectedIds`（被 filter 隐藏
+  /// 的项仍记得已选）。
+  int? _filterGroupId;
+
+  /// BATCH-27d-followup: 区间选起点。选择模式下每次 onTap/onLongPress
+  /// 更新；退选择模式时清。
+  String? _lastTappedId;
+
+  /// BATCH-27d-followup: 当前 filter 下的书列表。选择模式 `_selectAll`
+  /// 也按 filter 范围算，区间选 range 也按 filter 范围算（避免「选了不
+  /// 可见的书」反直觉）。
+  List<Map<String, dynamic>> _filterBooks(List<Map<String, dynamic>> books) {
+    final f = _filterGroupId;
+    if (f == null) return books;
+    return books.where((book) {
+      final g = book['group'];
+      final groupId = g is int
+          ? g
+          : g is num
+              ? g.toInt()
+              : 0;
+      return groupId == f;
+    }).toList();
+  }
+
+  /// BATCH-27d-followup: 取 groupsOverride 或 provider，给顶部 chips +
+  /// _GroupPickerDialog 共用数据源。
+  List<Map<String, dynamic>> _readGroups() {
+    return widget.groupsOverride ??
+        ref.watch(bookGroupsProvider).valueOrNull ??
+        const <Map<String, dynamic>>[];
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -113,13 +168,14 @@ class _BookshelfManagePageState extends ConsumerState<BookshelfManagePage> {
         body: booksAsync.when(
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (e, _) => Center(child: Text('加载书架失败: $e')),
-          data: _buildBody,
+          data: (books) => _buildBody(_filterBooks(books)),
         ),
       ),
     );
   }
 
   PreferredSizeWidget _buildAppBar(BuildContext context) {
+    final groupChipsBar = _buildGroupChipsBar();
     if (_selectionMode) {
       return AppBar(
         leading: IconButton(
@@ -128,6 +184,7 @@ class _BookshelfManagePageState extends ConsumerState<BookshelfManagePage> {
           onPressed: _exitSelectionMode,
         ),
         title: Text('选择 ${_selectedIds.length} 项'),
+        bottom: groupChipsBar,
         actions: [
           IconButton(
             icon: const Icon(Icons.select_all),
@@ -194,6 +251,59 @@ class _BookshelfManagePageState extends ConsumerState<BookshelfManagePage> {
     }
     return AppBar(
       title: const Text('书架管理'),
+      bottom: _buildGroupChipsBar(),
+    );
+  }
+
+  /// BATCH-27d-followup: 顶部 horizontal ChoiceChip 单选筛选条。
+  /// 「全部」（_filterGroupId=null）/「未分组」（=0）/ 各 group 各 1 chip。
+  /// 选择模式下也可见可点（与选择模式不互斥）。
+  PreferredSize _buildGroupChipsBar() {
+    final groups = _readGroups();
+    return PreferredSize(
+      preferredSize: const Size.fromHeight(48),
+      child: SizedBox(
+        height: 48,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
+            children: [
+              _buildFilterChip(label: '全部', value: null),
+              const SizedBox(width: 8),
+              _buildFilterChip(label: '未分组', value: 0),
+              for (final g in groups) ...[
+                const SizedBox(width: 8),
+                _buildFilterChip(
+                  label: (g['group_name'] as String?) ??
+                      (g['name'] as String?) ??
+                      '(未命名)',
+                  value: () {
+                    final id = g['id'];
+                    return id is int
+                        ? id
+                        : id is num
+                            ? id.toInt()
+                            : 0;
+                  }(),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilterChip({required String label, required int? value}) {
+    final selected = _filterGroupId == value;
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (s) {
+        if (!s) return; // 不允许反选 (单选语义对齐 legado VM:30 单值 groupId)
+        setState(() => _filterGroupId = value);
+      },
     );
   }
 
@@ -211,33 +321,92 @@ class _BookshelfManagePageState extends ConsumerState<BookshelfManagePage> {
           leading: _selectionMode
               ? Checkbox(
                   value: selected,
-                  onChanged: (_) => _toggleSelect(id),
+                  onChanged: (_) => _onItemTap(id, books),
                 )
               : const Icon(Icons.book_outlined),
           title: Text((book['name'] as String?) ?? '(无标题)'),
           subtitle: Text((book['author'] as String?) ?? '(未知作者)'),
-          onTap: () {
-            if (_selectionMode) {
-              _toggleSelect(id);
-            }
-            // 非选择模式点击 = 留给 follow-up 决策（默认啥都不做避免误打开
-            // reader）；BATCH-27d PRD §Out of Scope:「点击书名打开详情」
-            // toggle 留 27d-followup 评估。
-          },
-          onLongPress: () {
-            if (!_selectionMode) {
-              _enterSelectionMode(id);
-            }
-          },
+          onTap: () => _onItemTap(id, books),
+          onLongPress: () => _onItemLongPress(id, books),
         );
       },
     );
+  }
+
+  /// BATCH-27d-followup: ListTile onTap 行为统一收口。
+  /// - 选择模式：toggle 选中 + 更新 `_lastTappedId`（区间选起点）
+  /// - 普通模式：看 [bookshelfManageOpenReaderProvider]（settings.json
+  ///   bool）→ true=push '/reader' / false=no-op
+  void _onItemTap(String id, List<Map<String, dynamic>> books) {
+    if (id.isEmpty) return;
+    if (_selectionMode) {
+      setState(() {
+        if (_selectedIds.contains(id)) {
+          _selectedIds.remove(id);
+        } else {
+          _selectedIds.add(id);
+        }
+        _lastTappedId = id;
+      });
+      return;
+    }
+    final bool openReader = widget.openReaderOverride ??
+        ref.read(bookshelfManageOpenReaderProvider);
+    if (openReader) {
+      context.push(
+        Uri(path: '/reader', queryParameters: {'bookId': id}).toString(),
+      );
+    }
+    // openReader=false 时 no-op（27d 现状 — 仅长按出菜单）
+  }
+
+  /// BATCH-27d-followup: ListTile onLongPress 行为分两种。
+  /// - 普通模式：进选择模式 + 该项进 `_selectedIds` + 设 `_lastTappedId`
+  /// - 选择模式：区间选 — 起点 = `_lastTappedId`（若为空 fallback 为
+  ///   该项 toggle 加入），终点 = 该项；区间内所有 `_filteredBooks`
+  ///   **追加**进 `_selectedIds`（不清以前）；起点更新为该项。
+  void _onItemLongPress(String id, List<Map<String, dynamic>> books) {
+    if (id.isEmpty) return;
+    if (!_selectionMode) {
+      _enterSelectionMode(id);
+      return;
+    }
+    final start = _lastTappedId;
+    if (start == null || start == id) {
+      // fallback: 单 toggle + 更新起点
+      setState(() {
+        _selectedIds.add(id);
+        _lastTappedId = id;
+      });
+      return;
+    }
+    final ids = books.map((b) => (b['id'] as String?) ?? '').toList();
+    final si = ids.indexOf(start);
+    final ei = ids.indexOf(id);
+    if (si < 0 || ei < 0) {
+      // 起点不在当前 filter 列表内 → fallback 单 toggle 该项
+      setState(() {
+        _selectedIds.add(id);
+        _lastTappedId = id;
+      });
+      return;
+    }
+    final lo = si < ei ? si : ei;
+    final hi = si < ei ? ei : si;
+    setState(() {
+      for (var i = lo; i <= hi; i++) {
+        final v = ids[i];
+        if (v.isNotEmpty) _selectedIds.add(v);
+      }
+      _lastTappedId = id;
+    });
   }
 
   void _enterSelectionMode(String firstId) {
     setState(() {
       _selectionMode = true;
       _selectedIds.add(firstId);
+      _lastTappedId = firstId;
     });
   }
 
@@ -245,24 +414,14 @@ class _BookshelfManagePageState extends ConsumerState<BookshelfManagePage> {
     setState(() {
       _selectionMode = false;
       _selectedIds.clear();
-    });
-  }
-
-  void _toggleSelect(String id) {
-    setState(() {
-      if (_selectedIds.contains(id)) {
-        _selectedIds.remove(id);
-      } else {
-        _selectedIds.add(id);
-      }
-      // 选中数 = 0 时**不**自动退选择模式（用户可能想取消单本再勾另一本）；
-      // 仅 close IconButton 主动退。
+      _lastTappedId = null;
     });
   }
 
   void _selectAll() {
-    final books = widget.booksOverride ?? ref.read(allBooksProvider).value;
-    if (books == null) return;
+    final raw = widget.booksOverride ?? ref.read(allBooksProvider).value;
+    if (raw == null) return;
+    final books = _filterBooks(raw); // BATCH-27d-followup: 全选按 filter 范围
     setState(() {
       for (final book in books) {
         final id = (book['id'] as String?) ?? '';
@@ -403,9 +562,7 @@ class _BookshelfManagePageState extends ConsumerState<BookshelfManagePage> {
   /// 移分组：弹 _GroupPickerDialog 选 group → batch set_book_group。
   Future<void> _onMoveGroup(BuildContext context) async {
     final messenger = ScaffoldMessenger.of(context);
-    final groups = widget.groupsOverride ??
-        ref.read(bookGroupsProvider).valueOrNull ??
-        const <Map<String, dynamic>>[];
+    final groups = _readGroups();
 
     final pickedGroupId = await showDialog<int>(
       context: context,
