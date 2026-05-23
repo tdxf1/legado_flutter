@@ -166,7 +166,20 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
       length: tabSpec.length,
       child: Scaffold(
         appBar: AppBar(
-          title: const SizedBox.shrink(),
+          titleSpacing: 0,
+          title: TabBar(
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
+            indicatorSize: TabBarIndicatorSize.tab,
+            indicator: UnderlineTabIndicator(
+              borderSide: BorderSide(
+                width: 3,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              borderRadius: BorderRadius.circular(3),
+            ),
+            tabs: [for (final t in tabSpec) Tab(text: t.label)],
+          ),
           actions: [
             // TOC update progress badge
             if (_isUpdatingToc)
@@ -227,7 +240,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16)),
                 elevation: 8,
-                position: PopupMenuPosition.under,
+                offset: const Offset(0, 4),
                 color: Theme.of(innerCtx)
                     .colorScheme
                     .surfaceContainerHigh,
@@ -308,18 +321,6 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
               ),
             ),
           ],
-          bottom: TabBar(
-            isScrollable: true,
-            indicatorSize: TabBarIndicatorSize.tab,
-            indicator: UnderlineTabIndicator(
-              borderSide: BorderSide(
-                width: 3,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              borderRadius: BorderRadius.circular(3),
-            ),
-            tabs: [for (final t in tabSpec) Tab(text: t.label)],
-          ),
         ),
         body: TabBarView(
           children: [
