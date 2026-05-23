@@ -171,8 +171,8 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
           title: Align(
             alignment: Alignment.centerLeft,
             child: TabBar(
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
+              isScrollable: false,
+              tabAlignment: TabAlignment.fill,
               indicatorSize: TabBarIndicatorSize.tab,
               indicator: UnderlineTabIndicator(
                 borderSide: BorderSide(
@@ -919,85 +919,95 @@ class _BookListView extends ConsumerWidget {
           children: [
             // Cover: 80×120, aspect 2:3, rounded 12px
             _buildListCover(context, book),
-            const SizedBox(width: 12),
-            // Info area (expanded)
+            const SizedBox(width: 16),
+            // Info area (expanded) - reserve space for badge
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Title: 16px, w500, max 2 lines, ellipsis
-                  Text(
-                    name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                      color: colorScheme.onSurface,
+              child: Padding(
+                padding: const EdgeInsets.only(right: 40),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Title: 16px, w500, max 2 lines, ellipsis
+                    Text(
+                      name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                        color: colorScheme.onSurface,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  // Author row: person icon + author name
-                  if (author.isNotEmpty)
-                    Row(
-                      children: [
-                        Icon(Icons.person,
-                            size: 14, color: context.al.textSecondary),
-                        const SizedBox(width: 2),
-                        Expanded(
-                          child: Text(
-                            author,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: context.al.textSecondary,
+                    const SizedBox(height: 4),
+                    // Author row: person icon + author name
+                    if (author.isNotEmpty)
+                      Row(
+                        children: [
+                          Icon(Icons.person,
+                              size: 14, color: context.al.textSecondary),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              author,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: context.al.textSecondary,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
-                  // Chapter row: radio_button_unchecked icon + dur title
-                  if (durTitle != null && durTitle.isNotEmpty) ...[
-                    const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        Icon(Icons.radio_button_unchecked,
-                            size: 12, color: context.al.textSecondary),
-                        const SizedBox(width: 2),
-                        Expanded(
-                          child: Text(
-                            durTitle,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: context.al.textSecondary,
+                        ],
+                      ),
+                    // Chapter rows: radio_button_unchecked icon + chapter title
+                    if (durTitle != null && durTitle.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Icon(Icons.radio_button_unchecked,
+                              size: 12, color: context.al.textSecondary),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              durTitle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: context.al.textSecondary,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
+                        ],
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
-            const SizedBox(width: 8),
-            // Progress badge: right-aligned chip
+            // Progress badge: absolutely positioned on right side
             if (chapterCount > 0)
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  '$chapterCount章',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: context.al.textSecondary,
+              Positioned(
+                right: 0,
+                top: 0,
+                bottom: 0,
+                child: Center(
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '$chapterCount',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: context.al.textSecondary,
+                      ),
+                    ),
                   ),
                 ),
               ),
