@@ -716,9 +716,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
         } else {
           _pageViewController?.updateSettings(_settings);
           _pageViewController?.loadChapter(index, title, content);
-          // Bug 3: 排版完成后翻 flag 解除手势阻断
+          // Bug 3: block gestures until adjacent chapters are ready.
+          // The delay gives _preloadAdjacentContent time to fetch
+          // neighbor content so cross-chapter animation can render.
           _isPageLayoutReady = false;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
+          WidgetsBinding.instance.addPostFrameCallback((_) async {
+            await Future.delayed(const Duration(milliseconds: 500));
             if (mounted) safeSetState(() => _isPageLayoutReady = true);
           });
         }
@@ -2176,25 +2179,22 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
                 )
               : const SizedBox.shrink(),
         ),
-        // Spinner overlay — first load only. Wrapped in AnimatedOpacity so
-        // spinner fades out over 200ms while content simultaneously fades in,
-        // producing a crossfade instead of a flash between spinner→content.
+        // Loading indicator — small text-only, positioned at first line.
+        // Fades out as content loads.
         AnimatedOpacity(
           opacity: _chapterContent.isEmpty && _isLoadingContent ? 1.0 : 0.0,
           duration: const Duration(milliseconds: 200),
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const CircularProgressIndicator(strokeWidth: 2),
-                const SizedBox(height: 16),
-                Text(
-                  '加载中...',
-                  style: TextStyle(
-                    color: Color(settings.effectiveTextColor).withValues(alpha: 0.5),
-                  ),
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: Padding(
+              padding: EdgeInsets.all(settings.horizontalPadding),
+              child: Text(
+                '加载中...',
+                style: TextStyle(
+                  fontSize: settings.fontSize,
+                  color: Color(settings.effectiveTextColor).withValues(alpha: 0.5),
                 ),
-              ],
+              ),
             ),
           ),
         ),
@@ -2235,7 +2235,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
             jumpToLast: isPrev);
         _isPageLayoutReady = false;
       });
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await Future.delayed(const Duration(milliseconds: 500));
         if (mounted) safeSetState(() => _isPageLayoutReady = true);
       });
       _preloadAdjacentContent(targetIndex, chapters);

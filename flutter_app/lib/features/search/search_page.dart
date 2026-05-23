@@ -53,15 +53,12 @@ class SearchPage extends ConsumerStatefulWidget {
 
 class _SearchPageState extends ConsumerState<SearchPage> {
   final _searchCtrl = TextEditingController();
-  final _results = ValueNotifier<List<Map<String, dynamic>>>([]);
   bool _loading = false;
-  bool _onlineMode = false;
   bool _precisionMode = false;
   List<String> _searchHistory = [];
 
-  /// Bug 5: 本地书架搜索与在线书源搜索结果分开存储，UI 双 Section 展示。
-  List<Map<String, dynamic>> _localResults = [];
-  List<Map<String, dynamic>> _onlineResults = [];
+  /// Search results from online sources.
+  List<Map<String, dynamic>> _results = [];
 
   /// Task X3 (Bug A) — 记忆上一次搜索的 keyword。
   ///
@@ -108,16 +105,10 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     setState(() => _precisionMode = !_precisionMode);
     if (_precisionMode) {
       // Apply precision filter to existing results without re-searching
-      if (_localResults.isNotEmpty && _lastSearchKeyword.isNotEmpty) {
-        _localResults = SearchPage.applyPrecisionFilter(
-            List<Map<String, dynamic>>.from(_localResults), _lastSearchKeyword);
+      if (_results.isNotEmpty && _lastSearchKeyword.isNotEmpty) {
+        _results = SearchPage.applyPrecisionFilter(
+            List<Map<String, dynamic>>.from(_results), _lastSearchKeyword);
       }
-      if (_onlineResults.isNotEmpty && _lastSearchKeyword.isNotEmpty) {
-        _onlineResults = SearchPage.applyPrecisionFilter(
-            List<Map<String, dynamic>>.from(_onlineResults), _lastSearchKeyword);
-      }
-      _results.value = SearchPage.applyPrecisionFilter(
-          List<Map<String, dynamic>>.from(_results.value), _lastSearchKeyword);
     }
     unawaited(saveSearchPrecisionToDisk(_precisionMode));
     if (mounted) {
@@ -342,25 +333,10 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   @override
   void dispose() {
     _searchCtrl.dispose();
-    _results.dispose();
     super.dispose();
   }
 
-  /// Bug 5: 本地书架搜索（返回原始结果，precision 过滤由 [_doSearch] 统一处理）。
-  Future<List<Map<String, dynamic>>> _searchLocal(String keyword) async {
-    try {
-      final dbPath = await ref.read(dbPathProvider.future);
-      final offlineJson =
-          await rust_api.searchBooksOffline(dbPath: dbPath, keyword: keyword);
-      final List<dynamic> offlineList = jsonDecode(offlineJson);
-      return offlineList.cast<Map<String, dynamic>>();
-    } catch (e) {
-      debugPrint('[Search] local search failed: $e');
-      return <Map<String, dynamic>>[];
-    }
-  }
-
-  /// Bug 5: 在线搜索使用现有书源搜索逻辑。
+  /// Search online using enabled sources.
   Future<List<Map<String, dynamic>>> _searchOnline(String keyword) async {
     try {
       final dbPath = await ref.read(dbPathProvider.future);
@@ -410,66 +386,36 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     // 新结果 / 改 _loading）。
     final seq = ++_searchSeq;
     _lastSearchKeyword = keyword;
-    // Bug 5 fix: clear _onlineResults when online mode is off so stale
-    // old online results don't prevent the search-history fallback from
-    // showing when local results are empty.
     setState(() {
       _loading = true;
-      if (!_onlineMode) {
-        _onlineResults = [];
-      }
     });
 
-    // Bug 5: 本地搜索始终执行；_onlineMode 决定是否同时发起在线搜索
+    // Always search online
     await ref.read(dbInitializedProvider.future);
     if (!mounted || seq != _searchSeq) {
       if (mounted) safeSetState(() => _loading = false);
       return;
     }
 
-    // Fire local search (always)
-    final localFuture = _searchLocal(keyword);
+    // Fire online search
+    final onlineFuture = _searchOnline(keyword);
 
-    // Fire online search (if enabled)
-    Future<List<Map<String, dynamic>>>? onlineFuture;
-    if (_onlineMode) {
-      onlineFuture = _searchOnline(keyword);
-    }
-
-    // Await local first (typically faster), show partial results
-    int rawLocalCount = 0;
+    // Await online results
+    int rawOnlineCount = 0;
     try {
-      final rawLocal = await localFuture;
-      rawLocalCount = rawLocal.length;
+      final rawOnline = await onlineFuture;
+      rawOnlineCount = rawOnline.length;
       if (mounted && seq == _searchSeq) {
-        final filteredLocal = _precisionMode
-            ? SearchPage.applyPrecisionFilter(rawLocal, keyword)
-            : rawLocal;
-        setState(() => _localResults = filteredLocal);
+        final filteredOnline = _precisionMode
+            ? SearchPage.applyPrecisionFilter(rawOnline, keyword)
+            : rawOnline;
+        setState(() => _results = filteredOnline);
       }
     } catch (_) {}
 
-    // Await online (if running)
-    int rawOnlineCount = 0;
-    if (onlineFuture != null) {
-      try {
-        final rawOnline = await onlineFuture;
-        rawOnlineCount = rawOnline.length;
-        if (mounted && seq == _searchSeq) {
-          final filteredOnline = _precisionMode
-              ? SearchPage.applyPrecisionFilter(rawOnline, keyword)
-              : rawOnline;
-          setState(() => _onlineResults = filteredOnline);
-        }
-      } catch (_) {}
-    }
-
     if (mounted && seq == _searchSeq) {
       setState(() => _loading = false);
-      // Bug 5: precision-mode empty dialog — re-added after restoring
-      // filtering to _doSearch level so raw-unfiltered counts are known.
-      if (_precisionMode && _localResults.isEmpty && _onlineResults.isEmpty &&
-          (rawLocalCount > 0 || rawOnlineCount > 0)) {
+      if (_precisionMode && _results.isEmpty && rawOnlineCount > 0) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && seq == _searchSeq) {
             _showPrecisionEmptyDialog();
@@ -552,7 +498,6 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                 suffixIcon: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _buildOnlineToggle(),
                     if (_loading)
                       const SizedBox(
                           width: 24,
@@ -570,9 +515,9 @@ class _SearchPageState extends ConsumerState<SearchPage> {
             ),
           ),
           Expanded(
-            child: _loading && _localResults.isEmpty && _onlineResults.isEmpty
+            child: _loading && _results.isEmpty
                 ? const Center(child: CircularProgressIndicator())
-                : _localResults.isEmpty && _onlineResults.isEmpty && !_loading
+                : _results.isEmpty && !_loading
                     ? _buildSearchHistory()
                     : _buildResultsList(),
           ),
@@ -581,58 +526,16 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     );
   }
 
-  /// Bug 5: 双 Section 结果列表 — 本地书架 + 在线书源。
+  /// Results list — single section from online sources.
   Widget _buildResultsList() {
-    final hasOnline = _onlineResults.isNotEmpty && _onlineMode;
-    final hasLocal = _localResults.isNotEmpty || hasOnline;
-    if (!hasLocal && !hasOnline) {
-      return const SizedBox.shrink();
-    }
-
-    // Section layout: [local header, local items..., online header, online items...]
-    final localSectionTotal = hasLocal ? 1 + _localResults.length : 0;
-    final totalCount =
-        localSectionTotal + (hasOnline ? 1 + _onlineResults.length : 0);
+    if (_results.isEmpty) return const SizedBox.shrink();
 
     return ListView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 8),
-      itemCount: totalCount,
+      itemCount: _results.length,
       itemBuilder: (context, index) {
-        if (index < localSectionTotal) {
-          if (index == 0) {
-            return _buildSectionHeader('本地书架', _localResults.length);
-          }
-          return _buildBookCard(_localResults[index - 1]);
-        }
-        final onlineIndex = index - localSectionTotal;
-        if (onlineIndex == 0) {
-          return _buildSectionHeader('书源搜索', _onlineResults.length);
-        }
-        return _buildBookCard(_onlineResults[onlineIndex - 1]);
+        return _buildBookCard(_results[index]);
       },
-    );
-  }
-
-  Widget _buildSectionHeader(String title, int count) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 12, bottom: 4, left: 4),
-      child: Row(
-        children: [
-          Text(
-            title,
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            '$count 条',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Colors.grey,
-                ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -715,25 +618,6 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                 onPressed: () => _saveResultToBookshelf(book),
               ),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildOnlineToggle() {
-    return GestureDetector(
-      onTap: () => setState(() => _onlineMode = !_onlineMode),
-      child: Tooltip(
-        message: _onlineMode ? '在线搜索已开启（同时搜索书源）' : '仅本地书架（点击开启在线搜索）',
-        child: Container(
-          width: 32,
-          height: 32,
-          alignment: Alignment.center,
-          child: Icon(
-            _onlineMode ? Icons.cloud : Icons.phone_android,
-            size: 18,
-            color: _onlineMode ? Colors.blue : Colors.grey,
           ),
         ),
       ),
