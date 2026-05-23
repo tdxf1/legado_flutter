@@ -1,9 +1,9 @@
-/// 阅读器底部控制栏
+/// 阅读器底部控制栏 — MD3 风格，对齐 uihtml 阅读器正文改3 设计
 ///
 /// 三层布局：
-/// - 第一行：搜索 / 自动翻页 / 日夜间模式 / 替换规则 4 个 fab 按钮
-/// - 第二行：上一章 / 章节进度 slider / 下一章
-/// - 第三行：目录 / 朗读 / 界面设置 3 个 toolbar 按钮
+/// - 第一行：搜索 / 自动翻页 / 界面设置 3 个居中圆形 fab 按钮
+/// - 第二行：上一章 / 章节进度条 / 下一章
+/// - 第三行：目录 / 朗读 / 夜间 / 更多 4 个底部导航按钮
 library;
 
 import 'package:flutter/material.dart';
@@ -62,10 +62,7 @@ class ReaderBottomBar extends StatelessWidget {
     final fgColor = Color(settings.effectiveTextColor);
     final maxChapter = (chapterCount - 1).toDouble();
     final maxChapterClamped = maxChapter < 0 ? 0.0 : maxChapter;
-    final smallLabelStyle = TextStyle(
-        color: fgColor.withValues(alpha: 0.7),
-        fontSize: 10,
-        decoration: TextDecoration.none);
+
     return Positioned(
       bottom: 0,
       left: 0,
@@ -77,90 +74,96 @@ class ReaderBottomBar extends StatelessWidget {
           child: SafeArea(
             top: false,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // Row 1: Center circle FAB buttons
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      _fabButton(Icons.search, '搜索', fgColor, smallLabelStyle,
+                      const SizedBox(width: 8),
+                      _circleButton(context, Icons.search, '搜索', fgColor,
                           onStartSearch),
-                      _fabButton(
-                          isAutoScrolling ? Icons.pause : Icons.play_arrow,
+                      const SizedBox(width: 20),
+                      _circleButton(
+                          context,
+                          isAutoScrolling ? Icons.pause : Icons.autorenew,
                           isAutoScrolling ? '暂停' : '自动',
                           fgColor,
-                          smallLabelStyle,
                           onToggleAutoScroll),
-                      _fabButton(
+                      const SizedBox(width: 20),
+                      _circleButton(context, Icons.tune, '界面', fgColor,
+                          onShowReaderSettings),
+                      const SizedBox(width: 8),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  // Row 2: Prev / Progress slider / Next
+                  Row(
+                    children: [
+                      _textButton('上一章', fgColor,
+                          hasPrev ? onPrevChapter : null),
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Slider(
+                                value: (sliderValue ?? currentIndex.toDouble())
+                                    .clamp(0, maxChapterClamped),
+                                min: 0,
+                                max: maxChapterClamped,
+                                divisions: chapterCount > 1
+                                    ? chapterCount - 1
+                                    : 1,
+                                activeColor: fgColor,
+                                inactiveColor: fgColor.withValues(alpha: 0.25),
+                                thumbColor: fgColor,
+                                onChanged: onSliderChanged,
+                                onChangeEnd: (v) {
+                                  final targetIndex =
+                                      v.round().clamp(0, chapterCount - 1);
+                                  onSliderChangeEnd(targetIndex);
+                                },
+                              ),
+                            ),
+                            SizedBox(
+                              width: 44,
+                              child: Text(
+                                '${currentIndex + 1}/$chapterCount',
+                                style: TextStyle(
+                                  color: fgColor.withValues(alpha: 0.6),
+                                  fontSize: 11,
+                                  decoration: TextDecoration.none,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      _textButton('下一章', fgColor,
+                          hasNext ? onNextChapter : null),
+                    ],
+                  ),
+                  // Row 3: Bottom nav row
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _navButton(
+                          context, Icons.list, '目录', fgColor, onShowDirectory),
+                      _navButton(
+                          context, Icons.headphones, '朗读', fgColor, onStartTts),
+                      _navButton(
+                          context,
                           isNightMode
                               ? Icons.wb_sunny
                               : Icons.nightlight_round,
                           isNightMode ? '日间' : '夜间',
                           fgColor,
-                          smallLabelStyle,
                           onToggleNightMode),
-                      _fabButton(Icons.find_replace, '替换', fgColor,
-                          smallLabelStyle, onOpenReplaceRules),
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Row(
-                    children: [
-                      IconButton(
-                          icon: Icon(Icons.chevron_left, color: fgColor),
-                          onPressed: hasPrev ? onPrevChapter : null,
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                              minWidth: 36, minHeight: 36)),
-                      Expanded(
-                        child: Slider(
-                          value: (sliderValue ?? currentIndex.toDouble())
-                              .clamp(0, maxChapterClamped),
-                          min: 0,
-                          max: maxChapterClamped,
-                          divisions:
-                              chapterCount > 1 ? chapterCount - 1 : 1,
-                          activeColor: fgColor,
-                          inactiveColor: fgColor.withValues(alpha: 0.25),
-                          thumbColor: fgColor,
-                          onChanged: onSliderChanged,
-                          onChangeEnd: (v) {
-                            final targetIndex =
-                                v.round().clamp(0, chapterCount - 1);
-                            onSliderChangeEnd(targetIndex);
-                          },
-                        ),
-                      ),
-                      SizedBox(
-                        width: 44,
-                        child: Text(
-                          '${currentIndex + 1}/$chapterCount',
-                          style: TextStyle(
-                              color: fgColor,
-                              fontSize: 11,
-                              decoration: TextDecoration.none),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                      IconButton(
-                          icon: Icon(Icons.chevron_right, color: fgColor),
-                          onPressed: hasNext ? onNextChapter : null,
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                              minWidth: 36, minHeight: 36)),
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      _toolbarButton(Icons.list, '目录', fgColor,
-                          smallLabelStyle, onShowDirectory),
-                      _toolbarButton(Icons.record_voice_over, '朗读', fgColor,
-                          smallLabelStyle, onStartTts),
-                      _toolbarButton(Icons.tune, '界面', fgColor, smallLabelStyle,
-                          onShowReaderSettings),
+                      _navButton(context, Icons.more_horiz, '更多', fgColor,
+                          onOpenReplaceRules),
                     ],
                   ),
                 ],
@@ -172,40 +175,73 @@ class ReaderBottomBar extends StatelessWidget {
     );
   }
 
-  Widget _fabButton(IconData icon, String label, Color fgColor,
-      TextStyle labelStyle, VoidCallback onTap) {
+  Widget _circleButton(BuildContext context, IconData icon, String label,
+      Color fgColor, VoidCallback onTap) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      borderRadius: BorderRadius.circular(24),
+      child: Container(
+        width: 48,
+        height: 48,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: fgColor.withValues(alpha: 0.08),
+        ),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(icon, color: fgColor, size: 22),
-            const SizedBox(height: 2),
-            Text(label, style: labelStyle),
+            Text(label,
+                style: TextStyle(
+                  color: fgColor.withValues(alpha: 0.7),
+                  fontSize: 9,
+                  decoration: TextDecoration.none,
+                )),
           ],
         ),
       ),
     );
   }
 
-  Widget _toolbarButton(IconData icon, String label, Color fgColor,
-      TextStyle labelStyle, VoidCallback onTap) {
+  Widget _navButton(BuildContext context, IconData icon, String label,
+      Color fgColor, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: fgColor, size: 24),
+            const SizedBox(height: 2),
+            Text(label,
+                style: TextStyle(
+                  color: fgColor.withValues(alpha: 0.6),
+                  fontSize: 10,
+                  decoration: TextDecoration.none,
+                )),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _textButton(
+      String label, Color fgColor, VoidCallback? onTap) {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: fgColor, size: 20),
-            const SizedBox(height: 1),
-            Text(label, style: labelStyle),
-          ],
-        ),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Text(label,
+            style: TextStyle(
+              color: onTap != null
+                  ? fgColor
+                  : fgColor.withValues(alpha: 0.3),
+              fontSize: 12,
+              decoration: TextDecoration.none,
+            )),
       ),
     );
   }
