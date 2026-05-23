@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/notification_service.dart';
+import '../../core/color_scheme_config.dart';
 import '../../core/providers.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
@@ -179,6 +180,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
                   .toList(),
             ),
           ),
+          const Divider(indent: 16, endIndent: 16),
+          _SectionHeader(title: '主题色'),
+          const _ColorPickerSection(),
           const Divider(indent: 16, endIndent: 16),
           _SectionHeader(title: '主页'),
           // BATCH-26c (05-22): 底栏「发现」/「订阅」tab 显隐 toggle，
@@ -378,6 +382,76 @@ class _SectionHeader extends StatelessWidget {
               fontWeight: FontWeight.bold,
             ),
       ),
+    );
+  }
+}
+
+// ── Color picker section ───────────────────────────────────────────
+
+class _ColorPickerSection extends ConsumerWidget {
+  const _ColorPickerSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final config = ref.watch(colorSchemeConfigProvider);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SwitchListTile(
+          secondary: const Icon(Icons.wallpaper),
+          title: const Text('莫奈动态取色'),
+          subtitle: const Text('跟随系统壁纸自动生成配色（Android 12+）'),
+          value: config.source == ColorSource.dynamic_,
+          onChanged: (v) {
+            ref.read(colorSchemeConfigProvider.notifier)
+                .setSource(v ? ColorSource.dynamic_ : ColorSource.preset);
+          },
+        ),
+        if (config.source == ColorSource.preset) ...[
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: presetSeedColors.map((color) {
+                final selected = config.presetSeed == color.toARGB32();
+                return GestureDetector(
+                  onTap: () {
+                    ref.read(colorSchemeConfigProvider.notifier)
+                        .setPresetSeed(color.toARGB32());
+                  },
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: color,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: selected
+                            ? Theme.of(context).colorScheme.primary
+                            : Colors.transparent,
+                        width: 3,
+                      ),
+                      boxShadow: selected
+                          ? [
+                              BoxShadow(
+                                color: color.withAlpha(0x60),
+                                blurRadius: 8,
+                                spreadRadius: 1,
+                              )
+                            ]
+                          : null,
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ],
     );
   }
 }

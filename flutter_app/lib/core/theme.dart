@@ -3,9 +3,56 @@ import 'package:flutter/material.dart';
 class AppTheme {
   AppTheme._();
 
-  static const Color _seedColor = Color(0xFF1565C0);
+  static const Color _defaultSeed = Color(0xFF1565C0);
 
-  // ── Shared component themes (light + dark) ──────────────────────
+  // ── Factory: build ThemeData from a ColorScheme ──────────────────
+
+  /// Build a complete [ThemeData] from a [ColorScheme].
+  ///
+  /// The [colorScheme] can come from [ColorScheme.fromSeed] (preset mode)
+  /// or [DynamicColorPlugin.getCorePalette] (Android 12+ Monet mode).
+  static ThemeData build(ColorScheme colorScheme) {
+    return ThemeData(
+      useMaterial3: true,
+      colorScheme: colorScheme,
+      textTheme: _buildTextTheme(colorScheme.brightness),
+      appBarTheme: _appBarTheme,
+      bottomSheetTheme: _bottomSheetTheme,
+      cardTheme: _cardTheme,
+      checkboxTheme: _checkboxTheme,
+      chipTheme: _chipTheme,
+      dialogTheme: _dialogTheme,
+      dividerTheme: _dividerTheme,
+      dropdownMenuTheme: _dropdownMenuTheme,
+      elevatedButtonTheme: _elevatedButtonTheme,
+      filledButtonTheme: _filledButtonTheme,
+      iconButtonTheme: _iconButtonTheme,
+      inputDecorationTheme: _inputDecorationTheme,
+      listTileTheme: _listTileTheme,
+      navigationBarTheme: _navigationBarTheme,
+      outlinedButtonTheme: _outlinedButtonTheme,
+      popupMenuTheme: _popupMenuTheme,
+      progressIndicatorTheme: _progressIndicatorTheme,
+      radioTheme: _radioTheme,
+      sliderTheme: _sliderTheme,
+      snackBarTheme: _snackBarTheme,
+      switchTheme: _switchTheme,
+      tabBarTheme: _tabBarTheme,
+      textButtonTheme: _textButtonTheme,
+      tooltipTheme: _tooltipTheme,
+      visualDensity: VisualDensity.standard,
+    );
+  }
+
+  // ── Convenience: default light / dark (uses default seed) ───────
+
+  static ThemeData get light =>
+      build(ColorScheme.fromSeed(seedColor: _defaultSeed, brightness: Brightness.light));
+
+  static ThemeData get dark =>
+      build(ColorScheme.fromSeed(seedColor: _defaultSeed, brightness: Brightness.dark));
+
+  // ── Shared component themes ─────────────────────────────────────
 
   static const _appBarTheme = AppBarTheme(
     centerTitle: true,
@@ -155,82 +202,6 @@ class AppTheme {
     linearTrackColor: Colors.transparent,
   );
 
-  // ── Light Theme ─────────────────────────────────────────────────
-
-  static ThemeData light = ThemeData(
-    useMaterial3: true,
-    colorScheme: ColorScheme.fromSeed(
-      seedColor: _seedColor,
-      brightness: Brightness.light,
-    ),
-    // Typography
-    textTheme: _buildTextTheme(Brightness.light),
-    // Component themes
-    appBarTheme: _appBarTheme,
-    bottomSheetTheme: _bottomSheetTheme,
-    cardTheme: _cardTheme,
-    checkboxTheme: _checkboxTheme,
-    chipTheme: _chipTheme,
-    dialogTheme: _dialogTheme,
-    dividerTheme: _dividerTheme,
-    dropdownMenuTheme: _dropdownMenuTheme,
-    elevatedButtonTheme: _elevatedButtonTheme,
-    filledButtonTheme: _filledButtonTheme,
-    iconButtonTheme: _iconButtonTheme,
-    inputDecorationTheme: _inputDecorationTheme,
-    listTileTheme: _listTileTheme,
-    navigationBarTheme: _navigationBarTheme,
-    outlinedButtonTheme: _outlinedButtonTheme,
-    popupMenuTheme: _popupMenuTheme,
-    progressIndicatorTheme: _progressIndicatorTheme,
-    radioTheme: _radioTheme,
-    sliderTheme: _sliderTheme,
-    snackBarTheme: _snackBarTheme,
-    switchTheme: _switchTheme,
-    tabBarTheme: _tabBarTheme,
-    textButtonTheme: _textButtonTheme,
-    tooltipTheme: _tooltipTheme,
-    visualDensity: VisualDensity.standard,
-  );
-
-  // ── Dark Theme ──────────────────────────────────────────────────
-
-  static ThemeData dark = ThemeData(
-    useMaterial3: true,
-    colorScheme: ColorScheme.fromSeed(
-      seedColor: _seedColor,
-      brightness: Brightness.dark,
-    ),
-    // Typography
-    textTheme: _buildTextTheme(Brightness.dark),
-    // Component themes
-    appBarTheme: _appBarTheme,
-    bottomSheetTheme: _bottomSheetTheme,
-    cardTheme: _cardTheme,
-    checkboxTheme: _checkboxTheme,
-    chipTheme: _chipTheme,
-    dialogTheme: _dialogTheme,
-    dividerTheme: _dividerTheme,
-    dropdownMenuTheme: _dropdownMenuTheme,
-    elevatedButtonTheme: _elevatedButtonTheme,
-    filledButtonTheme: _filledButtonTheme,
-    iconButtonTheme: _iconButtonTheme,
-    inputDecorationTheme: _inputDecorationTheme,
-    listTileTheme: _listTileTheme,
-    navigationBarTheme: _navigationBarTheme,
-    outlinedButtonTheme: _outlinedButtonTheme,
-    popupMenuTheme: _popupMenuTheme,
-    progressIndicatorTheme: _progressIndicatorTheme,
-    radioTheme: _radioTheme,
-    sliderTheme: _sliderTheme,
-    snackBarTheme: _snackBarTheme,
-    switchTheme: _switchTheme,
-    tabBarTheme: _tabBarTheme,
-    textButtonTheme: _textButtonTheme,
-    tooltipTheme: _tooltipTheme,
-    visualDensity: VisualDensity.standard,
-  );
-
   // ── Helpers ─────────────────────────────────────────────────────
 
   /// Build a slightly customised [TextTheme] for consistent app typography.
@@ -241,7 +212,7 @@ class AppTheme {
     final base = ThemeData(
       useMaterial3: true,
       colorScheme: ColorScheme.fromSeed(
-        seedColor: _seedColor,
+        seedColor: _defaultSeed,
         brightness: brightness,
       ),
     ).textTheme;

@@ -18,6 +18,9 @@ dependencies:
   
   # 路由管理 - go_router提供声明式路由和深度链接支持
   go_router: ^14.0.0
+
+  # MD3 动态取色 - Android 12+ Monet 壁纸取色 / 跨平台预设色
+  dynamic_color: ^1.7.0
   
   # FFI桥接 - flutter_rust_bridge自动生成Dart与Rust的绑定代码
   flutter_rust_bridge: ^2.0.0

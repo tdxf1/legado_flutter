@@ -1,6 +1,8 @@
+import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'core/color_scheme_config.dart';
 import 'core/download_runner.dart';
 import 'core/notification_service.dart';
 import 'core/providers.dart';
@@ -104,6 +106,7 @@ class LegadoApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
+    final colorConfig = ref.watch(colorSchemeConfigProvider);
     // Trigger DB init eagerly
     ref.listen(dbInitializedProvider, (_, state) {
       state.whenOrNull(
@@ -120,13 +123,37 @@ class LegadoApp extends ConsumerWidget {
       );
     });
 
-    return MaterialApp.router(
-      title: 'Legado Reader',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.light,
-      darkTheme: AppTheme.dark,
-      themeMode: themeMode,
-      routerConfig: router,
+    return DynamicColorBuilder(
+      builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
+        final useDynamic = colorConfig.source == ColorSource.dynamic_;
+
+        final lightScheme = useDynamic
+            ? (lightDynamic?.harmonized() ??
+                ColorScheme.fromSeed(
+                    seedColor: Color(colorConfig.presetSeed),
+                    brightness: Brightness.light))
+            : ColorScheme.fromSeed(
+                seedColor: Color(colorConfig.presetSeed),
+                brightness: Brightness.light);
+
+        final darkScheme = useDynamic
+            ? (darkDynamic?.harmonized() ??
+                ColorScheme.fromSeed(
+                    seedColor: Color(colorConfig.presetSeed),
+                    brightness: Brightness.dark))
+            : ColorScheme.fromSeed(
+                seedColor: Color(colorConfig.presetSeed),
+                brightness: Brightness.dark);
+
+        return MaterialApp.router(
+          title: 'Legado Reader',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.build(lightScheme),
+          darkTheme: AppTheme.build(darkScheme),
+          themeMode: themeMode,
+          routerConfig: router,
+        );
+      },
     );
   }
 }
