@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/colors.dart';
 import '../../core/providers.dart';
 import '../../src/rust/api.dart' as rust_api;
 
@@ -103,7 +104,7 @@ class _ReplaceRulePageState extends ConsumerState<ReplaceRulePage> {
           child: ListTile(
             leading: Icon(
               enabled ? Icons.check_circle : Icons.cancel,
-              color: enabled ? Colors.green : Colors.grey,
+              color: enabled ? context.al.success : context.al.textSecondary,
             ),
             title: Text(rule['name'] ?? '未命名规则'),
             subtitle: Text(
@@ -221,7 +222,7 @@ class _ReplaceRulePageState extends ConsumerState<ReplaceRulePage> {
               _deleteRule(rule['id'] as String);
             },
             child:
-                const Text('删除', style: TextStyle(color: Colors.red)),
+                Text('删除', style: TextStyle(color: context.al.destructive)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx),

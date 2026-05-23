@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/colors.dart';
 import '../../core/providers.dart';
 import '../../src/rust/api.dart' as rust_api;
 
@@ -108,7 +109,7 @@ class _RssFavoritesPageState extends ConsumerState<RssFavoritesPage> {
               child: const Text('取消')),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('确定移除', style: TextStyle(color: Colors.red)),
+            child: Text('确定移除', style: TextStyle(color: context.al.destructive)),
           ),
         ],
       ),
@@ -175,9 +176,9 @@ class _RssFavoritesPageState extends ConsumerState<RssFavoritesPage> {
             const SizedBox(height: 12),
             const Text('暂无收藏'),
             const SizedBox(height: 4),
-            const Text(
+            Text(
               '去文章列表点 ★ 收藏喜欢的内容',
-              style: TextStyle(color: Colors.grey),
+              style: TextStyle(color: context.al.textSecondary),
             ),
           ],
         ),

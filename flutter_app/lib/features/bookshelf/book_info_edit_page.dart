@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/colors.dart';
 import '../../core/persistence/json_store.dart';
 import '../../core/providers.dart';
 import '../../core/widgets/safe_setstate.dart';
@@ -235,16 +236,16 @@ class _BookInfoEditPageState extends ConsumerState<BookInfoEditPage> {
 
   Widget _buildCoverPlaceholder() {
     return Container(
-      color: Colors.grey.shade200,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(Icons.add_a_photo_outlined,
-              size: 36, color: Colors.grey.shade600),
+              size: 36, color: context.al.onSurface),
           const SizedBox(height: 4),
           Text(
             '点击选择封面',
-            style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+            style: TextStyle(color: context.al.onSurface, fontSize: 12),
           ),
         ],
       ),

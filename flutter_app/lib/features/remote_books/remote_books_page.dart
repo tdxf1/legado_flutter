@@ -1015,8 +1015,8 @@ class _RemoteBooksPageState extends ConsumerState<RemoteBooksPage> {
                         ),
                         child: Text(
                           '${_lastProgress!.processed}/${_lastProgress!.total}',
-                          style: const TextStyle(
-                              color: Colors.white,
+                          style: TextStyle(
+                              color: Theme.of(context).colorScheme.surface,
                               fontSize: 10,
                               fontWeight: FontWeight.w600),
                         ),

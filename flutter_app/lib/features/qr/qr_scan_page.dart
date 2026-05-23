@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../../core/colors.dart';
 import '../../core/security/webview_safety.dart';
 import 'legado_qr_protocol.dart';
 import 'qr_import_handler.dart';
@@ -322,12 +323,12 @@ class _QrScanPageState extends ConsumerState<QrScanPage> {
     }
     if (!_isRealCameraMode) {
       // 测试 / web fallback：占位即可，实际扫码结果靠 scanResultOverride
-      return const ColoredBox(
-        color: Colors.black,
+      return ColoredBox(
+        color: context.al.scrim,
         child: Center(
           child: Text(
             '相机不可用',
-            style: TextStyle(color: Colors.white70),
+            style: TextStyle(color: Theme.of(context).colorScheme.surface.withAlpha(0xB2)),
           ),
         ),
       );
@@ -365,25 +366,28 @@ class _ScanOverlay extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          ColoredBox(color: Colors.black.withValues(alpha: 0.4)),
+          ColoredBox(color: context.al.scrim.withValues(alpha: 0.4)),
           Center(
             child: Container(
               width: 240,
               height: 240,
               decoration: BoxDecoration(
-                border: Border.all(color: Colors.white70, width: 2),
+                border: Border.all(
+                    color: Theme.of(context).colorScheme.surface.withAlpha(0xB2), width: 2),
                 borderRadius: BorderRadius.circular(8),
               ),
             ),
           ),
-          const Positioned(
+          Positioned(
             bottom: 64,
             left: 0,
             right: 0,
             child: Center(
               child: Text(
                 '将二维码对准框内',
-                style: TextStyle(color: Colors.white70, fontSize: 14),
+                style: TextStyle(
+                    color: Theme.of(context).colorScheme.surface.withAlpha(0xB2),
+                    fontSize: 14),
               ),
             ),
           ),

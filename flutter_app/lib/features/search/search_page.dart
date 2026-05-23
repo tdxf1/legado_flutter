@@ -5,6 +5,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/colors.dart';
 import '../../core/cover_cache.dart';
 import '../../core/providers.dart';
 import '../../core/widgets/safe_setstate.dart';
@@ -609,7 +610,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           Text(
             '$count 条',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Colors.grey,
+                  color: context.al.textSecondary,
                 ),
           ),
         ],
@@ -670,7 +671,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                         style: Theme.of(context)
                             .textTheme
                             .bodySmall
-                            ?.copyWith(color: Colors.grey[600]),
+                            ?.copyWith(color: context.al.onSurface),
                       ),
                     ],
                     if (intro != null && intro.isNotEmpty) ...[
@@ -682,7 +683,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                         style: Theme.of(context)
                             .textTheme
                             .bodySmall
-                            ?.copyWith(color: Colors.grey[500], fontSize: 11),
+                            ?.copyWith(color: context.al.textSecondary, fontSize: 11),
                       ),
                     ],
                   ],
@@ -762,10 +763,10 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         width: w,
         height: h,
         decoration: BoxDecoration(
-          color: Colors.grey.shade200,
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(4),
         ),
-        child: Icon(Icons.book, size: 28, color: Colors.grey.shade400),
+        child: Icon(Icons.book, size: 28, color: context.al.outline),
       );
     }
     return ClipRRect(
@@ -778,7 +779,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         placeholder: (_, __) => Container(
           width: w,
           height: h,
-          color: Colors.grey.shade100,
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
           child: const Center(
             child: SizedBox(
               width: 16,
@@ -790,9 +791,9 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         errorWidget: (_, __, ___) => Container(
           width: w,
           height: h,
-          color: Colors.grey.shade200,
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
           child:
-              Icon(Icons.broken_image, size: 24, color: Colors.grey.shade400),
+              Icon(Icons.broken_image, size: 24, color: context.al.outline),
         ),
       ),
     );
@@ -822,7 +823,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                     width: 40,
                     height: 4,
                     decoration: BoxDecoration(
-                      color: Colors.grey.shade300,
+                      color: Theme.of(context).colorScheme.outlineVariant,
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
@@ -865,7 +866,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                             Text('来源: ${book['source_name']}',
                                 style:
                                     Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                                          color: Colors.grey,
+                                          color: ctx.al.textSecondary,
                                         )),
                         ],
                       ),
@@ -881,7 +882,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                   Text(
                     book['intro'] as String? ?? '',
                     style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                          color: Colors.grey[700],
+                          color: ctx.al.onSurface,
                           height: 1.5,
                         ),
                   ),

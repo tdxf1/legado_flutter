@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/colors.dart';
 import '../../core/providers.dart';
 import '../../core/util/platform_int64.dart';
 import '../../src/rust/api.dart' as rust_api;
@@ -223,7 +224,7 @@ class _RssSourceManagePageState extends ConsumerState<RssSourceManagePage> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('确定删除', style: TextStyle(color: Colors.red)),
+            child: Text('确定删除', style: TextStyle(color: context.al.destructive)),
           ),
         ],
       ),
@@ -366,12 +367,12 @@ class _RssSourceManagePageState extends ConsumerState<RssSourceManagePage> {
             _onDelete(record);
           }
         },
-        itemBuilder: (context) => const [
+        itemBuilder: (context) => [
           PopupMenuItem(
             value: 'delete',
             child: ListTile(
-              leading: Icon(Icons.delete_outline, color: Colors.red),
-              title: Text('删除', style: TextStyle(color: Colors.red)),
+              leading: Icon(Icons.delete_outline, color: context.al.destructive),
+              title: Text('删除', style: TextStyle(color: context.al.destructive)),
               contentPadding: EdgeInsets.zero,
             ),
           ),

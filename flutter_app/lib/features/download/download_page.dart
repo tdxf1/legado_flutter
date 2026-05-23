@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/colors.dart';
 import '../../core/providers.dart';
 import '../../src/rust/api.dart' as rust_api;
 
@@ -60,27 +61,27 @@ class DownloadPage extends ConsumerWidget {
     switch (status) {
       case 1:
         statusText = '下载中';
-        statusColor = Colors.blue;
+        statusColor = Theme.of(context).colorScheme.primary;
         statusIcon = Icons.downloading;
         break;
       case 2:
         statusText = '已暂停';
-        statusColor = Colors.orange;
+        statusColor = context.al.warning;
         statusIcon = Icons.pause_circle;
         break;
       case 3:
         statusText = '已完成';
-        statusColor = Colors.green;
+        statusColor = context.al.success;
         statusIcon = Icons.check_circle;
         break;
       case 4:
         statusText = '失败';
-        statusColor = Colors.red;
+        statusColor = context.al.destructive;
         statusIcon = Icons.error;
         break;
       default:
         statusText = '等待中';
-        statusColor = Colors.grey;
+        statusColor = context.al.textSecondary;
         statusIcon = Icons.hourglass_empty;
     }
 
@@ -116,7 +117,7 @@ class DownloadPage extends ConsumerWidget {
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
                   errorMsg,
-                  style: TextStyle(color: Colors.red.shade300, fontSize: 12),
+                  style: TextStyle(color: context.al.destructive, fontSize: 12),
                 ),
               ),
             Row(

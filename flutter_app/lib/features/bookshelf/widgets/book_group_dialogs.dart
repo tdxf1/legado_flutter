@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/colors.dart';
 import '../../../core/providers.dart';
 import '../../../core/widgets/safe_setstate.dart';
 import '../../../src/rust/api.dart' as rust_api;
@@ -114,7 +115,7 @@ class _GroupManageDialogState extends ConsumerState<GroupManageDialog> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('删除', style: TextStyle(color: Colors.red)),
+            child: Text('删除', style: TextStyle(color: context.al.destructive)),
           ),
         ],
       ),
@@ -180,8 +181,8 @@ class _GroupManageDialogState extends ConsumerState<GroupManageDialog> {
                               onPressed: () => _renameGroup(g),
                             ),
                             IconButton(
-                              icon: const Icon(Icons.delete_outline,
-                                  size: 20, color: Colors.red),
+                              icon: Icon(Icons.delete_outline,
+                                  size: 20, color: context.al.destructive),
                               tooltip: '删除',
                               onPressed: () => _deleteGroup(g),
                             ),
@@ -291,7 +292,7 @@ class _GroupSelectDialogState extends ConsumerState<GroupSelectDialog> {
                 return ListTile(
                   title: Text(item.name),
                   trailing: selected
-                      ? const Icon(Icons.check, color: Colors.blue)
+                      ? Icon(Icons.check, color: Theme.of(context).colorScheme.primary)
                       : null,
                   onTap: () => setState(() => _selectedGroupId = item.id),
                 );

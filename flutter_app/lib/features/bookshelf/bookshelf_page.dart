@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/colors.dart';
 import '../../core/persistence/json_store.dart';
 import '../../core/providers.dart';
 import '../../core/update_toc_runner.dart';
@@ -208,8 +209,8 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                             ),
                             child: Text(
                               '$_updateTocProcessed/$_updateTocTotal',
-                              style: const TextStyle(
-                                  color: Colors.white,
+                              style: TextStyle(
+                                  color: Theme.of(context).colorScheme.surface,
                                   fontSize: 10,
                                   fontWeight: FontWeight.w600),
                             ),
@@ -538,7 +539,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
               ListTile(
                 title: Text(entry.value),
                 trailing: entry.key == current
-                    ? const Icon(Icons.check, color: Colors.blue)
+                    ? Icon(Icons.check, color: Theme.of(context).colorScheme.primary)
                     : null,
                 onTap: () => Navigator.pop(ctx, entry.key),
               ),
@@ -576,7 +577,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
               ListTile(
                 title: Text(entry.$2),
                 trailing: _isGridView == entry.$1
-                    ? const Icon(Icons.check, color: Colors.blue)
+                    ? Icon(Icons.check, color: Theme.of(context).colorScheme.primary)
                     : null,
                 onTap: () => Navigator.pop(ctx, entry.$1),
               ),
@@ -972,7 +973,7 @@ class _BookListView extends ConsumerWidget {
           onLongPress: () => _showBookActionSheet(context, ref, book),
           child: Card(
             child: ListTile(
-              leading: _buildCover(book),
+              leading: _buildCover(context, book),
               title: Text(book['name'] ?? '未知书名'),
               subtitle: Text(
                 _formatBookSubtitle(book),
@@ -1018,7 +1019,7 @@ class _BookListView extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Expanded(
-                  child: _buildCover(book),
+                  child: _buildCover(context, book),
                 ),
                 Padding(
                   padding: const EdgeInsets.all(6),
@@ -1065,7 +1066,7 @@ class _BookListView extends ConsumerWidget {
     return author.isEmpty ? '未知作者' : author;
   }
 
-  Widget _buildCover(Map<String, dynamic> book) {
+  Widget _buildCover(BuildContext context, Map<String, dynamic> book) {
     final localPath = book['custom_cover_path'] as String?;
     if (localPath != null && localPath.isNotEmpty) {
       return Image.file(
@@ -1074,17 +1075,17 @@ class _BookListView extends ConsumerWidget {
         cacheWidth: 100,
         cacheHeight: 150,
         errorBuilder: (_, __, ___) =>
-            _buildNetworkCover(book['cover_url'] as String?),
+            _buildNetworkCover(context, book['cover_url'] as String?),
       );
     }
-    return _buildNetworkCover(book['cover_url'] as String?);
+    return _buildNetworkCover(context, book['cover_url'] as String?);
   }
 
-  Widget _buildNetworkCover(String? coverUrl) {
+  Widget _buildNetworkCover(BuildContext context, String? coverUrl) {
     if (coverUrl == null || coverUrl.isEmpty) {
       return Container(
-        color: Colors.grey.shade200,
-        child: Icon(Icons.book, size: 40, color: Colors.grey.shade500),
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        child: Icon(Icons.book, size: 40, color: context.al.textSecondary),
       );
     }
     return CachedNetworkImage(
@@ -1096,8 +1097,8 @@ class _BookListView extends ConsumerWidget {
         child: CircularProgressIndicator(strokeWidth: 2),
       ),
       errorWidget: (context, url, error) => Container(
-        color: Colors.grey.shade200,
-        child: Icon(Icons.broken_image, size: 32, color: Colors.grey.shade500),
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        child: Icon(Icons.broken_image, size: 32, color: context.al.textSecondary),
       ),
     );
   }
@@ -1123,8 +1124,8 @@ class _BookListView extends ConsumerWidget {
               onTap: () => Navigator.pop(ctx, 'edit'),
             ),
             ListTile(
-              leading: const Icon(Icons.delete_outline, color: Colors.red),
-              title: const Text('删除', style: TextStyle(color: Colors.red)),
+              leading: Icon(Icons.delete_outline, color: context.al.destructive),
+              title: Text('删除', style: TextStyle(color: context.al.destructive)),
               onTap: () => Navigator.pop(ctx, 'delete'),
             ),
           ],
@@ -1198,7 +1199,7 @@ class _BookListView extends ConsumerWidget {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('删除', style: TextStyle(color: Colors.red)),
+            child: Text('删除', style: TextStyle(color: context.al.destructive)),
           ),
         ],
       ),

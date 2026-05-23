@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/colors.dart';
 import '../../core/providers.dart';
 import '../../core/services/source_validation_service.dart';
 import '../../src/rust/api.dart' as rust_api;
@@ -146,7 +147,7 @@ class _SourcePageState extends ConsumerState<SourcePage> {
                   )
                 : Icon(
                     enabled ? Icons.check_circle : Icons.cancel,
-                    color: enabled ? Colors.green : Colors.grey,
+                    color: enabled ? context.al.success : context.al.textSecondary,
                   ),
             title: Text(source['name'] ?? '未知书源'),
             subtitle: Text(hasRules ? '${source['url'] ?? ''} (含规则)' : (source['url'] ?? '')),
@@ -318,7 +319,7 @@ class _SourcePageState extends ConsumerState<SourcePage> {
               final sid = source['id'];
               if (sid is String && sid.isNotEmpty) _deleteSource(sid);
             },
-            child: const Text('删除', style: TextStyle(color: Colors.red)),
+            child: Text('删除', style: TextStyle(color: context.al.destructive)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -361,10 +362,10 @@ class _SourcePageState extends ConsumerState<SourcePage> {
                       final issue = issues[i] as Map<String, dynamic>;
                       final severity = (issue['severity'] as String?) ?? '';
                       final Color color = severity == 'error'
-                          ? Colors.red
+                          ? context.al.destructive
                           : severity == 'warning'
-                              ? Colors.orange
-                              : Colors.blue;
+                              ? context.al.warning
+                              : Theme.of(context).colorScheme.primary;
                       final IconData icon = severity == 'error'
                           ? Icons.error
                           : severity == 'warning'
@@ -374,7 +375,7 @@ class _SourcePageState extends ConsumerState<SourcePage> {
                         leading: Icon(icon, color: color, size: 20),
                         title: Text((issue['field'] as String?) ?? '',
                             style: TextStyle(
-                                fontSize: 12, color: Colors.grey[600])),
+                                fontSize: 12, color: context.al.onSurface)),
                         subtitle: Text((issue['message'] as String?) ?? '',
                             style: const TextStyle(fontSize: 13)),
                         dense: true,
@@ -568,7 +569,7 @@ class _SourcePageState extends ConsumerState<SourcePage> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('删除', style: TextStyle(color: Colors.red)),
+            child: Text('删除', style: TextStyle(color: context.al.destructive)),
           ),
         ],
       ),
@@ -715,8 +716,8 @@ class _LiveTestDialogState extends ConsumerState<_LiveTestDialog> {
     if (_stages == null) {
       return ListTile(
         dense: true,
-        leading: const Icon(Icons.radio_button_unchecked,
-            color: Colors.grey, size: 20),
+        leading: Icon(Icons.radio_button_unchecked,
+            color: context.al.textSecondary, size: 20),
         title: Text(label),
         subtitle: const Text('待开始'),
       );
@@ -729,7 +730,7 @@ class _LiveTestDialogState extends ConsumerState<_LiveTestDialog> {
       return ListTile(
         dense: true,
         leading:
-            const Icon(Icons.help_outline, color: Colors.grey, size: 20),
+            Icon(Icons.help_outline, color: context.al.textSecondary, size: 20),
         title: Text(label),
         subtitle: const Text('未返回结果'),
       );
@@ -742,7 +743,7 @@ class _LiveTestDialogState extends ConsumerState<_LiveTestDialog> {
       dense: true,
       leading: Icon(
         ok ? Icons.check_circle : Icons.error,
-        color: ok ? Colors.green : Colors.red,
+        color: ok ? context.al.success : context.al.destructive,
         size: 20,
       ),
       title: Text(label),
@@ -797,7 +798,7 @@ class _LiveTestDialogState extends ConsumerState<_LiveTestDialog> {
                 padding: const EdgeInsets.only(top: 12),
                 child: Text(
                   _error!,
-                  style: const TextStyle(color: Colors.red),
+                  style: TextStyle(color: context.al.destructive),
                 ),
               ),
             const SizedBox(height: 8),
@@ -824,15 +825,15 @@ class _LiveTestDialogState extends ConsumerState<_LiveTestDialog> {
                             : Icons.info,
                     size: 18,
                     color: issue['severity'] == 'error'
-                        ? Colors.red
+                        ? context.al.destructive
                         : issue['severity'] == 'warning'
-                            ? Colors.orange
-                            : Colors.blue,
+                            ? context.al.warning
+                            : Theme.of(context).colorScheme.primary,
                   ),
                   title: Text(
                     (issue['field'] as String?) ?? '',
                     style: TextStyle(
-                        fontSize: 11, color: Colors.grey[600]),
+                        fontSize: 11, color: context.al.onSurface),
                   ),
                   subtitle: Text((issue['message'] as String?) ?? '',
                       style: const TextStyle(fontSize: 12)),

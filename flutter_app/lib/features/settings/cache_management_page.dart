@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/colors.dart';
 import '../../core/providers.dart';
 import '../../core/util/platform_int64.dart';
 import '../../src/rust/api.dart' as rust_api;
@@ -138,7 +139,7 @@ class _CacheManagementPageState extends ConsumerState<CacheManagementPage> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('确定清空', style: TextStyle(color: Colors.red)),
+            child: Text('确定清空', style: TextStyle(color: context.al.destructive)),
           ),
         ],
       ),
@@ -196,7 +197,7 @@ class _CacheManagementPageState extends ConsumerState<CacheManagementPage> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('确定清空', style: TextStyle(color: Colors.red)),
+            child: Text('确定清空', style: TextStyle(color: context.al.destructive)),
           ),
         ],
       ),
@@ -270,9 +271,9 @@ class _CacheManagementPageState extends ConsumerState<CacheManagementPage> {
                     alignment: Alignment.centerLeft,
                     child: FilledButton.tonal(
                       onPressed: _onClearAll,
-                      child: const Text(
+                      child: Text(
                         '全局清空',
-                        style: TextStyle(color: Colors.red),
+                        style: TextStyle(color: context.al.destructive),
                       ),
                     ),
                   ),
@@ -307,7 +308,7 @@ class _CacheManagementPageState extends ConsumerState<CacheManagementPage> {
             cached == 0 ? '暂无缓存' : '已缓存 $cached / $total 章',
           ),
           trailing: IconButton(
-            icon: Icon(Icons.delete_outline, color: Colors.red.shade400),
+            icon: Icon(Icons.delete_outline, color: context.al.destructive),
             tooltip: '清空本书缓存',
             onPressed: () => _onClearBook(r),
           ),
