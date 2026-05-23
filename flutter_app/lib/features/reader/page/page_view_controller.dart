@@ -226,14 +226,31 @@ class PageViewController extends ChangeNotifier {
     if (_pageSize == size) return;
     _pageSize = size;
     // pageSize 变化（e.g. 旋转屏 / 首次 layout）会让所有缓存的 pages
-    // 失效。clear 三章 pages（cur 保留 paragraphs 等下次 _measure，
-    // prev/next 整个清掉等外层 setNeighborChapter 重灌）。A.5。
+    // 失效。cur 保留 paragraphs 重新 measure；prev/next 也保留 paragraphs
+    // 重新 measure（而非清空——清空会导致 boundaryNextPage/boundaryPrevPage
+    // 在 setNeighborChapter 重新灌入之前返回 null，用户翻章时走无动画 fallback 路径）。
     if (_currentChapter != null) {
       _currentChapter = _currentChapter!.copyWith(pages: const []);
     }
-    _prevChapter = null;
-    _nextChapter = null;
+    _prevChapter = _remeasureChapter(_prevChapter);
+    _nextChapter = _remeasureChapter(_nextChapter);
     _measureCurrentChapterIfNeeded();
+  }
+
+  _ChapterModel? _remeasureChapter(_ChapterModel? chapter) {
+    if (chapter == null) return null;
+    if (chapter.paragraphs.isEmpty) return chapter.copyWith(pages: const []);
+    if (_pageSize.width <= 0 || _pageSize.height <= 0) {
+      return chapter.copyWith(pages: const []);
+    }
+    final measure = PageMeasure(
+      settings: _settings,
+      pageSize: _pageSize,
+      chapterTitle: chapter.title,
+    );
+    final result =
+        measure.measureChapter(chapter.chapterIndex, chapter.paragraphs);
+    return chapter.copyWith(pages: result.pages);
   }
 
   void updateSettings(ReaderSettings settings) {

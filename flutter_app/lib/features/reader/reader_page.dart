@@ -719,9 +719,6 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
           _isPageLayoutReady = false;
         }
       });
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) safeSetState(() => _isPageLayoutReady = true);
-      });
       // T1 (05-18): page-mode 启动恢复链路最后一步 — measure 完后通过
       // postFrameCallback 反算 saved char offset 对应页并 jumpToPage。
       // 只在首章加载时消费一次（_restoreProgress 把 offset 写进
@@ -730,6 +727,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       _consumeRestoreCharOffsetIfNeeded();
       await _ensureAdjacentChaptersReady(index, chapters);
       _measureAdjacentChapters(index);
+      if (mounted) safeSetState(() => _isPageLayoutReady = true);
       _fetchSourceInfo();
       _preCacheNextChapter(index, chapters);
       _preCachePrevChapter(index, chapters);
@@ -2252,12 +2250,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
             jumpToLast: isPrev);
         _isPageLayoutReady = false;
       });
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) safeSetState(() => _isPageLayoutReady = true);
-      });
-      _preloadAdjacentContent(targetIndex, chapters);
-      _preCachePrevChapter(targetIndex, chapters);
+      await _ensureAdjacentChaptersReady(targetIndex, chapters);
       _measureAdjacentChapters(targetIndex);
+      if (mounted) safeSetState(() => _isPageLayoutReady = true);
+      _preCacheNextChapter(targetIndex, chapters);
+      _preCachePrevChapter(targetIndex, chapters);
+      _fetchSourceInfo();
     } catch (e) {
       // Bug 2: TimeoutException → show retryable error; other errors → just
       // stop loading (keep old content visible rather than showing error).
