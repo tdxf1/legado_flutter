@@ -728,11 +728,11 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       // _restoreCharOffset），后续跨章 / 跳章 _restoreCharOffset 已是 null
       // 直接跳过。
       _consumeRestoreCharOffsetIfNeeded();
-      _preCacheNextChapter(index, chapters);
-      _preCachePrevChapter(index, chapters);
-      _preloadAdjacentContent(index, chapters);
+      await _ensureAdjacentChaptersReady(index, chapters);
       _measureAdjacentChapters(index);
       _fetchSourceInfo();
+      _preCacheNextChapter(index, chapters);
+      _preCachePrevChapter(index, chapters);
     } catch (e) {
       if (!mounted || requestId != _chapterRequestId) return;
       // Bug 2: TimeoutException → show retryable error message
@@ -1511,6 +1511,38 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     }
   }
 
+  /// 确保邻章内容已加载到内存中，使 [_measureAdjacentChapters] 能拿到
+  /// [ChapterWindow] 的 content 字段，从而让 [PageDelegate] 跨章动画期间
+  /// 能渲染邻章首/末页 picture，避免 fallback 到无动画的
+  /// [_onPageChapterBoundary] → [_loadPageModeChapter] 路径。
+  ///
+  /// 与 [_preloadAdjacentContent] 的区别：本方法 **await** 内容加载完成，
+  /// 在 [_openChapter] 内阻塞到邻章内容就绪后才释放 [_isPageLayoutReady]，
+  /// 保证用户翻页时 `boundaryNextPage` / `boundaryPrevPage` 已就位。
+  Future<void> _ensureAdjacentChaptersReady(
+      int index, List<Map<String, dynamic>> chapters) async {
+    final nextIdx = index + 1;
+    final prevIdx = index - 1;
+    final futures = <Future<void>>[];
+    if (nextIdx < chapters.length) {
+      final nextContent = chapters[nextIdx]['content'] as String?;
+      if (nextContent == null || nextContent.isEmpty) {
+        futures.add(_loadChapterContent(nextIdx, chapters).then((c) {
+          if (c.isNotEmpty) chapters[nextIdx]['content'] = c;
+        }));
+      }
+    }
+    if (prevIdx >= 0) {
+      final prevContent = chapters[prevIdx]['content'] as String?;
+      if (prevContent == null || prevContent.isEmpty) {
+        futures.add(_loadChapterContent(prevIdx, chapters).then((c) {
+          if (c.isNotEmpty) chapters[prevIdx]['content'] = c;
+        }));
+      }
+    }
+    await Future.wait(futures);
+  }
+
   /// Subtask B — 把已预加载的邻章字符串内容灌进 [PageViewController]，让
   /// PageDelegate 跨章动画期间能渲染邻章首/末页 picture。
   ///
@@ -2162,7 +2194,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     return Stack(
       children: [
         AnimatedOpacity(
-          opacity: canShow && _pageViewController != null ? 1.0 : 0.0,
+          opacity: canShow && _pageViewController != null && _isPageLayoutReady ? 1.0 : 0.0,
           duration: const Duration(milliseconds: 200),
           child: _pageViewController != null
               ? PageViewWidget(
@@ -2175,32 +2207,17 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
                 )
               : const SizedBox.shrink(),
         ),
-        // Loading indicator — small text-only, positioned at first line.
-        // Shows when initially loading content AND when content is loaded but
-        // page layout isn't ready yet (rendering in progress).
-        AnimatedOpacity(
-          opacity: (_chapterContent.isEmpty && _isLoadingContent) ||
-                  (!_isPageLayoutReady && _chapterContent.isNotEmpty)
-              ? 1.0
-              : 0.0,
-          duration: const Duration(milliseconds: 200),
-          child: Align(
-            alignment: Alignment.topLeft,
-            child: Padding(
-              padding: EdgeInsets.all(settings.horizontalPadding),
-              child: Text(
-                '加载中...',
-                style: TextStyle(
-                  fontSize: settings.fontSize,
-                  color: Color(settings.effectiveTextColor).withValues(alpha: 0.5),
-                ),
+        if (!_isPageLayoutReady && _chapterContent.isNotEmpty)
+          Center(
+            child: Text(
+              '加载中...',
+              style: TextStyle(
+                fontSize: settings.fontSize,
+                color: Color(settings.effectiveTextColor).withValues(alpha: 0.5),
+                decoration: TextDecoration.none,
               ),
             ),
           ),
-        ),
-        // No-controller fallback
-        if (_pageViewController == null && _chapterContent.isEmpty && !_isLoadingContent)
-          const Center(child: Text('加载中...')),
       ],
     );
   }
