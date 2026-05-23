@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>书架 - Material Design 3</title>
+    <!-- 引入 Material Symbols 图标库 (Google Fonts) -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <style>
+        :root {
+            /* MD3 配色方案 (柔性绿色系，护眼且现代) */
+            --md-primary: #006a4d;
+            --md-on-primary: #ffffff;
+            --md-primary-container: #8af5cd;
+            --md-surface: #fbfcf8;
+            --md-surface-variant: #dae5da;
+            --md-on-surface: #191c1a;
+            --md-on-surface-variant: #3f4942;
+            --md-outline: #6f7971;
+            --md-shadow: rgba(0, 0, 0, 0.08);
+            --md-elevation-level-1: 0px 1px 2px var(--md-shadow), 0px 1px 3px 0px var(--md-shadow);
+            
+            --font-family: "Roboto", "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: var(--font-family);
+            background-color: #e6e9e6;
+            display: flex;
+            justify-content: center;
+            min-height: 100vh;
+            color: var(--md-on-surface);
+        }
+
+        /* 模拟手机屏幕容器 */
+        .app-container {
+            width: 100%;
+            max-width: 400px;
+            background-color: var(--md-surface);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 0 20px rgba(0,0,0,0.05);
+        }
+
+        /* ---------------- 顶部应用栏 (Top App Bar) ---------------- */
+        .top-bar {
+            background-color: var(--md-surface);
+            padding-top: 12px;
+            flex-shrink: 0;
+        }
+
+        .top-bar-actions {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            padding: 0 16px 8px 16px;
+            gap: 8px;
+        }
+
+        .icon-btn {
+            border: none;
+            background: transparent;
+            color: var(--md-on-surface-variant);
+            width: 48px;
+            height: 48px;
+            border-radius: 16px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .icon-btn:hover {
+            background-color: rgba(0, 106, 77, 0.08);
+        }
+
+        .icon-btn .material-symbols-outlined {
+            font-size: 24px;
+        }
+
+        /* 顶部标签页 (Segmented Tabs) */
+        .tabs {
+            display: flex;
+            padding: 0 16px;
+            position: relative;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 10px 0;
+            text-align: center;
+            font-weight: 500;
+            font-size: 14px;
+            color: var(--md-on-surface-variant);
+            cursor: pointer;
+            position: relative;
+            transition: color 0.3s;
+        }
+
+        .tab.active {
+            color: var(--md-primary);
+        }
+
+        .tab-indicator {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 50%; 
+            height: 3px;
+            background-color: var(--md-primary);
+            border-radius: 3px 3px 0 0;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            /* 默认选中第一个，后面用 js 控制，这里默认放左边模拟 */
+            transform: translateX(0%);
+        }
+
+        /* ---------------- 书籍网格 (Grid Layout) ---------------- */
+        .scroll-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            padding-bottom: 80px; /* 给底部导航栏留空间 */
+        }
+
+        /* 隐藏滚动条 (可选) */
+        .scroll-content::-webkit-scrollbar {
+            width: 0px;
+            background: transparent;
+        }
+
+        .book-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+        }
+
+        .book-item {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            cursor: pointer;
+        }
+
+        .book-cover-wrapper {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 2 / 3; /* 保持书籍比例 */
+            border-radius: 12px;
+            overflow: hidden;
+            background-color: var(--md-surface-variant);
+            box-shadow: var(--md-elevation-level-1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .book-cover-wrapper:active {
+            transform: scale(0.96);
+        }
+
+        /* 模拟书籍封面 (纯CSS占位) */
+        .cover-placeholder {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 8px;
+            color: rgba(255, 255, 255, 0.9);
+            font-weight: bold;
+            text-align: center;
+            font-size: 14px;
+            line-height: 1.3;
+            position: relative;
+        }
+        
+        /* 徽章 (Badge) - 阅读进度 */
+        .progress-badge {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            background-color: #ffffff;
+            color: var(--md-on-surface);
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 10px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+            min-width: 20px;
+            text-align: center;
+        }
+
+        .book-title {
+            font-size: 12px;
+            line-height: 1.4;
+            color: var(--md-on-surface);
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            height: 34px; /* 12px * 1.4 * 2 = 33.6px */
+        }
+
+        /* ---------------- 底部导航栏 (Bottom Navigation) ---------------- */
+        .bottom-nav {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background-color: var(--md-surface);
+            height: 64px;
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            border-top: 1px solid rgba(0, 0, 0, 0.06);
+            padding-bottom: env(safe-area-inset-bottom);
+            z-index: 10;
+        }
+
+        .nav-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            color: var(--md-on-surface-variant);
+            transition: all 0.2s;
+            position: relative;
+        }
+
+        .nav-item .material-symbols-outlined {
+            font-size: 26px;
+        }
+
+        .nav-item.active {
+            color: var(--md-primary);
+        }
+
+        .nav-indicator {
+            position: absolute;
+            bottom: 0;
+            width: 16px;
+            height: 3px;
+            background-color: var(--md-primary);
+            border-radius: 3px;
+            display: none;
+        }
+
+        .nav-item.active .nav-indicator {
+            display: block;
+        }
+
+        /* 特殊的 FAB (悬浮按钮) 样式优化 - 虽然原图是普通按钮，这里可以在第二个位置加一点强调，按照MD3理念加个圆形背景 */
+        .nav-item.center-btn {
+            position: relative;
+            top: -12px;
+            width: 48px;
+            height: 48px;
+            background-color: var(--md-primary);
+            color: var(--md-on-primary);
+            border-radius: 16px;
+            box-shadow: 0 4px 8px rgba(0, 106, 77, 0.3);
+        }
+        .nav-item.center-btn:hover {
+            box-shadow: 0 6px 12px rgba(0, 106, 77, 0.4);
+        }
+        .nav-item.center-btn.active {
+            color: var(--md-on-primary);
+        }
+        .nav-item.center-btn .nav-indicator {
+            display: none; /* 悬浮按钮不需要底部下划线 */
+        }
+
+    </style>
+</head>
+<body>
+
+<div class="app-container">
+    
+    <!-- 顶部导航区域 -->
+    <header class="top-bar">
+        <div class="top-bar-actions">
+            <button class="icon-btn" aria-label="搜索">
+                <span class="material-symbols-outlined">search</span>
+            </button>
+            <button class="icon-btn" aria-label="更多选项">
+                <span class="material-symbols-outlined">more_vert</span>
+            </button>
+        </div>
+
+        <div class="tabs">
+            <div class="tab active" onclick="selectTab(this, '全部')">全部</div>
+            <div class="tab" onclick="selectTab(this, '本地')">本地</div>
+            <div class="tab-indicator" id="tabIndicator"></div>
+        </div>
+    </header>
+
+    <!-- 书架主要内容 -->
+    <div class="scroll-content">
+        <div class="book-grid" id="bookGrid">
+            <!-- 书籍项目将通过 JS 动态插入，以保持代码整洁 -->
+        </div>
+    </div>
+
+    <!-- 底部导航栏 -->
+    <nav class="bottom-nav">
+        <button class="nav-item active">
+            <span class="material-symbols-outlined">menu_book</span>
+            <div class="nav-indicator"></div>
+        </button>
+        
+        <button class="nav-item center-btn">
+            <span class="material-symbols-outlined">explore</span>
+        </button>
+
+        <button class="nav-item">
+            <span class="material-symbols-outlined">add_circle</span>
+            <div class="nav-indicator"></div>
+        </button>
+
+        <button class="nav-item">
+            <span class="material-symbols-outlined">person</span>
+            <div class="nav-indicator"></div>
+        </button>
+    </nav>
+</div>
+
+<script>
+    // 模拟原图数据 (封面用不同颜色和装饰代替图片，更轻量且符合设计)
+    const booksData = [
+        { title: "和巫妖同僚的学术聚会", color: "#5c6b73", textColor: "#ffffff", progress: 222 },
+        { title: "重生后，我选择默默修仙", color: "#2d3e50", textColor: "#ffffff", progress: 406 },
+        { title: "系统很抽象，还好我也是", color: "#f5f7f8", textColor: "#191c1a", progress: 614 },
+        { title: "食仙主", color: "#1e3b4d", textColor: "#e6f2f5", progress: 153 },
+        { title: "下班，然后变成魔法少女", color: "#9a8c98", textColor: "#ffffff", progress: 377 },
+        { title: "哥布林重度依赖", color: "#c9b1a3", textColor: "#3e2723", progress: 34 },
+        { title: "山山有药", color: "#4a7c59", textColor: "#ffffff", progress: 511 },
+        { title: "红尘尸仙", color: "#a4243b", textColor: "#fcf0c2", progress: 456 },
+        { title: "以一龙之力打穿整个世界！", color: "#5c3a21", textColor: "#f3d68a", progress: 13 },
+        { title: "末世第一狠人", color: "#2b2d42", textColor: "#8d99ae", progress: 40 },
+        { title: "这个地下城长蘑菇", color: "#004643", textColor: "#abd1c6", progress: 99 },
+        { title: "我不是哥布林杀手", color: "#353b48", textColor: "#dcdde1", progress: 69 }
+    ];
+
+    const gridContainer = document.getElementById('bookGrid');
+
+    // 渲染网格
+    booksData.forEach(book => {
+        const item = document.createElement('div');
+        item.className = 'book-item';
+
+        // 为了营造封面感，生成好看的抽象图
+        const angle = Math.floor(Math.random() * 360);
+        const gradient = `linear-gradient(${angle}deg, ${book.color}, ${book.color}dd)`;
+
+        item.innerHTML = `
+            <div class="book-cover-wrapper">
+                <div class="cover-placeholder" style="background: ${gradient}; color: ${book.textColor};">
+                    <!-- 模拟封面文字或装饰 -->
+                    <span style="font-size: 20px; position: absolute; opacity: 0.3; top: 10px; left: 10px;">✦</span>
+                    <span style="font-family: 'Times New Roman', serif; letter-spacing: 2px; margin-bottom: 8px;">书</span>
+                    <span>${book.title.substring(0, 4)}</span>
+                    <span class="progress-badge">${book.progress}</span>
+                </div>
+            </div>
+            <div class="book-title">${book.title}</div>
+        `;
+        gridContainer.appendChild(item);
+    });
+
+    // 简单的 Tab 切换逻辑 (视觉效果)
+    function selectTab(element, tabName) {
+        // 移除所有的 active 类
+        document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+        // 给当前点击的元素添加 active
+        element.classList.add('active');
+
+        // 移动下方的指示线
+        const indicator = document.getElementById('tabIndicator');
+        const rect = element.getBoundingClientRect();
+        const containerRect = element.parentElement.getBoundingClientRect();
+        
+        // 计算相对偏移
+        const leftOffset = rect.left - containerRect.left;
+        indicator.style.transform = `translateX(${leftOffset}px)`;
+        indicator.style.width = `${rect.width}px`;
+    }
+
+    // 初始化指示线位置
+    window.onload = function() {
+        const firstTab = document.querySelector('.tab.active');
+        if(firstTab) {
+            const indicator = document.getElementById('tabIndicator');
+            const rect = firstTab.getBoundingClientRect();
+            const containerRect = firstTab.parentElement.getBoundingClientRect();
+            const leftOffset = rect.left - containerRect.left;
+            indicator.style.width = `${rect.width}px`;
+            indicator.style.transform = `translateX(${leftOffset}px)`;
+        }
+    }
+
+</script>
+
+</body>
+</html>

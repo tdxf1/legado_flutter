@@ -260,8 +260,8 @@ class _AppShell extends ConsumerWidget {
         },
         destinations: [
           const NavigationDestination(
-            icon: Icon(Icons.library_books_outlined),
-            selectedIcon: Icon(Icons.library_books),
+            icon: Icon(Icons.menu_book_outlined),
+            selectedIcon: Icon(Icons.menu_book),
             label: '书架',
           ),
           if (showDiscovery)
@@ -272,8 +272,8 @@ class _AppShell extends ConsumerWidget {
             ),
           if (showRss)
             const NavigationDestination(
-              icon: Icon(Icons.rss_feed_outlined),
-              selectedIcon: Icon(Icons.rss_feed),
+              icon: Icon(Icons.add_circle_outline),
+              selectedIcon: Icon(Icons.add_circle),
               label: '订阅',
             ),
           const NavigationDestination(

@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>搜索 - Material Design 3</title>
+    <!-- 引入 Material Symbols 图标库 -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <style>
+        :root {
+            /* MD3 配色 (与之前保持一致) */
+            --md-primary: #006a4d;
+            --md-on-primary: #ffffff;
+            --md-surface: #fbfcf8;
+            --md-surface-container: #f2f5f1;
+            --md-surface-variant: #dae5da;
+            --md-on-surface: #191c1a;
+            --md-on-surface-variant: #3f4942;
+            --md-outline: #6f7971;
+            --md-shadow: rgba(0, 0, 0, 0.04);
+            
+            --font-family: "Roboto", "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: var(--font-family);
+            background-color: #e6e9e6;
+            display: flex;
+            justify-content: center;
+            min-height: 100vh;
+            color: var(--md-on-surface);
+        }
+
+        /* 模拟手机容器 */
+        .app-container {
+            width: 100%;
+            max-width: 400px;
+            background-color: var(--md-surface);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 0 20px rgba(0,0,0,0.05);
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* ---------------- 顶部搜索栏 (Search Bar) ---------------- */
+        .search-header {
+            display: flex;
+            align-items: center;
+            padding: 12px 16px;
+            gap: 8px;
+            background-color: var(--md-surface);
+            flex-shrink: 0;
+            z-index: 10;
+        }
+
+        .search-bar-wrapper {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            background-color: var(--md-surface-container);
+            border-radius: 28px;
+            padding: 0 16px;
+            height: 48px;
+            transition: box-shadow 0.2s;
+        }
+
+        .search-bar-wrapper:focus-within {
+            background-color: var(--md-surface);
+            box-shadow: 0 0 0 2px var(--md-primary);
+        }
+
+        .search-icon {
+            color: var(--md-on-surface-variant);
+            margin-right: 10px;
+            font-size: 20px;
+        }
+
+        .search-input {
+            border: none;
+            background: transparent;
+            flex: 1;
+            font-size: 16px;
+            color: var(--md-on-surface);
+            outline: none;
+            height: 100%;
+            padding: 0;
+        }
+
+        .search-input::placeholder {
+            color: var(--md-on-surface-variant);
+            opacity: 0.6;
+        }
+
+        .search-actions {
+            display: flex;
+            gap: 4px;
+            margin-left: 4px;
+        }
+
+        .icon-btn-sm {
+            background: transparent;
+            border: none;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--md-on-surface-variant);
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .icon-btn-sm:hover {
+            background-color: rgba(0, 0, 0, 0.05);
+        }
+        
+        .icon-btn-sm .material-symbols-outlined {
+            font-size: 20px;
+        }
+
+        .header-action-btn {
+            background: transparent;
+            border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--md-on-surface-variant);
+            cursor: pointer;
+        }
+
+        .header-action-btn:hover {
+            background-color: rgba(0, 106, 77, 0.08);
+        }
+
+        /* ---------------- 内容区域 (历史记录) ---------------- */
+        .content-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0 16px 80px 16px;
+        }
+
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 0 12px 0;
+        }
+
+        .history-title {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--md-on-surface-variant);
+        }
+
+        .clear-btn {
+            background: transparent;
+            border: none;
+            font-size: 13px;
+            color: var(--md-primary);
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 8px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .clear-btn:hover {
+            background-color: rgba(0, 106, 77, 0.08);
+        }
+
+        /* 标签网格 */
+        .tags-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            padding-bottom: 20px;
+        }
+
+        .tag-chip {
+            background-color: var(--md-surface-container);
+            color: var(--md-on-surface);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+            border: 1px solid transparent;
+            user-select: none;
+        }
+
+        .tag-chip:active {
+            transform: scale(0.95);
+        }
+
+        .tag-chip:hover {
+            background-color: #e0e5e0;
+        }
+
+        .tag-chip:focus {
+            outline: 2px solid var(--md-primary);
+            outline-offset: 2px;
+        }
+
+        /* ---------------- 底部 (留白) ---------------- */
+        .bottom-spacer {
+            height: 60px;
+        }
+
+    </style>
+</head>
+<body>
+
+<div class="app-container">
+    
+    <!-- 顶部搜索栏 -->
+    <div class="search-header">
+        <button class="header-action-btn" onclick="goBack()" aria-label="返回">
+            <span class="material-symbols-outlined">arrow_back</span>
+        </button>
+        
+        <div class="search-bar-wrapper">
+            <span class="material-symbols-outlined search-icon">search</span>
+            <input type="text" class="search-input" id="searchInput" placeholder="搜索书名、作者" autofocus>
+            <div class="search-actions">
+                <button class="icon-btn-sm" onclick="moveToNext()" aria-label="下一个">
+                    <span class="material-symbols-outlined">arrow_forward_ios</span>
+                </button>
+            </div>
+        </div>
+
+        <button class="header-action-btn" onclick="openMenu()" aria-label="菜单">
+            <span class="material-symbols-outlined">more_vert</span>
+        </button>
+    </div>
+
+    <!-- 搜索历史 -->
+    <div class="content-area" id="historyContainer">
+        <div class="history-header">
+            <span class="history-title">搜索历史</span>
+            <button class="clear-btn" onclick="clearHistory()">清除</button>
+        </div>
+        
+        <div class="tags-grid" id="tagsGrid">
+            <!-- 标签将动态渲染 -->
+        </div>
+    </div>
+
+</div>
+
+<script>
+    // 模拟截图中的标签数据
+    const historyTags = [
+        "遮天", "我的", "和巫妖同僚的学术", "诛仙",
+        "这个地下城长蘑菇了", "我不是哥布林杀手",
+        "从魔法少女开始独断万古", "吞噬星空2",
+        "玄鉴仙族", "阿勒泰恐怖专", "凡人修仙传",
+        "阿勒泰恐怖专线", "捞尸人", "少女，你来组成头部",
+        "以一龙之力打穿整个世界", "鸦仙人", "国民法医",
+        "赘婿", "山山有药", "丧尸专列",
+        "下班，然后变成魔法少女", "下班，然后变成魔法少女", // 重复项模拟
+        "下班然后变魔法少女", "公主别怕骑士来了",
+        "哥布林重度依赖", "没有规矩只有方圆",
+        "好似一滩烂泥", "我的青春，好似一滩烂泥",
+        "大道朝天", "系统很抽象", "系统",
+        "星际争霸:头号玩家的书", "谁还不是个修行者了",
+        "奥特曼，你真的是奥特曼？",
+        "重生后我选择默默修仙", "重生后，我选择默默修仙",
+        "突然成仙了怎么办", "都市修仙五千年",
+        "重生之弑仙灭神", "校花的贴身高手",
+        "回到过去变成猫", "隐杀", "末法天地长生仙",
+        "恋爱净化协议", "红尘尸仙", "剑宗外门", "蓝龙",
+        "食仙主", "穿越成萌妹的我", "刚刚准备高考"
+    ];
+
+    const tagsGrid = document.getElementById('tagsGrid');
+    const searchInput = document.getElementById('searchInput');
+
+    // 渲染标签
+    function renderTags(tags) {
+        tagsGrid.innerHTML = '';
+        tags.forEach(tag => {
+            const chip = document.createElement('div');
+            chip.className = 'tag-chip';
+            chip.textContent = tag;
+            chip.setAttribute('tabindex', '0'); // 可聚焦
+            chip.addEventListener('click', () => {
+                searchInput.value = tag;
+                searchInput.focus();
+                console.log(`搜索: ${tag}`);
+            });
+            tagsGrid.appendChild(chip);
+        });
+    }
+
+    // 清除历史记录
+    function clearHistory() {
+        if (confirm('确定要清除所有搜索历史吗？')) {
+            tagsGrid.innerHTML = '';
+            // 可以添加一个占位提示
+            const emptyMsg = document.createElement('div');
+            emptyMsg.style.cssText = 'width: 100%; text-align: center; padding: 40px 0; color: var(--md-on-surface-variant); font-size: 14px;';
+            emptyMsg.textContent = '暂无搜索历史';
+            tagsGrid.appendChild(emptyMsg);
+        }
+    }
+
+    // 返回按钮逻辑 (模拟)
+    function goBack() {
+        alert('返回上一页');
+    }
+
+    // 下一个按钮逻辑 (模拟)
+    function moveToNext() {
+        alert('移动到下一个结果');
+    }
+
+    // 菜单按钮逻辑 (模拟)
+    function openMenu() {
+        alert('打开菜单');
+    }
+
+    // 初始化
+    renderTags(historyTags);
+
+</script>
+
+</body>
+</html>

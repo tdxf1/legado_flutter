@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>阅读器 - 点击展开</title>
+    <!-- 引入 Material Symbols 图标库 -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <style>
+        :root {
+            --md-primary: #006a4d;
+            --md-on-primary: #ffffff;
+            --font-family: "Roboto", "PingFang SC", "Noto Serif SC", "Songti SC", serif;
+            --reading-font-size: 18px;
+            --reading-line-height: 1.9;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: var(--font-family);
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            min-height: 100vh;
+        }
+
+        .app-container {
+            width: 100%;
+            max-width: 400px;
+            height: 100vh;
+            position: relative;
+            overflow: hidden;
+            background-color: #000;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* --- 阅读正文层 --- */
+        .reader-content {
+            flex: 1;
+            padding: 20px 20px 60px 20px;
+            overflow-y: auto;
+            position: relative;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .reader-content::-webkit-scrollbar { width: 0px; }
+
+        .chapter-title {
+            font-size: 22px;
+            font-weight: bold;
+            color: #ffffff;
+            margin-bottom: 20px;
+        }
+
+        .reader-text {
+            font-size: var(--reading-font-size);
+            line-height: var(--reading-line-height);
+            color: #d0d0d0;
+            text-align: justify;
+        }
+
+        .reader-text p {
+            text-indent: 2em;
+            margin-bottom: 20px;
+        }
+
+        /* 章节顶部提示（图1 顶部灰色小字） */
+        .top-chapter-hint {
+            position: absolute;
+            top: 12px;
+            left: 20px;
+            font-size: 14px;
+            color: #555555;
+            pointer-events: none;
+            z-index: 2;
+        }
+
+        /* 底部信息（图1 底部两行字） */
+        .bottom-info {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 12px 20px 20px 20px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #888888;
+            background: linear-gradient(to top, rgba(0,0,0,0.9) 0%, transparent 100%);
+            pointer-events: none;
+            z-index: 2;
+        }
+
+        /* ===== 控制区域（默认隐藏） ===== */
+        .control-area {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            background: rgba(0,0,0,0.0);
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.25s ease, visibility 0.25s, background 0.25s;
+            pointer-events: none;
+        }
+
+        .control-area.active {
+            opacity: 1;
+            visibility: visible;
+            background: rgba(0,0,0,0.85);
+            backdrop-filter: blur(6px);
+            pointer-events: auto;
+        }
+
+        /* 顶部栏（图2顶部） */
+        .control-header {
+            display: flex;
+            flex-direction: column;
+            padding: 12px 16px 0 16px;
+            gap: 8px;
+        }
+
+        .header-row-1 {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header-left .title-text {
+            font-size: 16px;
+            font-weight: 500;
+            color: #ffffff;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .ctrl-btn {
+            background: transparent;
+            border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ffffff;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .ctrl-btn:hover { background: rgba(255,255,255,0.1); }
+        .ctrl-btn .material-symbols-outlined {
+            font-size: 24px;
+            font-weight: 300;
+        }
+
+        /* 元信息行（图2顶部第二行） */
+        .header-row-2 {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 4px;
+        }
+
+        .meta-left {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .meta-chapter {
+            font-size: 13px;
+            color: #bbbbbb;
+        }
+
+        .meta-url {
+            font-size: 10px;
+            color: #888888;
+        }
+
+        .source-badge {
+            background-color: #8888bb;
+            color: white;
+            font-size: 11px;
+            padding: 2px 10px;
+            border-radius: 8px;
+            font-weight: 500;
+        }
+
+        /* 悬浮按钮（图2中间） */
+        .fab-center {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            padding: 0 16px;
+        }
+
+        .fab-center .ctrl-btn {
+            width: 48px;
+            height: 48px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 50%;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+
+        .fab-center .ctrl-btn:hover { background: rgba(255,255,255,0.2); }
+
+        /* 底部控制（图2底部） */
+        .control-footer {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 0 16px 16px 16px;
+        }
+
+        .progress-control {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .progress-label {
+            font-size: 12px;
+            color: #aaaaaa;
+            flex-shrink: 0;
+        }
+
+        .progress-track {
+            flex: 1;
+            height: 3px;
+            background-color: #333333;
+            border-radius: 4px;
+            position: relative;
+        }
+
+        .progress-fill {
+            width: 35%;
+            height: 100%;
+            background-color: var(--md-primary);
+            border-radius: 4px;
+        }
+
+        .progress-thumb {
+            width: 14px;
+            height: 14px;
+            background-color: var(--md-primary);
+            border-radius: 50%;
+            position: absolute;
+            top: 50%;
+            left: 35%;
+            transform: translate(-50%, -50%);
+        }
+
+        .bottom-nav {
+            display: flex;
+            justify-content: space-around;
+        }
+
+        .bottom-nav .ctrl-btn {
+            flex-direction: column;
+            gap: 2px;
+            width: auto;
+            height: auto;
+            color: #bbbbbb;
+            font-size: 10px;
+            padding: 4px 12px;
+        }
+
+        .bottom-nav .ctrl-btn:hover { color: var(--md-primary); }
+        .bottom-nav .ctrl-btn .material-symbols-outlined {
+            font-size: 24px;
+            font-weight: 300;
+        }
+
+        /* 点击提示 */
+        .tap-hint {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255,255,255,0.08);
+            color: rgba(255,255,255,0.5);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            z-index: 0;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+        }
+        .tap-hint.show { opacity: 1; }
+
+    </style>
+</head>
+<body>
+
+<div class="app-container">
+
+    <!-- 图1：纯净阅读模式 -->
+    <div class="reader-content" id="clickTrigger">
+        <!-- 顶部章节提示 -->
+        <div class="top-chapter-hint">第66章 数学题里也有爱情</div>
+
+        <div class="chapter-title">第66章 数学题里也有爱情</div>
+        <div class="reader-text">
+            <p>中午。</p>
+            <p>林立一瘸一拐的回到教室，感受到了蛋蛋的忧伤。</p>
+            <p>常在河边走，哪有不湿鞋。</p>
+            <p>白不凡中午告诉自己说他们寝室有好东西，结果自己一过去，就在众目睽睽之下，被迫和门梁发生了关系。</p>
+            <p>光天化日，朗朗乾坤，没有天理。</p>
+            <p>这是一场由白不凡和周宝为主导的纯恶意陷阱。</p>
+            <p>这群见不得别人好的阴沟里的鼠鼠们，说自己这段时间太嚣张了，得打压一下自己的气焰。</p>
+            <p>自己不就最近坑了他们、造谣了他们、打了他们吗？</p>
+        </div>
+
+        <!-- 底部信息 -->
+        <div class="bottom-info">
+            <span>系统很抽象，还好我也是</span>
+            <span>1/14 9.6%</span>
+        </div>
+    </div>
+
+    <!-- 图2：控制面板（默认隐藏） -->
+    <div class="control-area" id="controlArea">
+        <!-- 顶部 -->
+        <div class="control-header">
+            <div class="header-row-1">
+                <div class="header-left">
+                    <button class="ctrl-btn"><span class="material-symbols-outlined">arrow_back</span></button>
+                    <span class="title-text">系统很抽...</span>
+                </div>
+                <div class="header-right">
+                    <button class="ctrl-btn"><span class="material-symbols-outlined">swap_horiz</span></button>
+                    <button class="ctrl-btn"><span class="material-symbols-outlined">refresh</span></button>
+                    <button class="ctrl-btn"><span class="material-symbols-outlined">download</span></button>
+                    <button class="ctrl-btn" id="closeBtn"><span class="material-symbols-outlined">more_vert</span></button>
+                </div>
+            </div>
+            <div class="header-row-2">
+                <div class="meta-left">
+                    <span class="meta-chapter">第66章 数学题里也有爱情</span>
+                    <span class="meta-url">https://www.sudugu.org/1680/461999.html</span>
+                </div>
+                <span class="source-badge">速读谷</span>
+            </div>
+        </div>
+
+        <!-- 中间悬浮按钮 -->
+        <div class="fab-center">
+            <button class="ctrl-btn"><span class="material-symbols-outlined">search</span></button>
+            <button class="ctrl-btn"><span class="material-symbols-outlined">autorenew</span></button>
+            <button class="ctrl-btn"><span class="material-symbols-outlined">settings</span></button>
+        </div>
+
+        <!-- 底部控制 -->
+        <div class="control-footer">
+            <div class="progress-control">
+                <span class="progress-label">上一章</span>
+                <div class="progress-track">
+                    <div class="progress-fill"></div>
+                    <div class="progress-thumb"></div>
+                </div>
+                <span class="progress-label">下一章</span>
+            </div>
+            <div class="bottom-nav">
+                <button class="ctrl-btn">
+                    <span class="material-symbols-outlined">menu</span>
+                    <span>目录</span>
+                </button>
+                <button class="ctrl-btn">
+                    <span class="material-symbols-outlined">headphones</span>
+                    <span>朗读</span>
+                </button>
+                <button class="ctrl-btn">
+                    <span class="material-symbols-outlined">format_size</span>
+                    <span>界面</span>
+                </button>
+                <button class="ctrl-btn">
+                    <span class="material-symbols-outlined">settings</span>
+                    <span>设置</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 点击提示 -->
+    <div class="tap-hint" id="hintText">点击屏幕唤出控制</div>
+
+</div>
+
+<script>
+    const clickTrigger = document.getElementById('clickTrigger');
+    const controlArea = document.getElementById('controlArea');
+    const closeBtn = document.getElementById('closeBtn');
+    const hintText = document.getElementById('hintText');
+
+    function toggleControls() {
+        if (controlArea.classList.contains('active')) {
+            controlArea.classList.remove('active');
+        } else {
+            controlArea.classList.add('active');
+        }
+    }
+
+    // 点击正文触发
+    clickTrigger.addEventListener('click', toggleControls);
+
+    // 点击右上角关闭（实际上是展开菜单，但这里做个关闭控制面板的逻辑）
+    closeBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        // 如果是关闭控制面板：
+        controlArea.classList.remove('active');
+        // 如果希望点是菜单展开，可以替换成 alert('展开菜单');
+    });
+
+    // 点击其他按钮不关闭面板（仅作演示）
+    document.querySelectorAll('.ctrl-btn:not(#closeBtn)').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            // 可以放具体功能
+        });
+    });
+
+    // 提示
+    setTimeout(() => {
+        hintText.classList.add('show');
+        setTimeout(() => {
+            hintText.classList.remove('show');
+        }, 2000);
+    }, 600);
+
+</script>
+
+</body>
+</html>

@@ -413,6 +413,14 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
           ],
           bottom: TabBar(
             isScrollable: true,
+            indicatorSize: TabBarIndicatorSize.tab,
+            indicator: UnderlineTabIndicator(
+              borderSide: BorderSide(
+                width: 3,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              borderRadius: BorderRadius.circular(3),
+            ),
             tabs: [for (final t in tabSpec) Tab(text: t.label)],
           ),
         ),
@@ -964,32 +972,212 @@ class _BookListView extends ConsumerWidget {
   Widget _buildListView(
       BuildContext context, WidgetRef ref, List<Map<String, dynamic>> books) {
     return ListView.builder(
-      padding: const EdgeInsets.all(8),
-      itemExtent: 72,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       itemCount: books.length,
       itemBuilder: (context, index) {
         final book = books[index];
-        return GestureDetector(
-          onLongPress: () => _showBookActionSheet(context, ref, book),
-          child: Card(
-            child: ListTile(
-              leading: _buildCover(context, book),
-              title: Text(book['name'] ?? '未知书名'),
-              subtitle: Text(
-                _formatBookSubtitle(book),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing: Text('${book['chapter_count'] ?? 0}章'),
-              onTap: () => context.push(
-                Uri(path: '/reader', queryParameters: {
-                  'bookId': book['id'] as String? ?? '',
-                }).toString(),
-              ),
+        return _buildListTileItem(context, ref, book);
+      },
+    );
+  }
+
+  /// Redesigned list-tile item matching the reference design:
+  /// - 80×120 cover (rounded 12px, gradient placeholder)
+  /// - Title 16px/w500/max 2 lines
+  /// - Author row with person icon
+  /// - Chapter row with radio_button_unchecked icon
+  /// - Right-aligned progress badge chip
+  /// - Subtle bottom border
+  Widget _buildListTileItem(
+      BuildContext context, WidgetRef ref, Map<String, dynamic> book) {
+    final name = book['name'] as String? ?? '未知书名';
+    final author = book['author'] as String? ?? '';
+    final durTitle = book['dur_chapter_title'] as String?;
+    final chapterCount = book['chapter_count'] as num? ?? 0;
+    final bookId = book['id'] as String? ?? '';
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return InkWell(
+      onTap: () => context.push(
+        Uri(path: '/reader', queryParameters: {'bookId': bookId}).toString(),
+      ),
+      onLongPress: () => _showBookActionSheet(context, ref, book),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(
+              color: colorScheme.outlineVariant,
+              width: 1,
             ),
           ),
-        );
-      },
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Cover: 80×120, aspect 2:3, rounded 12px
+            _buildListCover(context, book),
+            const SizedBox(width: 12),
+            // Info area (expanded)
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Title: 16px, w500, max 2 lines, ellipsis
+                  Text(
+                    name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                      color: colorScheme.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  // Author row: person icon + author name
+                  if (author.isNotEmpty)
+                    Row(
+                      children: [
+                        Icon(Icons.person,
+                            size: 14, color: context.al.textSecondary),
+                        const SizedBox(width: 2),
+                        Expanded(
+                          child: Text(
+                            author,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: context.al.textSecondary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  // Chapter row: radio_button_unchecked icon + dur title
+                  if (durTitle != null && durTitle.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        Icon(Icons.radio_button_unchecked,
+                            size: 12, color: context.al.textSecondary),
+                        const SizedBox(width: 2),
+                        Expanded(
+                          child: Text(
+                            durTitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: context.al.textSecondary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            // Progress badge: right-aligned chip
+            if (chapterCount > 0)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '$chapterCount章',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: context.al.textSecondary,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// List-view cover: 80×120 (aspect 2:3), rounded 12px corners.
+  /// Falls back to a gradient placeholder with the book title's first
+  /// character when no image is available.
+  Widget _buildListCover(BuildContext context, Map<String, dynamic> book) {
+    final name = book['name'] as String? ?? '';
+    final localPath = book['custom_cover_path'] as String?;
+    final coverUrl = book['cover_url'] as String?;
+
+    Widget child;
+
+    if (localPath != null && localPath.isNotEmpty) {
+      child = Image.file(
+        File(localPath),
+        fit: BoxFit.cover,
+        width: 80,
+        height: 120,
+        cacheWidth: 80,
+        cacheHeight: 120,
+        errorBuilder: (_, __, ___) =>
+            _buildListCoverPlaceholder(context, name),
+      );
+    } else if (coverUrl != null && coverUrl.isNotEmpty) {
+      child = CachedNetworkImage(
+        imageUrl: coverUrl,
+        fit: BoxFit.cover,
+        width: 80,
+        height: 120,
+        memCacheWidth: 80,
+        memCacheHeight: 120,
+        placeholder: (_, __) => _buildListCoverPlaceholder(context, name),
+        errorWidget: (_, __, ___) =>
+            _buildListCoverPlaceholder(context, name),
+      );
+    } else {
+      child = _buildListCoverPlaceholder(context, name);
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: SizedBox(width: 80, height: 120, child: child),
+    );
+  }
+
+  /// Gradient placeholder for the list-view cover when no image is
+  /// available. Shows the first character of the book title centred
+  /// within an 80×120 container.
+  Widget _buildListCoverPlaceholder(BuildContext context, String name) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final initials = name.isNotEmpty ? name[0] : '';
+
+    return Container(
+      width: 80,
+      height: 120,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            colorScheme.primaryContainer,
+            colorScheme.secondaryContainer,
+          ],
+        ),
+      ),
+      child: Center(
+        child: Text(
+          initials,
+          style: TextStyle(
+            fontSize: 28,
+            fontWeight: FontWeight.bold,
+            color: colorScheme.onPrimaryContainer,
+          ),
+        ),
+      ),
     );
   }
 

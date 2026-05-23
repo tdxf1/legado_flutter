@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MD3 下拉菜单组件</title>
+    <!-- 引入 Material Symbols 图标库 -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <style>
+        :root {
+            /* MD3 配色 (与之前保持一致) */
+            --md-surface: #fbfcf8;
+            --md-surface-container: #f2f5f1;
+            --md-on-surface: #191c1a;
+            --md-on-surface-variant: #3f4942;
+            --md-primary: #006a4d;
+            --md-shadow: rgba(0, 0, 0, 0.08);
+            --md-elevation-level-2: 0px 1px 3px var(--md-shadow), 0px 2px 6px var(--md-shadow);
+            
+            --font-family: "Roboto", "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+
+        body {
+            font-family: var(--font-family);
+            background-color: #e6e9e6;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+
+        /* 测试容器 - 模拟手机/App界面 */
+        .demo-container {
+            width: 100%;
+            max-width: 380px;
+            background-color: var(--md-surface);
+            min-height: 500px;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            position: relative;
+            overflow: hidden;
+            padding: 20px;
+        }
+
+        /* ---------------- 顶部模拟触发器 ---------------- */
+        .header {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            padding: 8px 12px;
+            background: transparent;
+        }
+
+        .menu-trigger {
+            border: none;
+            background: transparent;
+            color: var(--md-on-surface-variant);
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .menu-trigger:hover {
+            background-color: rgba(0, 106, 77, 0.08);
+        }
+
+        .menu-trigger .material-symbols-outlined {
+            font-size: 24px;
+        }
+
+        /* ---------------- 核心：MD3 下拉菜单 ---------------- */
+        .dropdown-menu {
+            position: absolute;
+            top: 70px; /* 距离顶部触发器的位置 */
+            right: 16px;
+            width: 240px;
+            background-color: var(--md-surface-container); 
+            border-radius: 16px;
+            padding: 8px 0;
+            box-shadow: var(--md-elevation-level-2);
+            opacity: 0;
+            transform: scale(0.95) translateY(-10px);
+            transform-origin: top right;
+            visibility: hidden;
+            transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
+            z-index: 100;
+            will-change: transform, opacity;
+        }
+
+        .dropdown-menu.open {
+            opacity: 1;
+            transform: scale(1) translateY(0);
+            visibility: visible;
+        }
+
+        .menu-item {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 12px 20px;
+            cursor: pointer;
+            color: var(--md-on-surface);
+            text-decoration: none;
+            font-size: 14px;
+            transition: background 0.15s;
+            border-radius: 0; /* 本身不圆角，外层容器圆角 */
+            position: relative;
+        }
+
+        .menu-item:hover {
+            background-color: rgba(0, 106, 77, 0.08);
+        }
+
+        /* 菜单项图标 */
+        .menu-item .material-symbols-outlined {
+            font-size: 20px;
+            color: var(--md-on-surface-variant);
+            width: 24px;
+            text-align: center;
+        }
+
+        /* 菜单分组间隔 */
+        .menu-group-divider {
+            height: 1px;
+            background-color: rgba(0, 0, 0, 0.06);
+            margin: 4px 16px;
+        }
+
+        /* ---------------- 遮罩层 (点击菜单外部关闭) ---------------- */
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: transparent;
+            z-index: 90;
+            display: none;
+        }
+
+        .overlay.active {
+            display: block;
+        }
+
+    </style>
+</head>
+<body>
+
+<div class="demo-container">
+    <!-- 顶部触发区域 -->
+    <div class="header">
+        <!-- 模拟搜索图标 -->
+        <button class="menu-trigger" style="margin-right: auto; cursor: default;">
+            <span class="material-symbols-outlined">search</span>
+        </button>
+        
+        <!-- 真正的菜单触发按钮 -->
+        <button class="menu-trigger" id="menuTriggerBtn">
+            <span class="material-symbols-outlined">more_vert</span>
+        </button>
+    </div>
+
+    <!-- 遮罩层 -->
+    <div class="overlay" id="menuOverlay"></div>
+
+    <!-- 下拉菜单本体 -->
+    <div class="dropdown-menu" id="dropdownMenu">
+        <!-- 数据由 JS 动态生成，清晰整洁 -->
+        <div id="menuListContainer"></div>
+    </div>
+
+    <!-- 下方伪内容，模拟界面 -->
+    <div style="padding: 20px; color: var(--md-on-surface-variant); opacity: 0.6; text-align: center; font-size: 14px;">
+        <p>点击右上角 ⋮ 打开菜单</p>
+    </div>
+</div>
+
+<script>
+    // 1. 定义菜单数据 (完全按照截图内容)
+    const menuItems = [
+        { label: "更新目录", icon: "refresh" },
+        { label: "添加本地", icon: "add" },
+        { label: "远程书籍", icon: "add_link" },
+        { label: "添加网址", icon: "link" },
+        { label: "书架管理", icon: "library_books" },
+        { label: "缓存/导出", icon: "download" },
+        { label: "分组管理", icon: "folder_open" },
+        { label: "书架布局", icon: "view_quilt" },
+        { label: "导出书单", icon: "ios_share" },
+        { label: "导入书单", icon: "file_open" },
+        { label: "日志", icon: "history" }
+    ];
+
+    // 2. 获取 DOM 元素
+    const menuListContainer = document.getElementById('menuListContainer');
+    const triggerBtn = document.getElementById('menuTriggerBtn');
+    const dropdownMenu = document.getElementById('dropdownMenu');
+    const overlay = document.getElementById('menuOverlay');
+
+    // 3. 渲染菜单项
+    function renderMenu() {
+        let html = '';
+        menuItems.forEach((item, index) => {
+            // 根据原图的分组逻辑，手动插入分割线 (类似于截图中的逻辑间隔)
+            // 这里根据业务逻辑做个简单的间隔：例如在“添加网址”后分一下组
+            if (item.label === "书架管理") {
+                html += `<div class="menu-group-divider"></div>`;
+            }
+            if (item.label === "导出书单") {
+                html += `<div class="menu-group-divider"></div>`;
+            }
+
+            html += `
+                <div class="menu-item" data-label="${item.label}">
+                    <span class="material-symbols-outlined">${item.icon}</span>
+                    <span>${item.label}</span>
+                </div>
+            `;
+        });
+        menuListContainer.innerHTML = html;
+
+        // 为每个菜单项添加点击事件
+        document.querySelectorAll('.menu-item').forEach(el => {
+            el.addEventListener('click', function() {
+                console.log('点击了:', this.dataset.label);
+                closeMenu();
+            });
+        });
+    }
+
+    // 4. 打开/关闭菜单逻辑
+    function toggleMenu() {
+        if (dropdownMenu.classList.contains('open')) {
+            closeMenu();
+        } else {
+            openMenu();
+        }
+    }
+
+    function openMenu() {
+        dropdownMenu.classList.add('open');
+        overlay.classList.add('active');
+    }
+
+    function closeMenu() {
+        dropdownMenu.classList.remove('open');
+        overlay.classList.remove('active');
+    }
+
+    // 5. 绑定事件
+    triggerBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleMenu();
+    });
+
+    overlay.addEventListener('click', closeMenu);
+
+    // 6. 初始化渲染
+    renderMenu();
+
+</script>
+
+</body>
+</html>

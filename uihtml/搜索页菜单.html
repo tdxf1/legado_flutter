@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>搜索 - 完整界面 (含菜单)</title>
+    <!-- 引入 Material Symbols 图标库 -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <style>
+        :root {
+            /* MD3 配色 */
+            --md-primary: #006a4d;
+            --md-on-primary: #ffffff;
+            --md-surface: #fbfcf8;
+            --md-surface-container: #f2f5f1;
+            --md-on-surface: #191c1a;
+            --md-on-surface-variant: #3f4942;
+            --md-outline: #6f7971;
+            --md-shadow: rgba(0, 0, 0, 0.04);
+            
+            --font-family: "Roboto", "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: var(--font-family);
+            background-color: #e6e9e6;
+            display: flex;
+            justify-content: center;
+            min-height: 100vh;
+            color: var(--md-on-surface);
+        }
+
+        /* 模拟手机容器 */
+        .app-container {
+            width: 100%;
+            max-width: 400px;
+            background-color: var(--md-surface);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 0 20px rgba(0,0,0,0.05);
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* ---------------- 顶部搜索栏 (Search Bar) ---------------- */
+        .search-header {
+            display: flex;
+            align-items: center;
+            padding: 8px 12px; /* 减小 padding 防止按钮被挤出去 */
+            gap: 6px;
+            background-color: var(--md-surface);
+            flex-shrink: 0;
+            z-index: 10;
+        }
+
+        .search-bar-wrapper {
+            flex: 1;
+            min-width: 0; /* 防止搜索栏过度挤压右侧按钮 */
+            display: flex;
+            align-items: center;
+            background-color: var(--md-surface-container);
+            border-radius: 28px;
+            padding: 0 12px;
+            height: 44px;
+            transition: box-shadow 0.2s;
+        }
+
+        .search-bar-wrapper:focus-within {
+            background-color: var(--md-surface);
+            box-shadow: 0 0 0 2px var(--md-primary);
+        }
+
+        .search-icon {
+            color: var(--md-on-surface-variant);
+            margin-right: 8px;
+            font-size: 18px;
+        }
+
+        .search-input {
+            border: none;
+            background: transparent;
+            flex: 1;
+            font-size: 15px;
+            color: var(--md-on-surface);
+            outline: none;
+            height: 100%;
+            padding: 0;
+            width: 50px; /* 占位宽度 */
+        }
+
+        .search-input::placeholder {
+            color: var(--md-on-surface-variant);
+            opacity: 0.6;
+        }
+
+        .search-actions {
+            display: flex;
+            gap: 4px;
+            margin-left: 4px;
+        }
+
+        .icon-btn-sm {
+            background: transparent;
+            border: none;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--md-on-surface-variant);
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .icon-btn-sm:hover {
+            background-color: rgba(0, 0, 0, 0.05);
+        }
+        
+        .icon-btn-sm .material-symbols-outlined {
+            font-size: 18px;
+        }
+
+        .header-action-btn {
+            background: transparent;
+            border: none;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--md-on-surface-variant);
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+
+        .header-action-btn:hover {
+            background-color: rgba(0, 106, 77, 0.08);
+        }
+        
+        .header-action-btn .material-symbols-outlined {
+            font-size: 22px;
+        }
+
+        /* ---------------- 内容区域 (历史记录) ---------------- */
+        .content-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0 12px 80px 12px;
+        }
+
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0 8px 0;
+        }
+
+        .history-title {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--md-on-surface-variant);
+        }
+
+        .clear-btn {
+            background: transparent;
+            border: none;
+            font-size: 12px;
+            color: var(--md-primary);
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 8px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .clear-btn:hover {
+            background-color: rgba(0, 106, 77, 0.08);
+        }
+
+        /* 标签网格 */
+        .tags-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding-bottom: 20px;
+        }
+
+        .tag-chip {
+            background-color: var(--md-surface-container);
+            color: var(--md-on-surface);
+            padding: 6px 14px;
+            border-radius: 16px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+            border: 1px solid transparent;
+            user-select: none;
+        }
+
+        .tag-chip:active {
+            transform: scale(0.95);
+        }
+
+        .tag-chip:hover {
+            background-color: #e0e5e0;
+        }
+
+        /* ---------------- 右上角菜单 (More Menu) ---------------- */
+        .dropdown-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 50;
+            background: transparent;
+            display: none;
+        }
+
+        .dropdown-overlay.active {
+            display: block;
+        }
+
+        .dropdown-menu {
+            position: absolute;
+            top: 72px; 
+            right: 12px;
+            width: 200px;
+            background-color: var(--md-surface);
+            border-radius: 16px;
+            padding: 6px 0;
+            box-shadow: 0px 4px 16px rgba(0, 0, 0, 0.12);
+            opacity: 0;
+            transform: scale(0.95) translateY(-10px);
+            transform-origin: top right;
+            visibility: hidden;
+            transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
+            z-index: 100;
+        }
+
+        .dropdown-menu.open {
+            opacity: 1;
+            transform: scale(1) translateY(0);
+            visibility: visible;
+        }
+
+        .menu-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 16px;
+            cursor: pointer;
+            color: var(--md-on-surface);
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+
+        .menu-item:hover {
+            background-color: rgba(0, 0, 0, 0.04);
+        }
+
+        .menu-item-label {
+            flex: 1;
+        }
+
+        /* 菜单中的复选/单选图标 */
+        .menu-item-icon {
+            width: 18px;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid var(--md-on-surface-variant);
+            border-radius: 4px;
+            color: transparent;
+            transition: all 0.2s;
+        }
+
+        .menu-item-icon.radio {
+            border-radius: 50%;
+        }
+
+        .menu-item-icon.checked {
+            background-color: var(--md-primary);
+            border-color: var(--md-primary);
+            color: white;
+        }
+
+        .menu-item-icon.radio.checked {
+            background-color: transparent;
+            border-color: var(--md-primary);
+            color: var(--md-primary);
+        }
+
+        .menu-divider {
+            height: 1px;
+            background-color: rgba(0, 0, 0, 0.06);
+            margin: 4px 12px;
+        }
+
+    </style>
+</head>
+<body>
+
+<div class="app-container">
+    
+    <!-- 顶部搜索栏 -->
+    <div class="search-header">
+        <button class="header-action-btn" onclick="goBack()" aria-label="返回">
+            <span class="material-symbols-outlined">arrow_back</span>
+        </button>
+        
+        <div class="search-bar-wrapper">
+            <span class="material-symbols-outlined search-icon">search</span>
+            <input type="text" class="search-input" id="searchInput" placeholder="搜索书名、作者" autofocus>
+            <div class="search-actions">
+                <button class="icon-btn-sm" onclick="moveToNext()" aria-label="下一个">
+                    <span class="material-symbols-outlined">arrow_forward_ios</span>
+                </button>
+            </div>
+        </div>
+
+        <button class="header-action-btn" id="menuTriggerBtn" aria-label="菜单">
+            <span class="material-symbols-outlined">more_vert</span>
+        </button>
+    </div>
+
+    <!-- 遮罩层 -->
+    <div class="dropdown-overlay" id="menuOverlay"></div>
+
+    <!-- 右上角下拉菜单 -->
+    <div class="dropdown-menu" id="dropdownMenu">
+        <div class="menu-item" data-type="checkbox" data-value="精准搜索">
+            <span class="menu-item-label">精准搜索</span>
+            <span class="menu-item-icon" id="icon-精准搜索"></span>
+        </div>
+        
+        <div class="menu-divider"></div>
+        
+        <div class="menu-item" data-type="text" data-value="书源管理">
+            <span class="menu-item-label">书源管理</span>
+        </div>
+
+        <div class="menu-item" data-type="text" data-value="多分组/书源">
+            <span class="menu-item-label">多分组/书源</span>
+        </div>
+
+        <div class="menu-divider"></div>
+
+        <!-- 书源列表 (单选部分) -->
+        <div class="menu-item" data-type="radio" data-value="速读谷">
+            <span class="menu-item-label">速读谷</span>
+            <span class="menu-item-icon radio" id="icon-速读谷"></span>
+        </div>
+        <div class="menu-item" data-type="radio" data-value="全部书源">
+            <span class="menu-item-label">全部书源</span>
+            <span class="menu-item-icon radio" id="icon-全部书源"></span>
+        </div>
+        <div class="menu-item" data-type="radio" data-value="精品">
+            <span class="menu-item-label">精品</span>
+            <span class="menu-item-icon radio" id="icon-精品"></span>
+        </div>
+        <div class="menu-item" data-type="radio" data-value="聚合书源">
+            <span class="menu-item-label">聚合书源</span>
+            <span class="menu-item-icon radio" id="icon-聚合书源"></span>
+        </div>
+        <div class="menu-item" data-type="radio" data-value="免费小说">
+            <span class="menu-item-label">免费小说</span>
+            <span class="menu-item-icon radio" id="icon-免费小说"></span>
+        </div>
+        <div class="menu-item" data-type="radio" data-value="起点中文">
+            <span class="menu-item-label">起点中文</span>
+            <span class="menu-item-icon radio" id="icon-起点中文"></span>
+        </div>
+        <div class="menu-item" data-type="radio" data-value="小说">
+            <span class="menu-item-label">小说</span>
+            <span class="menu-item-icon radio" id="icon-小说"></span>
+        </div>
+
+        <div class="menu-divider"></div>
+
+        <div class="menu-item" data-type="text" data-value="日志">
+            <span class="menu-item-label">日志</span>
+        </div>
+    </div>
+
+    <!-- 历史记录 -->
+    <div class="content-area" id="historyContainer">
+        <div class="history-header">
+            <span class="history-title">搜索历史</span>
+            <button class="clear-btn" onclick="clearHistory()">清除</button>
+        </div>
+        
+        <div class="tags-grid" id="tagsGrid">
+            <!-- 标签将动态渲染 -->
+        </div>
+    </div>
+
+</div>
+
+<script>
+    // 模拟截图中的标签数据
+    const historyTags = [
+        "遮天", "我的", "和巫妖同僚的学术", "诛仙",
+        "这个地下城长蘑菇了", "我不是哥布林杀手",
+        "从魔法少女开始独断万古", "吞噬星空2",
+        "玄鉴仙族", "阿勒泰恐怖专", "凡人修仙传",
+        "阿勒泰恐怖专线", "捞尸人", "少女，你来组成头部",
+        "以一龙之力打穿整个世界", "鸦仙人", "国民法医",
+        "赘婿", "山山有药", "丧尸专列",
+        "下班，然后变成魔法少女", "下班，然后变成魔法少女",
+        "下班然后变魔法少女", "公主别怕骑士来了",
+        "哥布林重度依赖", "没有规矩只有方圆",
+        "好似一滩烂泥", "我的青春，好似一滩烂泥",
+        "大道朝天", "系统很抽象", "系统",
+        "星际争霸:头号玩家的书", "谁还不是个修行者了",
+        "奥特曼，你真的是奥特曼？",
+        "重生后我选择默默修仙", "重生后，我选择默默修仙",
+        "突然成仙了怎么办", "都市修仙五千年",
+        "重生之弑仙灭神", "校花的贴身高手",
+        "回到过去变成猫", "隐杀", "末法天地长生仙",
+        "恋爱净化协议", "红尘尸仙", "剑宗外门", "蓝龙",
+        "食仙主", "穿越成萌妹的我", "刚刚准备高考"
+    ];
+
+    const tagsGrid = document.getElementById('tagsGrid');
+    const searchInput = document.getElementById('searchInput');
+    const menuTriggerBtn = document.getElementById('menuTriggerBtn');
+    const dropdownMenu = document.getElementById('dropdownMenu');
+    const menuOverlay = document.getElementById('menuOverlay');
+
+    // 渲染标签
+    function renderTags(tags) {
+        tagsGrid.innerHTML = '';
+        tags.forEach(tag => {
+            const chip = document.createElement('div');
+            chip.className = 'tag-chip';
+            chip.textContent = tag;
+            chip.setAttribute('tabindex', '0');
+            chip.addEventListener('click', () => {
+                searchInput.value = tag;
+                searchInput.focus();
+            });
+            tagsGrid.appendChild(chip);
+        });
+    }
+
+    // 清除历史记录
+    function clearHistory() {
+        if (confirm('确定要清除所有搜索历史吗？')) {
+            tagsGrid.innerHTML = '';
+            const emptyMsg = document.createElement('div');
+            emptyMsg.style.cssText = 'width: 100%; text-align: center; padding: 40px 0; color: var(--md-on-surface-variant); font-size: 14px;';
+            emptyMsg.textContent = '暂无搜索历史';
+            tagsGrid.appendChild(emptyMsg);
+        }
+    }
+
+    // 返回按钮逻辑
+    function goBack() {
+        alert('返回上一页');
+    }
+
+    // 下一个按钮逻辑
+    function moveToNext() {
+        alert('移动到下一个结果');
+    }
+
+    // ----------------- 菜单逻辑 -----------------
+    
+    // 初始化菜单状态 (复刻截图)
+    function initMenu() {
+        // 设置“速读谷”为选中状态 (模拟截图)
+        const suduguIcon = document.getElementById('icon-速读谷');
+        if(suduguIcon) {
+            suduguIcon.classList.add('checked');
+            suduguIcon.innerHTML = '<span class="material-symbols-outlined" style="font-size: 12px;">check</span>';
+        }
+    }
+
+    // 打开菜单
+    function openMenu() {
+        dropdownMenu.classList.add('open');
+        menuOverlay.classList.add('active');
+    }
+
+    // 关闭菜单
+    function closeMenu() {
+        dropdownMenu.classList.remove('open');
+        menuOverlay.classList.remove('active');
+    }
+
+    // 切换菜单
+    function toggleMenu() {
+        if (dropdownMenu.classList.contains('open')) {
+            closeMenu();
+        } else {
+            openMenu();
+        }
+    }
+
+    // 处理菜单项点击 (复选框和单选框逻辑)
+    function handleMenuClick(e) {
+        const target = e.target.closest('.menu-item');
+        if (!target) return;
+
+        // 文本类型直接关闭菜单
+        if (target.dataset.type === 'text') {
+            alert(`点击了: ${target.dataset.value}`);
+            closeMenu();
+            return;
+        }
+
+        // 复选框逻辑
+        if (target.dataset.type === 'checkbox') {
+            const icon = target.querySelector('.menu-item-icon');
+            const isChecked = icon.classList.contains('checked');
+            
+            if (isChecked) {
+                icon.classList.remove('checked');
+                icon.innerHTML = '';
+            } else {
+                icon.classList.add('checked');
+                icon.innerHTML = '<span class="material-symbols-outlined" style="font-size: 16px; color: white;">check</span>';
+            }
+            return;
+        }
+
+        // 单选框逻辑
+        if (target.dataset.type === 'radio') {
+            const value = target.dataset.value;
+            // 清除所有单选状态
+            document.querySelectorAll('.menu-item[data-type="radio"] .menu-item-icon').forEach(el => {
+                el.classList.remove('checked');
+                el.innerHTML = '';
+            });
+            
+            // 激活当前项
+            const icon = target.querySelector('.menu-item-icon');
+            icon.classList.add('checked');
+            icon.innerHTML = '<span class="material-symbols-outlined" style="font-size: 12px;">check</span>';
+            
+            alert(`切换到书源: ${value}`);
+            closeMenu();
+        }
+    }
+
+    // 绑定事件
+    menuTriggerBtn.addEventListener('click', toggleMenu);
+    menuOverlay.addEventListener('click', closeMenu);
+    dropdownMenu.addEventListener('click', handleMenuClick);
+
+    // 初始化
+    renderTags(historyTags);
+    initMenu();
+
+    // --- 关键修改：页面加载完毕后，自动打开菜单 ---
+    // 这样你打开页面就能立刻看到效果，不用担心找不到右上角的按钮
+    window.addEventListener('load', function() {
+        openMenu();
+    });
+
+</script>
+
+</body>
+</html>
