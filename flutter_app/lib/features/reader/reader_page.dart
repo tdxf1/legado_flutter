@@ -497,7 +497,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
         dbPath: dbPath,
         sourceId: sourceId,
         chapterUrl: chapterUrl,
-      ).timeout(const Duration(seconds: 10));
+      ).timeout(const Duration(seconds: 5));
       if (json.isNotEmpty && json != 'null') {
         try {
           final data = jsonDecode(json);
@@ -2182,7 +2182,21 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
         AnimatedOpacity(
           opacity: _chapterContent.isEmpty && _isLoadingContent ? 1.0 : 0.0,
           duration: const Duration(milliseconds: 200),
-          child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircularProgressIndicator(strokeWidth: 2),
+                const SizedBox(height: 16),
+                Text(
+                  '加载中...',
+                  style: TextStyle(
+                    color: Color(settings.effectiveTextColor).withValues(alpha: 0.5),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
         // No-controller fallback
         if (_pageViewController == null && _chapterContent.isEmpty && !_isLoadingContent)
@@ -2410,7 +2424,10 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       _currentIndex = newIndex;
       if (_cachedChapters != null && newIndex < _cachedChapters!.length) {
         final m = _cachedChapters![newIndex];
-        _chapterContent = m['content'] as String? ?? '';
+        final chContent = m['content'] as String?;
+        if (chContent != null && chContent.isNotEmpty) {
+          _chapterContent = chContent;
+        }
         _chapterUrl = m['url'] as String? ?? '';
       }
     });
