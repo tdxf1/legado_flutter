@@ -716,15 +716,11 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
         } else {
           _pageViewController?.updateSettings(_settings);
           _pageViewController?.loadChapter(index, title, content);
-          // Bug 3: block gestures until adjacent chapters are ready.
-          // The delay gives _preloadAdjacentContent time to fetch
-          // neighbor content so cross-chapter animation can render.
           _isPageLayoutReady = false;
-          WidgetsBinding.instance.addPostFrameCallback((_) async {
-            await Future.delayed(const Duration(milliseconds: 500));
-            if (mounted) safeSetState(() => _isPageLayoutReady = true);
-          });
         }
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) safeSetState(() => _isPageLayoutReady = true);
       });
       // T1 (05-18): page-mode 启动恢复链路最后一步 — measure 完后通过
       // postFrameCallback 反算 saved char offset 对应页并 jumpToPage。
@@ -2180,9 +2176,13 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
               : const SizedBox.shrink(),
         ),
         // Loading indicator — small text-only, positioned at first line.
-        // Fades out as content loads.
+        // Shows when initially loading content AND when content is loaded but
+        // page layout isn't ready yet (rendering in progress).
         AnimatedOpacity(
-          opacity: _chapterContent.isEmpty && _isLoadingContent ? 1.0 : 0.0,
+          opacity: (_chapterContent.isEmpty && _isLoadingContent) ||
+                  (!_isPageLayoutReady && _chapterContent.isNotEmpty)
+              ? 1.0
+              : 0.0,
           duration: const Duration(milliseconds: 200),
           child: Align(
             alignment: Alignment.topLeft,
@@ -2235,8 +2235,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
             jumpToLast: isPrev);
         _isPageLayoutReady = false;
       });
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        await Future.delayed(const Duration(milliseconds: 500));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) safeSetState(() => _isPageLayoutReady = true);
       });
       _preloadAdjacentContent(targetIndex, chapters);

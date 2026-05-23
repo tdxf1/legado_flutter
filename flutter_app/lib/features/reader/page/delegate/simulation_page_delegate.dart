@@ -782,16 +782,34 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
     canvas.translate(-_bs1x, -_bs1y);
 
     if (degrade.useFolderShadow) {
-      // Single-segment folder shadow matching MD3.
-      // MD3: LinearGradient(0xFF333333 → 0xB0333333) strip at the fold.
-      final folderRect = Rect.fromLTRB(left, _bs1y, right, _bs1y + _maxLength);
-      final folderPaint = Paint()
-        ..shader = ui.Gradient.linear(
-          _isRtOrLb ? Offset(left, 0) : Offset(right, 0),
-          _isRtOrLb ? Offset(right, 0) : Offset(left, 0),
-          const [Color(0xFF333333), Color(0xB0333333)],
-        );
-      canvas.drawRect(folderRect, folderPaint);
+      // Multi-segment folder shadow per vendor MD3 implementation.
+      //
+      // The geometric strip is the rectangle [left .. right] x
+      // [_bs1y .. _bs1y + _maxLength]. We split it into [segments] equal-
+      // height bands, each with its own gradient and an alpha that decays
+      // linearly from full opacity at the fold to zero at the page edge.
+      // segments == 1 collapses to the original single-band rendering.
+      const baseAlpha = 0x99;
+      const baseColor = 0x333333;
+      final segments = degrade.folderShadowSegments;
+      final segmentHeight = _maxLength / segments;
+      for (int i = 0; i < segments; i++) {
+        final t = (i + 1) / segments; // 1/N .. 1
+        final alpha = (baseAlpha * (1.0 - i / segments)).round() & 0xff;
+        final segTop = _bs1y + i * segmentHeight;
+        final segBottom = segTop + segmentHeight;
+        final folderRect = Rect.fromLTRB(left, segTop, right, segBottom);
+        final headColor = (alpha << 24) | baseColor;
+        final tailAlpha = (alpha * (1.0 - t)).round() & 0xff;
+        final tailColor = (tailAlpha << 24) | baseColor;
+        final folderPaint = Paint()
+          ..shader = ui.Gradient.linear(
+            _isRtOrLb ? Offset(left, 0) : Offset(right, 0),
+            _isRtOrLb ? Offset(right, 0) : Offset(left, 0),
+            [Color(headColor), Color(tailColor)],
+          );
+        canvas.drawRect(folderRect, folderPaint);
+      }
     }
     canvas.restore();
   }

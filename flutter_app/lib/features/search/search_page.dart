@@ -57,8 +57,10 @@ class _SearchPageState extends ConsumerState<SearchPage> {
   bool _precisionMode = false;
   List<String> _searchHistory = [];
 
-  /// Search results from online sources.
-  List<Map<String, dynamic>> _results = [];
+  /// 本地书架搜索结果。
+  List<Map<String, dynamic>> _localResults = [];
+  /// 在线书源搜索结果。
+  List<Map<String, dynamic>> _onlineResults = [];
 
   /// Task X3 (Bug A) — 记忆上一次搜索的 keyword。
   ///
@@ -105,9 +107,13 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     setState(() => _precisionMode = !_precisionMode);
     if (_precisionMode) {
       // Apply precision filter to existing results without re-searching
-      if (_results.isNotEmpty && _lastSearchKeyword.isNotEmpty) {
-        _results = SearchPage.applyPrecisionFilter(
-            List<Map<String, dynamic>>.from(_results), _lastSearchKeyword);
+      if (_localResults.isNotEmpty && _lastSearchKeyword.isNotEmpty) {
+        _localResults = SearchPage.applyPrecisionFilter(
+            List<Map<String, dynamic>>.from(_localResults), _lastSearchKeyword);
+      }
+      if (_onlineResults.isNotEmpty && _lastSearchKeyword.isNotEmpty) {
+        _onlineResults = SearchPage.applyPrecisionFilter(
+            List<Map<String, dynamic>>.from(_onlineResults), _lastSearchKeyword);
       }
     }
     unawaited(saveSearchPrecisionToDisk(_precisionMode));
@@ -336,6 +342,20 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     super.dispose();
   }
 
+  /// 本地书架搜索（返回原始结果，precision 过滤由 [_doSearch] 统一处理）。
+  Future<List<Map<String, dynamic>>> _searchLocal(String keyword) async {
+    try {
+      final dbPath = await ref.read(dbPathProvider.future);
+      final offlineJson =
+          await rust_api.searchBooksOffline(dbPath: dbPath, keyword: keyword);
+      final List<dynamic> offlineList = jsonDecode(offlineJson);
+      return offlineList.cast<Map<String, dynamic>>();
+    } catch (e) {
+      debugPrint('[Search] local search failed: $e');
+      return <Map<String, dynamic>>[];
+    }
+  }
+
   /// Search online using enabled sources.
   Future<List<Map<String, dynamic>>> _searchOnline(String keyword) async {
     try {
@@ -390,17 +410,32 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       _loading = true;
     });
 
-    // Always search online
+    // Always search both local AND online concurrently
     await ref.read(dbInitializedProvider.future);
     if (!mounted || seq != _searchSeq) {
       if (mounted) safeSetState(() => _loading = false);
       return;
     }
 
-    // Fire online search
+    // Fire local search (always)
+    final localFuture = _searchLocal(keyword);
+
+    // Fire online search (always)
     final onlineFuture = _searchOnline(keyword);
 
-    // Await online results
+    // Await local first (typically faster), show partial results
+    int rawLocalCount = 0;
+    try {
+      final rawLocal = await localFuture;
+      rawLocalCount = rawLocal.length;
+      if (mounted && seq == _searchSeq) {
+        final filteredLocal = _precisionMode
+            ? SearchPage.applyPrecisionFilter(rawLocal, keyword)
+            : rawLocal;
+        setState(() => _localResults = filteredLocal);
+      }
+    } catch (_) {}
+
     int rawOnlineCount = 0;
     try {
       final rawOnline = await onlineFuture;
@@ -409,13 +444,14 @@ class _SearchPageState extends ConsumerState<SearchPage> {
         final filteredOnline = _precisionMode
             ? SearchPage.applyPrecisionFilter(rawOnline, keyword)
             : rawOnline;
-        setState(() => _results = filteredOnline);
+        setState(() => _onlineResults = filteredOnline);
       }
     } catch (_) {}
 
     if (mounted && seq == _searchSeq) {
       setState(() => _loading = false);
-      if (_precisionMode && _results.isEmpty && rawOnlineCount > 0) {
+      if (_precisionMode && _localResults.isEmpty && _onlineResults.isEmpty &&
+          (rawLocalCount > 0 || rawOnlineCount > 0)) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && seq == _searchSeq) {
             _showPrecisionEmptyDialog();
@@ -515,9 +551,9 @@ class _SearchPageState extends ConsumerState<SearchPage> {
             ),
           ),
           Expanded(
-            child: _loading && _results.isEmpty
+            child: _loading && _localResults.isEmpty && _onlineResults.isEmpty
                 ? const Center(child: CircularProgressIndicator())
-                : _results.isEmpty && !_loading
+                : _localResults.isEmpty && _onlineResults.isEmpty && !_loading
                     ? _buildSearchHistory()
                     : _buildResultsList(),
           ),
@@ -526,16 +562,58 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     );
   }
 
-  /// Results list — single section from online sources.
+  /// 双 Section 结果列表 — 本地书架 + 在线书源。
   Widget _buildResultsList() {
-    if (_results.isEmpty) return const SizedBox.shrink();
+    final hasLocal = _localResults.isNotEmpty;
+    final hasOnline = _onlineResults.isNotEmpty;
+    if (!hasLocal && !hasOnline) {
+      return const SizedBox.shrink();
+    }
+
+    // Section layout: [local header, local items..., online header, online items...]
+    final localSectionTotal = hasLocal ? 1 + _localResults.length : 0;
+    final totalCount =
+        localSectionTotal + (hasOnline ? 1 + _onlineResults.length : 0);
 
     return ListView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 8),
-      itemCount: _results.length,
+      itemCount: totalCount,
       itemBuilder: (context, index) {
-        return _buildBookCard(_results[index]);
+        if (index < localSectionTotal) {
+          if (index == 0) {
+            return _buildSectionHeader('本地书架', _localResults.length);
+          }
+          return _buildBookCard(_localResults[index - 1]);
+        }
+        final onlineIndex = index - localSectionTotal;
+        if (onlineIndex == 0) {
+          return _buildSectionHeader('书源搜索', _onlineResults.length);
+        }
+        return _buildBookCard(_onlineResults[onlineIndex - 1]);
       },
+    );
+  }
+
+  Widget _buildSectionHeader(String title, int count) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 12, bottom: 4, left: 4),
+      child: Row(
+        children: [
+          Text(
+            title,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '$count 条',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Colors.grey,
+                ),
+          ),
+        ],
+      ),
     );
   }
 
