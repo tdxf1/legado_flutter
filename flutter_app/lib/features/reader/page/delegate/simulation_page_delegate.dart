@@ -781,36 +781,17 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
     canvas.rotate(_degrees * math.pi / 180);
     canvas.translate(-_bs1x, -_bs1y);
 
-    if (degrade.useFolderShadow) {
-      // Multi-segment folder shadow per vendor MD3 implementation.
-      //
-      // The geometric strip is the rectangle [left .. right] x
-      // [_bs1y .. _bs1y + _maxLength]. We split it into [segments] equal-
-      // height bands, each with its own gradient and an alpha that decays
-      // linearly from full opacity at the fold to zero at the page edge.
-      // segments == 1 collapses to the original single-band rendering.
-      const baseAlpha = 0x99;
-      const baseColor = 0x333333;
-      final segments = degrade.folderShadowSegments;
-      final segmentHeight = _maxLength / segments;
-      for (int i = 0; i < segments; i++) {
-        final t = (i + 1) / segments; // 1/N .. 1
-        final alpha = (baseAlpha * (1.0 - i / segments)).round() & 0xff;
-        final segTop = _bs1y + i * segmentHeight;
-        final segBottom = segTop + segmentHeight;
-        final folderRect = Rect.fromLTRB(left, segTop, right, segBottom);
-        final headColor = (alpha << 24) | baseColor;
-        final tailAlpha = (alpha * (1.0 - t)).round() & 0xff;
-        final tailColor = (tailAlpha << 24) | baseColor;
-        final folderPaint = Paint()
-          ..shader = ui.Gradient.linear(
-            _isRtOrLb ? Offset(left, 0) : Offset(right, 0),
-            _isRtOrLb ? Offset(right, 0) : Offset(left, 0),
-            [Color(headColor), Color(tailColor)],
-          );
-        canvas.drawRect(folderRect, folderPaint);
-      }
-    }
+    // Single-segment folder shadow aligned with MD3 SimulationPageDelegate.
+    // MD3 uses GradientDrawable with colors: 0x00333333 (transparent) → 0xB0333333 (69% opaque).
+    // Direction: LEFT→RIGHT if isRtOrLb, RIGHT→LEFT otherwise.
+    final folderRect = Rect.fromLTRB(left, _bs1y, right, _bs1y + _maxLength);
+    final folderPaint = Paint()
+      ..shader = ui.Gradient.linear(
+        _isRtOrLb ? Offset(left, _bs1y) : Offset(right, _bs1y),
+        _isRtOrLb ? Offset(right, _bs1y) : Offset(left, _bs1y),
+        const [Color(0x00333333), Color(0xB0333333)],
+      );
+    canvas.drawRect(folderRect, folderPaint);
     canvas.restore();
   }
 
