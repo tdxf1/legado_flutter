@@ -12,7 +12,6 @@ import '../../core/colors.dart';
 import '../../core/persistence/json_store.dart';
 import '../../core/providers.dart';
 import '../../core/update_toc_runner.dart';
-import '../../core/util/time_format.dart';
 import '../../core/widgets/safe_setstate.dart';
 import '../../src/rust/api.dart' as rust_api;
 import 'widgets/book_group_dialogs.dart';
@@ -1082,109 +1081,150 @@ class _BookListView extends ConsumerWidget {
   Widget _buildGridView(
       BuildContext context, WidgetRef ref, List<Map<String, dynamic>> books) {
     return GridView.builder(
-      padding: const EdgeInsets.all(8),
+      padding: const EdgeInsets.all(16),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
-        childAspectRatio: 0.65,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
+        childAspectRatio: 0.72,
+        crossAxisSpacing: 12,
+        mainAxisSpacing: 12,
       ),
       itemCount: books.length,
       itemBuilder: (context, index) {
         final book = books[index];
-        return Card(
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            onTap: () => context.push(
-              Uri(path: '/reader', queryParameters: {
-                'bookId': book['id'] as String? ?? '',
-              }).toString(),
-            ),
-            onLongPress: () => _showBookActionSheet(context, ref, book),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  child: _buildCover(context, book),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(6),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        book['name'] ?? '未知书名',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              fontWeight: FontWeight.w600,
-                            ),
-                      ),
-                      Text(
-                        _formatBookSubtitle(book),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.labelSmall,
-                      ),
-                    ],
+        final name = book['name'] as String? ?? '未知书名';
+        final chapterCount = book['chapter_count'] as num? ?? 0;
+        final bookId = book['id'] as String? ?? '';
+        final colorScheme = Theme.of(context).colorScheme;
+
+        return GestureDetector(
+          onTap: () => context.push(
+            Uri(path: '/reader',
+                queryParameters: {'bookId': bookId}).toString(),
+          ),
+          onLongPress: () => _showBookActionSheet(context, ref, book),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: _buildGridCover(context, book, name, chapterCount),
+              ),
+              const SizedBox(height: 6),
+              SizedBox(
+                height: 34,
+                child: Text(
+                  name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colorScheme.onSurface,
+                    height: 1.4,
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         );
       },
     );
   }
 
-  /// 批次 14 (05-19): 列表/网格副标题。原本只显示 `book.author`；
-  /// 现在优先用 `dur_chapter_title` + 相对时间戳，回退作者。
-  ///
-  /// 例：`3 小时前 · 第 12 章` / `昨天 · 第 1 章` / 没有阅读记录时
-  /// 退化为 `张三` 或 `未知作者`。
-  String _formatBookSubtitle(Map<String, dynamic> book) {
-    final durTitle = book['dur_chapter_title'] as String?;
-    final durTime = (book['dur_chapter_time'] as num?)?.toInt() ?? 0;
-    final author = book['author'] as String? ?? '';
-    if (durTitle != null && durTitle.isNotEmpty && durTime > 0) {
-      return '${formatRelativeTime(durTime)} · $durTitle';
-    }
-    return author.isEmpty ? '未知作者' : author;
-  }
-
-  Widget _buildCover(BuildContext context, Map<String, dynamic> book) {
+  Widget _buildGridCover(BuildContext context, Map<String, dynamic> book,
+      String name, num chapterCount) {
     final localPath = book['custom_cover_path'] as String?;
+    final coverUrl = book['cover_url'] as String?;
+    final colorScheme = Theme.of(context).colorScheme;
+    final initials = name.isNotEmpty ? name[0] : '';
+
+    Widget imageChild;
     if (localPath != null && localPath.isNotEmpty) {
-      return Image.file(
+      imageChild = Image.file(
         File(localPath),
         fit: BoxFit.cover,
-        cacheWidth: 100,
-        cacheHeight: 150,
-        errorBuilder: (_, __, ___) =>
-            _buildNetworkCover(context, book['cover_url'] as String?),
+        cacheWidth: 120,
+        cacheHeight: 180,
       );
+    } else if (coverUrl != null && coverUrl.isNotEmpty) {
+      imageChild = CachedNetworkImage(
+        imageUrl: coverUrl,
+        fit: BoxFit.cover,
+        memCacheWidth: 120,
+        memCacheHeight: 180,
+        placeholder: (_, __) =>
+            _gridCoverPlaceholder(colorScheme, initials),
+        errorWidget: (_, __, ___) =>
+            _gridCoverPlaceholder(colorScheme, initials),
+      );
+    } else {
+      imageChild = _gridCoverPlaceholder(colorScheme, initials);
     }
-    return _buildNetworkCover(context, book['cover_url'] as String?);
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: colorScheme.shadow.withAlpha(0x14),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          imageChild,
+          if (chapterCount > 0)
+            Positioned(
+              top: 6,
+              right: 6,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: colorScheme.surface,
+                  borderRadius: BorderRadius.circular(10),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withAlpha(0x26),
+                      blurRadius: 3,
+                    ),
+                  ],
+                ),
+                child: Text(
+                  '$chapterCount',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: colorScheme.onSurface,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
-  Widget _buildNetworkCover(BuildContext context, String? coverUrl) {
-    if (coverUrl == null || coverUrl.isEmpty) {
-      return Container(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        child: Icon(Icons.book, size: 40, color: context.al.textSecondary),
-      );
-    }
-    return CachedNetworkImage(
-      imageUrl: coverUrl,
-      fit: BoxFit.cover,
-      memCacheWidth: 100,
-      memCacheHeight: 150,
-      placeholder: (context, url) => const Center(
-        child: CircularProgressIndicator(strokeWidth: 2),
+  Widget _gridCoverPlaceholder(ColorScheme cs, String initials) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [cs.primaryContainer, cs.secondaryContainer],
+        ),
       ),
-      errorWidget: (context, url, error) => Container(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        child: Icon(Icons.broken_image, size: 32, color: context.al.textSecondary),
+      child: Center(
+        child: Text(
+          initials,
+          style: TextStyle(
+            fontSize: 32,
+            fontWeight: FontWeight.bold,
+            color: cs.onPrimaryContainer.withAlpha(0x80),
+          ),
+        ),
       ),
     );
   }
