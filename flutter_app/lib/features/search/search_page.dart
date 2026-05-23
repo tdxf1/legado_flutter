@@ -531,6 +531,23 @@ class _SearchPageState extends ConsumerState<SearchPage> {
               controller: _searchCtrl,
               decoration: InputDecoration(
                 hintText: '输入书名或作者',
+                filled: true,
+                fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(28),
+                  borderSide: BorderSide.none,
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(28),
+                  borderSide: BorderSide.none,
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(28),
+                  borderSide: BorderSide(
+                      color: Theme.of(context).colorScheme.primary, width: 2),
+                ),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -545,8 +562,6 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                           icon: const Icon(Icons.send), onPressed: _doSearch),
                   ],
                 ),
-                border:
-                    OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               ),
               onSubmitted: (_) => _doSearch(),
             ),
