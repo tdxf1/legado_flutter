@@ -167,19 +167,9 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
       length: tabSpec.length,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('书架'),
+          title: const SizedBox.shrink(),
           actions: [
-            // BATCH-26a (05-22): 对齐原 legado `main_bookshelf.xml`
-            // `menu_search` always icon。/search 退出 ShellBranch 后
-            // 由此 push 进入。放在 actions 第一位让 search 始终可见。
-            IconButton(
-              icon: const Icon(Icons.search),
-              tooltip: '搜索',
-              onPressed: () => context.push('/search'),
-            ),
-            // BATCH-27b (05-22): 「更新目录」批量任务进度 transient badge。
-            // 仅 `_isUpdatingToc` 为 true 时渲染，跑完自动消失。点击不取消
-            // (cancel UX 留 follow-up)，按 PRD §C/Q6 决策。
+            // TOC update progress badge
             if (_isUpdatingToc)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -222,20 +212,9 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                 ),
               ),
             IconButton(
-              icon: Icon(_isGridView ? Icons.view_list : Icons.grid_view),
-              tooltip: _isGridView ? '列表视图' : '网格视图',
-              onPressed: () {
-                setState(() => _isGridView = !_isGridView);
-                saveBookshelfGridViewToDisk(_isGridView);
-              },
-            ),
-            // 批次 8 (05-19): 排序按钮。打开 6 选 RadioListTile 对话框，选完
-            // 通过 [readerSettingsProvider] 持久化，让 [bookshelfSortProvider]
-            // 自动派生新值并触发各 Tab 重新拉书。
-            IconButton(
-              icon: const Icon(Icons.sort),
-              tooltip: '书架排序',
-              onPressed: () => _showSortDialog(context),
+              icon: const Icon(Icons.search),
+              tooltip: '搜索',
+              onPressed: () => context.push('/search'),
             ),
             // BATCH-27b: PopupMenu 包 Builder 让 onSelected 内的 context 能
             // 命中 DefaultTabController（PopupMenuButton 自身已是 Scaffold
@@ -300,6 +279,8 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                   } else if (value == 'import_bookshelf') {
                     // BATCH-27e (05-22): 导入书架 → _onImportBookshelf。
                     await _onImportBookshelf(innerCtx);
+                  } else if (value == 'sort') {
+                    _showSortDialog(innerCtx);
                   }
                 },
                 itemBuilder: (context) => [
@@ -314,6 +295,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                   const PopupMenuDivider(),
                   _menuItem('manage_groups', Icons.folder_outlined, '分组管理'),
                   _menuItem('bookshelf_layout', Icons.dashboard_outlined, '书架布局'),
+                  _menuItem('sort', Icons.sort, '书架排序'),
                   _menuItem('export_bookshelf', Icons.upload_file, '导出书架'),
                   _menuItem('import_bookshelf', Icons.file_download_outlined, '导入书架'),
                   const PopupMenuDivider(),
