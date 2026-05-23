@@ -6,6 +6,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../../../core/colors.dart';
 import '../../../core/providers.dart';
 
 class ReaderTopBar extends StatelessWidget {
@@ -133,11 +134,11 @@ class ReaderTopBar extends StatelessWidget {
                             ],
                           ),
                         ),
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'more',
                           enabled: false,
                           child: Text('更多设置…',
-                              style: TextStyle(color: Colors.grey)),
+                              style: TextStyle(color: context.al.textSecondary)),
                         ),
                       ],
                     ),

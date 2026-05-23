@@ -16,6 +16,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../../../core/colors.dart';
 import '../../../core/persistence/json_store.dart';
 import '../../../core/providers.dart';
 import 'tap_zone_config_dialog.dart';
@@ -230,7 +231,7 @@ class _ReaderSettingsSheetState extends State<ReaderSettingsSheet> {
                                     color: _s.backgroundColor == c.toARGB32() &&
                                             _s.backgroundImagePath == null
                                         ? Theme.of(ctx).primaryColor
-                                        : Colors.grey.shade400,
+                                        : ctx.al.outline,
                                     width: 2),
                               ),
                             ),

@@ -12,6 +12,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../core/dto.dart';
+import '../../core/colors.dart';
 import '../../core/download_runner.dart';
 import '../../core/platform_webview_executor.dart';
 import '../../core/providers.dart';
@@ -2155,7 +2156,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(Icons.error_outline,
-                  size: 48, color: Colors.grey.withValues(alpha: 0.6)),
+                  size: 48, color: context.al.textSecondary.withValues(alpha: 0.6)),
               const SizedBox(height: 12),
               Text(
                 '正文加载失败',

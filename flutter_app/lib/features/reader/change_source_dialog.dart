@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 
 import '../../src/rust/api.dart' as rust_api;
 
+import '../../core/colors.dart';
+
 class ChangeSourceResult {
   final String sourceId;
   final String sourceName;
@@ -372,7 +374,7 @@ class _ChangeSourceDialogState extends State<ChangeSourceDialog> {
                                   ? Icons.check_circle
                                   : Icons.circle_outlined,
                               color: isCurrent
-                                  ? Colors.green
+                                  ? context.al.success
                                   : theme.disabledColor,
                             ),
                             title: Row(
@@ -392,12 +394,12 @@ class _ChangeSourceDialogState extends State<ChangeSourceDialog> {
                                     padding: const EdgeInsets.symmetric(
                                         horizontal: 6, vertical: 2),
                                     decoration: BoxDecoration(
-                                      color: Colors.green.withAlpha(30),
+                                      color: context.al.success.withAlpha(30),
                                       borderRadius: BorderRadius.circular(4),
                                     ),
-                                    child: const Text('当前',
+                                    child: Text('当前',
                                         style: TextStyle(
-                                            fontSize: 11, color: Colors.green)),
+                                            fontSize: 11, color: context.al.success)),
                                   ),
                               ],
                             ),
