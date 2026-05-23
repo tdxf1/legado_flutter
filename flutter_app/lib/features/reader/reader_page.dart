@@ -2176,9 +2176,14 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
                 )
               : const SizedBox.shrink(),
         ),
-        // Spinner overlay — only on first load (no previous content)
-        if (_chapterContent.isEmpty && _isLoadingContent)
-          const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        // Spinner overlay — first load only. Wrapped in AnimatedOpacity so
+        // spinner fades out over 200ms while content simultaneously fades in,
+        // producing a crossfade instead of a flash between spinner→content.
+        AnimatedOpacity(
+          opacity: _chapterContent.isEmpty && _isLoadingContent ? 1.0 : 0.0,
+          duration: const Duration(milliseconds: 200),
+          child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        ),
         // No-controller fallback
         if (_pageViewController == null && _chapterContent.isEmpty && !_isLoadingContent)
           const Center(child: Text('加载中...')),
@@ -2205,15 +2210,17 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       // T1 (05-18) 修复：同 _openChapter — 删除强写 offset=0，进度保存交给
       // _onPageChanged → _saveCurrentPagePosition 统一路径（loadChapter +
       // jumpToLast 完成后会触发 listener 写入实际 page.startCharOffset）。
+      // Bug 3 fix: controller ops + gate flag moved inside setState so that
+      // the rebuild triggered here picks up _isPageLayoutReady=false and
+      // activates IgnorePointer.
       setState(() {
         _chapterContent = content;
         _isLoadingContent = false;
+        _pageViewController?.updateSettings(_settings);
+        _pageViewController?.loadChapter(targetIndex, title, content,
+            jumpToLast: isPrev);
+        _isPageLayoutReady = false;
       });
-      _pageViewController?.updateSettings(_settings);
-      _pageViewController?.loadChapter(targetIndex, title, content,
-          jumpToLast: isPrev);
-      // Bug 3: 翻章后重置门控，排版完成后解除手势阻断
-      _isPageLayoutReady = false;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) safeSetState(() => _isPageLayoutReady = true);
       });
@@ -2221,7 +2228,17 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       _preCachePrevChapter(targetIndex, chapters);
       _measureAdjacentChapters(targetIndex);
     } catch (e) {
-      safeSetState(() => _isLoadingContent = false);
+      // Bug 2: TimeoutException → show retryable error; other errors → just
+      // stop loading (keep old content visible rather than showing error).
+      if (!mounted) return;
+      if (e is TimeoutException) {
+        setState(() {
+          _chapterContent = '正文加载失败';
+          _isLoadingContent = false;
+        });
+      } else {
+        safeSetState(() => _isLoadingContent = false);
+      }
     }
   }
 

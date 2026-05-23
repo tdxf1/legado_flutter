@@ -319,6 +319,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
     if (!mounted || !savedBook) return;
     ref.invalidate(allBooksProvider);
+    ref.invalidate(booksByGroupProvider);
     if (savedChapterCount > 0) {
       ref.invalidate(bookChaptersProvider(bookId));
     }
@@ -409,7 +410,15 @@ class _SearchPageState extends ConsumerState<SearchPage> {
     // 新结果 / 改 _loading）。
     final seq = ++_searchSeq;
     _lastSearchKeyword = keyword;
-    setState(() => _loading = true);
+    // Bug 5 fix: clear _onlineResults when online mode is off so stale
+    // old online results don't prevent the search-history fallback from
+    // showing when local results are empty.
+    setState(() {
+      _loading = true;
+      if (!_onlineMode) {
+        _onlineResults = [];
+      }
+    });
 
     // Bug 5: 本地搜索始终执行；_onlineMode 决定是否同时发起在线搜索
     await ref.read(dbInitializedProvider.future);
@@ -574,8 +583,8 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
   /// Bug 5: 双 Section 结果列表 — 本地书架 + 在线书源。
   Widget _buildResultsList() {
-    final hasLocal = _localResults.isNotEmpty;
     final hasOnline = _onlineResults.isNotEmpty && _onlineMode;
+    final hasLocal = _localResults.isNotEmpty || hasOnline;
     if (!hasLocal && !hasOnline) {
       return const SizedBox.shrink();
     }

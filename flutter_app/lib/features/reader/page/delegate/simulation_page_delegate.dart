@@ -109,6 +109,9 @@ class SimulationPageDelegate extends HorizontalPageDelegate {
     );
     final start = startTouch;
     _calcCornerXY(start.dx, start.dy);
+    // Apply touchY override from drag start so the first animation frame
+    // already has the correct touch position (MD3 simulation touchY override).
+    recordTouchUpdate(start);
     // T2 (05-18) note: 此时 _direction == none，方向未定。corner 暂按 startTouch
     // 算（next 几何）。等 [onDragUpdate] 检测到 PREV 方向后再走
     // [_setDirectionMirrorCorner] 镜像，对齐 MD3 setDirection。
