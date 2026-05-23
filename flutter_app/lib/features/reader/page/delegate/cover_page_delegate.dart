@@ -53,16 +53,19 @@ class CoverPageDelegate extends HorizontalPageDelegate {
   }
 
   void _drawCoverShadow(Canvas canvas, Size size, double progress, bool forward) {
-    final shadowWidth = 20.0;
+    // MD3: shadow width 30px, color 0x66111111 → 0x00000000 (dark gray to transparent)
+    const shadowWidth = 30.0;
     final x = forward ? size.width * (1 - progress) : size.width * progress;
+    // Both NEXT and PREV: gradient always from dark (near current-page edge) to transparent (away)
+    // MD3 uses LEFT_RIGHT orientation for both directions.
     final shadowPaint = Paint()
       ..shader = ui.Gradient.linear(
-        forward ? Offset(x, 0) : Offset(x + shadowWidth, 0),
-        forward ? Offset(x + shadowWidth, 0) : Offset(x, 0),
-        [Colors.black.withAlpha(90), Colors.transparent],
+        Offset(x, 0),
+        Offset(x + shadowWidth, 0),
+        const [Color(0x66111111), Color(0x00000000)],
       );
     canvas.drawRect(
-      Rect.fromLTWH(forward ? x : x - shadowWidth, 0, shadowWidth, size.height),
+      Rect.fromLTWH(x, 0, shadowWidth, size.height),
       shadowPaint,
     );
   }

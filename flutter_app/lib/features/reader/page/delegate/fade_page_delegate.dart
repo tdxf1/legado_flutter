@@ -35,12 +35,16 @@ class FadePageDelegate extends HorizontalPageDelegate {
 
     if (direction == PageDirection.next &&
         (nextPicture != null || nextPage != null)) {
-      drawPage(canvas, nextPicture, nextPage, Offset.zero);
-      _drawWithAlpha(canvas, size, curPicture, currentPage, 1.0 - progress);
+      // MD3: draw current page at full alpha (bottom), then incoming page
+      // fading in on top with alpha = progress.
+      drawPage(canvas, curPicture, currentPage, Offset.zero);
+      _drawWithAlpha(canvas, size, nextPicture, nextPage, progress);
     } else if (direction == PageDirection.prev &&
         (prevPicture != null || prevPage != null)) {
-      drawPage(canvas, prevPicture, prevPage, Offset.zero);
-      _drawWithAlpha(canvas, size, curPicture, currentPage, 1.0 - progress);
+      // MD3: draw current page at full alpha (bottom), then incoming page
+      // fading in on top with alpha = progress.
+      drawPage(canvas, curPicture, currentPage, Offset.zero);
+      _drawWithAlpha(canvas, size, prevPicture, prevPage, progress);
     } else {
       drawStaticCurrent(canvas, size, currentPage, totalPages);
     }
