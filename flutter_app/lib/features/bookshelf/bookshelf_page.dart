@@ -246,6 +246,13 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
             Builder(
               builder: (innerCtx) => PopupMenuButton<String>(
                 tooltip: '更多',
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16)),
+                elevation: 8,
+                position: PopupMenuPosition.under,
+                color: Theme.of(innerCtx)
+                    .colorScheme
+                    .surfaceContainerHigh,
                 onSelected: (value) async {
                   // BATCH-27a (05-22)：PopupMenu 严格按原 legado
                   // `main_bookshelf.xml` 12 项 + flutter 自加「扫码导入」共
@@ -295,117 +302,26 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                     await _onImportBookshelf(innerCtx);
                   }
                 },
-                itemBuilder: (context) => const [
-                  // 1. 搜索 — 已是 AppBar IconButton（不进 menu）
-                  // 2. 更新目录 — BATCH-27b 改可点
-                  PopupMenuItem(
-                    value: 'update_toc',
-                    child: ListTile(
-                      leading: Icon(Icons.refresh),
-                      title: Text('更新目录'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  // 3. 添加本地书
-                  PopupMenuItem(
-                    value: 'import_local',
-                    child: ListTile(
-                      leading: Icon(Icons.note_add),
-                      title: Text('添加本地书'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  // 4. 添加远程书 — BATCH-27c 改可点（webdav 单 server）
-                  PopupMenuItem(
-                    value: 'add_remote',
-                    child: ListTile(
-                      leading: Icon(Icons.cloud_outlined),
-                      title: Text('添加远程书'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  // 5. 添加网络URL — BATCH-27e 改可点（add_url）
-                  PopupMenuItem(
-                    value: 'add_url',
-                    child: ListTile(
-                      leading: Icon(Icons.link),
-                      title: Text('添加网络URL'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  // 6. 扫码导入 — flutter 自加项，置于本地书 / 远程书附近
-                  PopupMenuItem(
-                    value: 'qr_scan',
-                    child: ListTile(
-                      leading: Icon(Icons.qr_code_scanner),
-                      title: Text('扫码导入'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  // 7. 书架管理 — BATCH-27d 改可点
-                  PopupMenuItem(
-                    value: 'bookshelf_manage',
-                    child: ListTile(
-                      leading: Icon(Icons.edit_note),
-                      title: Text('书架管理'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  // 8. 缓存/导出
-                  PopupMenuItem(
-                    value: 'cache_export',
-                    child: ListTile(
-                      leading: Icon(Icons.download_outlined),
-                      title: Text('缓存/导出'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  // 9. 分组管理（保留 manage_groups key 名 backward compat）
-                  PopupMenuItem(
-                    value: 'manage_groups',
-                    child: ListTile(
-                      leading: Icon(Icons.folder_outlined),
-                      title: Text('分组管理'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  // 10. 书架布局 — 真功能（27a 新增）
-                  PopupMenuItem(
-                    value: 'bookshelf_layout',
-                    child: ListTile(
-                      leading: Icon(Icons.dashboard_outlined),
-                      title: Text('书架布局'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  // 11. 导出书架 — 真功能（27a 新增）
-                  PopupMenuItem(
-                    value: 'export_bookshelf',
-                    child: ListTile(
-                      leading: Icon(Icons.upload_file),
-                      title: Text('导出书架'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  // 12. 导入书架 — BATCH-27e 改可点（import_bookshelf）
-                  PopupMenuItem(
-                    value: 'import_bookshelf',
-                    child: ListTile(
-                      leading: Icon(Icons.file_download_outlined),
-                      title: Text('导入书架'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  // 13. 日志 — 灰显占位
-                  PopupMenuItem(
+                itemBuilder: (context) => [
+                  _menuItem('update_toc', Icons.refresh, '更新目录'),
+                  _menuItem('import_local', Icons.note_add, '添加本地书'),
+                  _menuItem('add_remote', Icons.cloud_outlined, '添加远程书'),
+                  _menuItem('add_url', Icons.link, '添加网络URL'),
+                  _menuItem('qr_scan', Icons.qr_code_scanner, '扫码导入'),
+                  const PopupMenuDivider(),
+                  _menuItem('bookshelf_manage', Icons.edit_note, '书架管理'),
+                  _menuItem('cache_export', Icons.download_outlined, '缓存/导出'),
+                  const PopupMenuDivider(),
+                  _menuItem('manage_groups', Icons.folder_outlined, '分组管理'),
+                  _menuItem('bookshelf_layout', Icons.dashboard_outlined, '书架布局'),
+                  _menuItem('export_bookshelf', Icons.upload_file, '导出书架'),
+                  _menuItem('import_bookshelf', Icons.file_download_outlined, '导入书架'),
+                  const PopupMenuDivider(),
+                  const PopupMenuItem(
                     enabled: false,
                     value: 'log',
-                    child: ListTile(
-                      enabled: false,
-                      leading: Icon(Icons.article_outlined),
-                      title: Text('日志'),
-                      contentPadding: EdgeInsets.zero,
-                    ),
+                    child: _BookMenuRow(
+                        icon: Icons.article_outlined, label: '日志'),
                   ),
                 ],
               ),
@@ -1556,6 +1472,43 @@ class _UrlImportDialogState extends State<_UrlImportDialog> {
           child: const Text('获取'),
         ),
       ],
+    );
+  }
+}
+
+// ── Menu helpers ───────────────────────────────────────────────────
+
+PopupMenuItem<String> _menuItem(String value, IconData icon, String label) {
+  return PopupMenuItem(
+    value: value,
+    child: _BookMenuRow(icon: icon, label: label),
+  );
+}
+
+class _BookMenuRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _BookMenuRow({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 24,
+            child: Icon(icon, size: 20,
+                color: Theme.of(context).colorScheme.onSurfaceVariant),
+          ),
+          const SizedBox(width: 14),
+          Text(label,
+              style: TextStyle(
+                fontSize: 14,
+                color: Theme.of(context).colorScheme.onSurface,
+              )),
+        ],
+      ),
     );
   }
 }

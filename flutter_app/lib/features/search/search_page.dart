@@ -504,9 +504,6 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       appBar: AppBar(
         title: const Text('搜索'),
         actions: [
-          // Task X3 — 用 FilterChip 替代 IconButton。原来的 IconButton + Icons.search
-          // 与 TextField prefixIcon 视觉重复，移动用户根本注意不到 toggle；
-          // FilterChip 选中态有明显 Material 高亮，更直观。
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
             child: FilterChip(
@@ -520,6 +517,30 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                 size: 18,
               ),
             ),
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            tooltip: '更多',
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16)),
+            elevation: 8,
+            color: Theme.of(context).colorScheme.surfaceContainerHigh,
+            onSelected: (value) {
+              if (value == 'clear_history') _clearHistory();
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: 'clear_history',
+                child: Row(
+                  children: [
+                    Icon(Icons.delete_sweep, size: 20,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant),
+                    const SizedBox(width: 14),
+                    const Text('清空历史', style: TextStyle(fontSize: 14)),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -726,12 +747,12 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           child: Row(
             children: [
               Text(
-                '最近搜索',
-                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                '搜索历史',
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
               ),
@@ -740,7 +761,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
                 onTap: _clearHistory,
                 child: Text(
                   '清除',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
                         color: Theme.of(context).colorScheme.primary,
                       ),
                 ),
@@ -749,21 +770,22 @@ class _SearchPageState extends ConsumerState<SearchPage> {
           ),
         ),
         Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            itemCount: _searchHistory.length,
-            itemBuilder: (context, index) {
-              final term = _searchHistory[index];
-              return ListTile(
-                dense: true,
-                leading: const Icon(Icons.history, size: 20),
-                title: Text(term),
-                onTap: () {
-                  _searchCtrl.text = term;
-                  _doSearch();
-                },
-              );
-            },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _searchHistory.map((term) {
+                return ActionChip(
+                  label: Text(term, style: const TextStyle(fontSize: 13)),
+                  avatar: const Icon(Icons.history, size: 16),
+                  onPressed: () {
+                    _searchCtrl.text = term;
+                    _doSearch();
+                  },
+                );
+              }).toList(),
+            ),
           ),
         ),
       ],
